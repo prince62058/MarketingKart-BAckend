@@ -4,7 +4,9 @@ const Business = require("../models/businessModel");
 const InternalCampaign = require("../models/internalCampiagnModel");
 
 const admin = require("firebase-admin");
-const serviceAccount = require("../config/firebase.json");
+const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+  ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
+  : require("../config/firebase.json");
 
 // Initialize the Firebase Admin SDK
 if (!admin.apps.length) {
