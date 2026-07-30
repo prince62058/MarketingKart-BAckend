@@ -4,22 +4,7 @@ const Business = require("../models/businessModel");
 const InternalCampaign = require("../models/internalCampiagnModel");
 
 const admin = require("firebase-admin");
-
-const loadServiceAccount = () => {
-  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-  if (!raw) return require("../config/firebase.json");
-
-  const trimmed = raw.trim();
-  // Hosting panels often mangle raw JSON pasted into env var fields
-  // (escaping braces/quotes/newlines), so also accept a base64-encoded value.
-  const jsonString = trimmed.startsWith("{")
-    ? trimmed
-    : Buffer.from(trimmed, "base64").toString("utf8");
-
-  return JSON.parse(jsonString);
-};
-
-const serviceAccount = loadServiceAccount();
+const serviceAccount = require("../config/firebase.json");
 
 // Initialize the Firebase Admin SDK
 if (!admin.apps.length) {

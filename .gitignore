@@ -16,9 +16,6 @@ env
 env.production
 !env.example
 
-# Firebase service account
-src/config/firebase.json
-
 # Archives / data exports (PII)
 *.zip
 *.csv
