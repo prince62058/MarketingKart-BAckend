@@ -13,6 +13,7 @@ webhook_payloads.log
 .env.*
 !.env.example
 env
+env.production
 !env.example
 
 # Firebase service account
@@ -24,26 +25,27 @@ src/config/firebase.json
 *.xlsx
 All_Users_With_Business.*
 
-# One-off / scratch (never ship)
+# One-off / scratch (never ship) -- anchored to repo root so nested
+# legitimate files like src/helpers/checkPermission.js aren't caught
 scratch/
 scripts/
-debug*.js
-check*.js
-find*.js
-fix*.js
-test*.js
-update*.js
-search*.js
-setup*.js
-export*.js
-linkMetaAd.js
-migrate-data.js
-premiumPlan.js
-refresh_token.js
-removeDuplicateAd.js
-globalSanitizeUrls.js
-toggleMaintenance.js
-triggerForceUpdate.js
+/debug*.js
+/check*.js
+/find*.js
+/fix*.js
+/test*.js
+/update*.js
+/search*.js
+/setup*.js
+/export*.js
+/linkMetaAd.js
+/migrate-data.js
+/premiumPlan.js
+/refresh_token.js
+/removeDuplicateAd.js
+/globalSanitizeUrls.js
+/toggleMaintenance.js
+/triggerForceUpdate.js
 
 # One-off scripts inside src/ (keep app.js + server.js)
 /src/check*.js
