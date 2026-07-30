@@ -1,0 +1,73 @@
+node_modules/
+dist/
+.DS_Store
+
+# Logs
+*.log
+combined.log
+error.log
+webhook_payloads.log
+
+# Secrets / environment (keep env.example)
+.env
+.env.*
+!.env.example
+env
+!env.example
+
+# Firebase service account
+src/config/firebase.json
+
+# Archives / data exports (PII)
+*.zip
+*.csv
+*.xlsx
+All_Users_With_Business.*
+
+# One-off / scratch (never ship)
+scratch/
+scripts/
+debug*.js
+check*.js
+find*.js
+fix*.js
+test*.js
+update*.js
+search*.js
+setup*.js
+export*.js
+linkMetaAd.js
+migrate-data.js
+premiumPlan.js
+refresh_token.js
+removeDuplicateAd.js
+globalSanitizeUrls.js
+toggleMaintenance.js
+triggerForceUpdate.js
+
+# One-off scripts inside src/ (keep app.js + server.js)
+/src/check*.js
+/src/diagnose*.js
+/src/find*.js
+/src/repair*.js
+/src/test*.js
+/src/unlink*.js
+/src/updateCompany.js
+
+# Runtime / temp / caches
+temp/
+tmp/
+img/
+public/exports/
+.code-review-graph/
+graphify-out/
+
+# Stray uploaded media in source
+src/controllers/*.jpg
+src/controllers/*.jpeg
+src/controllers/*.png
+src/controllers/*.gif
+src/controllers/*.webp
+src/controllers/*.mp4
+src/controllers/*.mov
+src/controllers/s.json
