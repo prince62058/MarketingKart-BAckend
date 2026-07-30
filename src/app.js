@@ -45,7 +45,6 @@ const orderHistoryRoute = require("./routes/orderHistoryRoute");
 const staffRoute = require("./routes/staffRoute");
 const maintenanceCheck = require("./middlewares/maintenanceCheck");
 const cors = require("cors"); // Import cors
-const path = require("path");
 // const internalCampaignRoute = require('./routes/internalCampiagnRoute')
 
 const errorMiddleware = require("./middlewares/errorMiddleware");
@@ -69,7 +68,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static("public")); // serve static files from 'public' folder
 
 app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "..", "public", "index.html")); // serve index.html as default page
+  res.json({ status: "ok", message: "API running" });
 });
 
 // Maintenance middleware (handles skipping internally)
