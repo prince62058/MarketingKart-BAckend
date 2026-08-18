@@ -77,7 +77,7 @@ const business = new mongoose.Schema({
   },
   assignedStaff: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'staff',
+    ref: 'Staff',
     default: null
   },
   isAssigned: {

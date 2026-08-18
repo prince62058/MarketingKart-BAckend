@@ -9,7 +9,7 @@ const userService = require("../services/userService");
 const responseBuilder = require("../utils/responseBuilder");
 const axios = require("axios");
 const permissionModel = require("../models/permissionModel");
-const Staff = require("../models/staffModel");
+require("../models/staffModel"); // Added to fix Schema hasn't been registered for model "staff" error
 const businessModel = require("../models/businessModel");
 const { assignBusinessToStaff } = require("../services/autoAssignService");
 const internalCampaignModel = require("../models/internalCampiagnModel");

@@ -67,8 +67,26 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use(express.static("public")); // serve static files from 'public' folder
 
-app.get("/", (req, res) => {
-  res.json({ status: "ok", message: "API running" });
+const { getLandingHtml } = require("./views/landingPage");
+
+app.get(["/", "/health"], (req, res) => {
+  // If client specifically requests JSON via format param or pure JSON header without HTML accept
+  const wantsJson = req.query.format === "json" || 
+                    (req.headers.accept && req.headers.accept.includes("application/json") && !req.headers.accept.includes("text/html"));
+  
+  if (wantsJson) {
+    return res.json({
+      status: "ok",
+      message: "MarketingKart API Gateway is operational",
+      version: "1.0.0",
+      environment: process.env.NODE_ENV || "production",
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  // Otherwise send the modern landing dashboard HTML
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  return res.send(getLandingHtml());
 });
 
 // Maintenance middleware (handles skipping internally)
