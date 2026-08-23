@@ -43,6 +43,8 @@ const ugcVideoRoute = require("./routes/ugcVideoRoute");
 const vioceOverVideoRoute = require("./routes/vioceOverVideoRoute");
 const orderHistoryRoute = require("./routes/orderHistoryRoute");
 const staffRoute = require("./routes/staffRoute");
+const teamMemberRoute = require("./routes/teamMemberRoute");
+const subscriptionRoute = require("./routes/subscriptionRoute");
 const maintenanceCheck = require("./middlewares/maintenanceCheck");
 const cors = require("cors"); // Import cors
 // const internalCampaignRoute = require('./routes/internalCampiagnRoute')
@@ -134,6 +136,8 @@ app.use("/api", orderHistoryRoute);
 app.use("/api", videoYoutubeRoute);
 // Error handling middleware
 app.use("/api", recentAdsDesignRoute);
+app.use("/api", teamMemberRoute);
+app.use("/api", subscriptionRoute);
 app.use("/api", staffRoute);
 app.use("/api", require("./routes/whatsappRoute"));
 app.use("/api/premium-plan", require("./routes/premiumPlanRoute"));

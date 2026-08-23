@@ -2,11 +2,26 @@
   const mongoose = require("mongoose");
   const User = require("../models/userModel");
   const Razorpay = require('razorpay');
+  const crypto = require('crypto');
 
   const razorpay = new Razorpay({
     key_id: process.env.RAZORPAY_KEY_ID,
     key_secret: process.env.RAZORPAY_KEY_SECRET,
   });
+
+  const verifyRazorpaySignature = ({ orderId, paymentId, signature }) => {
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+    if (!keySecret) return false;
+    const expectedSignature = crypto
+      .createHmac("sha256", keySecret)
+      .update(`${orderId}|${paymentId}`)
+      .digest("hex");
+    return (
+      !!signature &&
+      expectedSignature.length === signature.length &&
+      crypto.timingSafeEqual(Buffer.from(expectedSignature), Buffer.from(signature))
+    );
+  };
 
   // Create Razorpay order
   const createOrder = async (req, res) => {
@@ -45,11 +60,12 @@ const createTransactions = async (req, res) => {
 
     const {
       paymentId,
+      orderId,
+      signature,
       type = "CREDIT", // CREDIT or DEBIT
       amount,
       businessId,
       adsId,
-      userId,
       transactionId,
       serviceAmount,
       description
@@ -64,13 +80,27 @@ const createTransactions = async (req, res) => {
     // Round to 2 decimal places for currency
     const roundedAmount = parseFloat(transactionAmount.toFixed(2));
 
-    // Validate other required fields
-    if (!userId) {
-      throw new Error("User ID is required");
-    }
-
     if (!["CREDIT", "DEBIT"].includes(type)) {
       throw new Error("Invalid transaction type (must be CREDIT or DEBIT)");
+    }
+
+    // The authenticated caller always pays/gets credited for themselves —
+    // a client-supplied userId is never trusted, only an admin may target another user.
+    const isAdminCredit = Boolean(req.body.userId) && req.user?.userType === "ADMIN";
+    const userId = isAdminCredit ? req.body.userId : req.user._id;
+
+    if (type === "CREDIT" && !isAdminCredit) {
+      // A self-service credit must be a real, verified Razorpay payment.
+      if (!orderId || !paymentId || !signature) {
+        throw new Error("Missing Razorpay payment verification details");
+      }
+      if (!verifyRazorpaySignature({ orderId, paymentId, signature })) {
+        throw new Error("Payment verification failed");
+      }
+      const existingPayment = await Transaction.findOne({ transactionId: paymentId }).session(session);
+      if (existingPayment) {
+        throw new Error("This Razorpay payment has already been processed");
+      }
     }
 
     // Fetch user with session
@@ -219,8 +249,14 @@ function getTransactionMessage(type, paymentId) {
 
       // Build filter object
       const filter = {};
-      if (userId) filter.userId = userId;
-      if (businessId) filter.businessId = businessId; 
+      // Non-admins can only ever see their own transactions — a client-supplied
+      // userId is only honored for admins (e.g. the admin panel's transaction list).
+      if (req.user?.userType === "ADMIN") {
+        if (userId) filter.userId = userId;
+      } else {
+        filter.userId = req.user._id;
+      }
+      if (businessId) filter.businessId = businessId;
       if (type) filter.type = type;
 
       // Mode filter (RAZORPAY vs WALLET)

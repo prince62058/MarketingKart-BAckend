@@ -115,7 +115,7 @@ exports.startOAuth = async (req, res) => {
   try {
     const userId = req.user._id;
     const clientId = process.env.clientId;
-    const redirectUri = process.env.META_OAUTH_REDIRECT_URI || "https://api.leadkart.in/api/whatsapp/meta/callback";
+    const redirectUri = process.env.META_OAUTH_REDIRECT_URI || "https://api.marketingkart.in/api/whatsapp/meta/callback";
     const configId = process.env.META_CONFIG_ID;
 
     if (!clientId) {

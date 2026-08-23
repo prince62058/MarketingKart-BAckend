@@ -305,13 +305,13 @@ exports.generateInvoice = async (
     console.log("Invoice sent successfully");
 
     const data = await new invoiceModel({
-      addAmount: parseInt(Amount),
+      adsAmount: parseInt(Amount),
       commisionAmount: PlatformFee,
       gstAmount: GST,
       paymentGetWayFee: PaymentGetwayFee,
       userId: business?.userId,
-      businessId: business.businessId,
-      adTyId: advertismentType?._id,
+      businessId: business?._id,
+      adsTypeId: advertismentType?._id,
       invoiceURL: invoiceUrl,
     });
 
