@@ -79,22 +79,32 @@ const {
 const { handleMetaDataDeletion } = require("./controllers/metaDataDeletionController");
 
 // ── Public Legal & Meta Compliance Routes ──────────────────────────────────
-app.get(["/privacy-policy", "/privacy"], (req, res) => {
+app.get(["/privacy-policy", "/privacy", "/api/privacy-policy", "/api/privacy"], (req, res) => {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   return res.send(getPrivacyPolicyHtml());
 });
 
-app.get(["/terms-of-service", "/terms"], (req, res) => {
+app.get(["/terms-of-service", "/terms", "/api/terms-of-service", "/api/terms"], (req, res) => {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   return res.send(getTermsOfServiceHtml());
 });
 
-app.get(["/data-deletion", "/data-deletion-instructions", "/deletion"], (req, res) => {
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  return res.send(getDataDeletionInstructionsHtml());
-});
+app.get(
+  [
+    "/data-deletion",
+    "/data-deletion-instructions",
+    "/deletion",
+    "/api/data-deletion",
+    "/api/data-deletion-instructions",
+    "/api/deletion",
+  ],
+  (req, res) => {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    return res.send(getDataDeletionInstructionsHtml());
+  }
+);
 
-app.get("/data-deletion-status", (req, res) => {
+app.get(["/data-deletion-status", "/api/data-deletion-status"], (req, res) => {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   return res.send(getDataDeletionStatusHtml(req.query.id));
 });
