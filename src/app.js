@@ -70,6 +70,40 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static("public")); // serve static files from 'public' folder
 
 const { getLandingHtml } = require("./views/landingPage");
+const {
+  getDataDeletionInstructionsHtml,
+  getDataDeletionStatusHtml,
+  getPrivacyPolicyHtml,
+  getTermsOfServiceHtml,
+} = require("./views/legalPages");
+const { handleMetaDataDeletion } = require("./controllers/metaDataDeletionController");
+
+// ── Public Legal & Meta Compliance Routes ──────────────────────────────────
+app.get(["/privacy-policy", "/privacy"], (req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  return res.send(getPrivacyPolicyHtml());
+});
+
+app.get(["/terms-of-service", "/terms"], (req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  return res.send(getTermsOfServiceHtml());
+});
+
+app.get(["/data-deletion", "/data-deletion-instructions", "/deletion"], (req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  return res.send(getDataDeletionInstructionsHtml());
+});
+
+app.get("/data-deletion-status", (req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  return res.send(getDataDeletionStatusHtml(req.query.id));
+});
+
+// Meta Data Deletion Callback (POST)
+app.post(
+  ["/data-deletion", "/api/meta/data-deletion", "/api/webhook/facebook/data-deletion"],
+  handleMetaDataDeletion
+);
 
 app.get(["/", "/health"], (req, res) => {
   // If client specifically requests JSON via format param or pure JSON header without HTML accept
