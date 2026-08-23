@@ -8,7 +8,7 @@ const {
 const responseBuilder = require("../utils/responseBuilder");
 
 exports.authUser = async (req, res, next) => {
-  const SECRET_KEY = process.env.JWT_SECRET_KEY || "SECRETEKEY";
+  const SECRET_KEY = process.env.JWT_SECRET || "SECRETEKEY";
   const authHeader = req.headers["authorization"];
   const { userId } = req.query;
 

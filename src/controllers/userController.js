@@ -171,7 +171,7 @@ exports.verifyOtp = async (req, res) => {
     { phoneVerified: true, fcm: fcm },
   );
 
-  const token = jwt.sign({ User: user._id }, "SECRETEKEY", {
+  const token = jwt.sign({ User: user._id }, process.env.JWT_SECRET || "SECRETEKEY", {
     expiresIn: "365d",
   });
   let Check = await isUserInBusiness(user._id);
@@ -567,7 +567,7 @@ exports.verifyEmailOtp = async (req, res) => {
     { emailVerified: true, userType: "SUBUSER", businessId: businessId },
   );
 
-  const generate = await jwt.sign({ User: user._id }, "SECRETEKEY", {
+  const generate = await jwt.sign({ User: user._id }, process.env.JWT_SECRET || "SECRETEKEY", {
     expiresIn: "60d",
   });
 
@@ -734,7 +734,7 @@ exports.LogIn = async (req, res) => {
         ),
       );
   }
-  const generate = await jwt.sign({ User: user._id }, "SECRETEKEY", {
+  const generate = await jwt.sign({ User: user._id }, process.env.JWT_SECRET || "SECRETEKEY", {
     expiresIn: "365d",
   });
 
@@ -825,7 +825,7 @@ exports.adminLogIn = async (req, res) => {
   } else {
     const generate = await jwt.sign(
       { User: user._id, userType: "ADMIN" },
-      "SECRETEKEY",
+      process.env.JWT_SECRET || "SECRETEKEY",
       {
         expiresIn: "30d",
       },
@@ -882,7 +882,7 @@ exports.verifyAdminEmailOtp = async (req, res) => {
 
   const generate = await jwt.sign(
     { User: user._id, userType: "ADMIN" },
-    "SECRETEKEY",
+    process.env.JWT_SECRET || "SECRETEKEY",
     {
       expiresIn: "30d",
     },
@@ -1173,7 +1173,7 @@ exports.verifyOtpV2 = async (req, res) => {
 
   user = await userService.finOne({ mobile: mobileNum }, { phoneVerified: true });
 
-  const generate = await jwt.sign({ User: user._id }, "SECRETEKEY", {
+  const generate = await jwt.sign({ User: user._id }, process.env.JWT_SECRET || "SECRETEKEY", {
     expiresIn: "60d",
   });
 
