@@ -73,10 +73,14 @@ exports.generateInvoice = async (
       (Number(instaBudget) || 0) +
       (Number(googleBudget) || 0);
 
-    const GST = (Amount * companyData?.gstFee) / 100;
-    const PlatformFee = (Amount * companyData?.serviceFee) / 100;
+    const gstPercent = Number(companyData?.gstFee ?? 18);
+    const platformPercent = Number(companyData?.serviceFee ?? 15);
+    const gatewayPercent = Number(companyData?.paymentGetWayFee ?? 2);
+
+    const GST = (Amount * gstPercent) / 100;
+    const PlatformFee = (Amount * platformPercent) / 100;
     let amount = PlatformFee + Amount;
-    const PaymentGetwayFee = (amount * companyData?.paymentGetWayFee) / 100;
+    const PaymentGetwayFee = (amount * gatewayPercent) / 100;
     const totalAmount = amount + PaymentGetwayFee;
     // console.log(addwithgst, "addwithgst");
     console.log(fbBudget, "fbBudget");
@@ -118,120 +122,126 @@ exports.generateInvoice = async (
           .left-section {
             width: 60%;
             padding: 10px;
-            border-right: 3px solid black;
+            border-right: 1px solid black;
           }
           .right-section {
             width: 40%;
             padding: 10px;
           }
-          .cod-section {
+          .header-title {
             font-size: 20px;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
+            font-weight: bold;
+            text-align: center;
+            margin-bottom: 20px;
           }
-          .cod-section strong {
-      display: block;
-      text-decoration: none;
-      border: none !important;
-      line-height: 1;
-      margin: 0;
-      padding: 0;
-    }
-
-          .product-details {
-            width: 90vw;
-            max-width: 1200px;
+          .section-title {
+            font-weight: bold;
             margin-top: 10px;
-            border: 3px solid black;
-            padding: 10px;
           }
-          table {
+          .barcode {
+            margin-top: 20px;
+            text-align: center;
+          }
+          .details-table,
+          .address-table {
             width: 100%;
             border-collapse: collapse;
           }
-          th, td {
-            border: 2px solid black;
-            padding: 8px;
+          .details-table td,
+          .address-table td {
+            padding: 5px;
+            vertical-align: top;
+          }
+          .address-table td {
+            width: 50%;
+          }
+          .center-text {
             text-align: center;
           }
-          th {
+          .footer-text {
+            font-size: 10px;
+            text-align: center;
+            margin-top: 20px;
+          }
+          .bold {
             font-weight: bold;
-            background-color: #f2f2f2;
+          }
+          .table-bordered {
+            border: 1px solid black;
+          }
+          .table-bordered td {
+            border: 1px solid black;
           }
           .invoice-container {
             width: 90vw;
             max-width: 1200px;
             border: 3px solid black;
-            padding: 15px;
-            margin-top: 10px;
+            border-top: none;
+            padding: 10px;
+            height: auto;
+          }
+          .invoice-header,
+          .invoice-footer {
+            text-align: center;
+            margin-bottom: 20px;
           }
           .invoice-title {
-            text-align: center;
-            font-size: 20px;
+            font-size: 22px;
             font-weight: bold;
-            text-transform: uppercase;
-            border-bottom: 2px solid black;
-            padding-bottom: 5px;
-            background-color: #f2f2f2;
+            text-align: center;
           }
           .invoice-details {
             display: flex;
-            justify-content: flex-start;
-            padding: 10px 0;
-            font-size: 14px;
-            border: 2px solid black;
+            justify-content: space-between;
+            margin-bottom: 10px;
           }
-          .seller-info {
+          .invoice-details .seller-info,
+          .invoice-details .buyer-info {
             width: 48%;
-            padding: 10px;
           }
         </style>
       </head>
       <body>
         <div class="label-container">
-          <div class="left-section">
-            <div class="customer-address">
-              <p><strong>${companyData?.name || "N/A"}</strong></p>
-              <p>${companyData?.address || "N/A"}</p>
-              <p>Email: ${companyData?.email || "N/A"}</p>
-              <p>Phone: ${companyData?.phone || "N/A"}</p>
-            </div>
-            <hr style="border: 3px solid black" />
-            <div class="return-address">
-               ${adata}
-            </div>
-          </div>
-          <div class="right-section">
-            <div class="cod-section">
-              <img src="${
-                companyData?.logo || ""
-              }" alt="QR Code" style="width: 200px; height: 200px; margin: 0px auto" onerror="this.style.display='none'" />
-              <div style="margin-top: 5px; border: none; padding: 0;">
-                <strong>INV : ${invoiceNumber}</strong>
-              </div>
-              <div>Date: ${date}</div>
-              <div style="font-size:1drem;">TXIDs: ${transactionId || "0000000"}</div>
-            </div>
-          </div>
-        </div>
-        <div class="product-details">
-          <h1 style="font-weight: bold; font-size: 20px">Product Details</h1>
-          <table>
+          <table class="address-table">
             <tr>
-              <th>Ads Name</th>
-              <th>Ads Type</th>
-              <th>Insta Budget</th>
-              <th>Facebook Budget</th>
-              <th>Google Budget</th>
+              <td class="left-section">
+                <div class="header-title">
+                  <p>Tax Invoice</p>
+                </div>
+                <p><strong>Invoice Number:</strong> INVOICE -${invoiceNumber}</p>
+                <p><strong>Invoice Date:</strong> ${date}</p>
+                <p><strong>Status:</strong> Active</p>
+                <p><strong>Campaign Name:</strong> ${
+                  advertismentType.title || "N/A"
+                }</p>
+                <p><strong>Channel:</strong> ${addType}</p>
+              </td>
+              <td class="right-section">
+                <div class="header-title">
+                  <p>Sold By</p>
+                </div>
+                <p><strong>${companyData?.name || "MarketingKart.ai"}</strong></p>
+                <p>${companyData?.address || "N/A"}</p>
+                <p>Email: ${companyData?.email || "N/A"}</p>
+                <p>Phone: ${companyData?.phone || "N/A"}</p>
+              </td>
             </tr>
             <tr>
-              <td>${ins?.title || "N/A"}</td>
-              <td>${addType || "N/A"}</td>
-              <td>${inBudget}</td>
-              <td>${fbBudget}</td>
-              <td>${gBudget}</td>
+              <td>
+                <div class="section-title">Billing Address:</div>
+                ${htmlData}
+              </td>
+              <td style="display: flex; justify-content: center; align-items: center;">
+                <img style="width: 250px; height: 100px; object-fit: contain;" src="${
+                  companyData?.logo || ""
+                }" alt="Logo" />
+              </td>
+            </tr>
+            <tr>
+              <td colspan="2">
+                <p><strong>Transaction ID:</strong> ${transactionId}</p>
+              </td>
             </tr>
           </table>
         </div>
@@ -239,18 +249,15 @@ exports.generateInvoice = async (
           <h2 class="invoice-title">TAX INVOICE</h2>
           <div class="invoice-details">
             <div class="seller-info">
-              <p><strong>Ads Amount:</strong> ${Amount.toFixed(2)} (Inc. Gst: 18%)</p>
+              <p><strong>Ads Amount:</strong> ₹${Amount.toFixed(2)} (Inc. GST: ${gstPercent}%)</p>
             
-              <p><strong>Platform Fee:</strong> ${PlatformFee.toFixed(2)} (${
-                companyData.serviceFee || "20"
-              }% platform charges.</p>             <div class="underline"> </div>
-              <p><strong>Sub Total:</strong> ${amount.toFixed(2)}</p>
-              <p><strong>Payment Gateway Fee:</strong> ${PaymentGetwayFee.toFixed(
-                2
-              )} (${companyData.paymentGetWayFee || "2"}%)</p>
+              <p><strong>Platform Fee:</strong> ₹${PlatformFee.toFixed(2)} (${platformPercent}% platform charges)</p>
+              <div class="underline"> </div>
+              <p><strong>Sub Total:</strong> ₹${amount.toFixed(2)}</p>
+              <p><strong>Payment Gateway Fee:</strong> ₹${PaymentGetwayFee.toFixed(2)} (${gatewayPercent}%)</p>
 
-                 <div class="underline"> </div>
-              <p>Total Amount: <strong>${totalAmount.toFixed(2)}</strong></p>
+              <div class="underline"> </div>
+              <p>Total Amount: <strong>₹${totalAmount.toFixed(2)}</strong></p>
             </div>
           </div>
         </div>
