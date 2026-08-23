@@ -89,187 +89,211 @@ exports.generateInvoice = async (
     const date = new Date().toISOString().split("T")[0];
     const invoiceNumber = await generateInvoiceNumber();
 
-    // HTML Content
+    // HTML Content for PDF
     const htmlContent = `<!DOCTYPE html>
     <html lang="en">
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Invoice</title>
+        <title>Tax Invoice - ${invoiceNumber}</title>
         <style>
+          * { box-sizing: border-box; margin: 0; padding: 0; }
           body {
-            font-family: Arial, sans-serif;
-            margin: 10px;
-            padding: 0;
-            background-color: #fff;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            width: 100vw;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: #FFFFFF;
+            color: #0F172A;
+            padding: 40px;
+            font-size: 13px;
+            line-height: 1.5;
           }
-          .label-container {
-            display: flex;
-            border: 3px solid black;
-            padding: 10px;
-            width: 90vw;
-            max-width: 1200px;
-            height: auto;
-          }
-          .underline{
-            width:50%;
-            border: 1px solid black;
-          }
-          .left-section {
-            width: 60%;
-            padding: 10px;
-            border-right: 1px solid black;
-          }
-          .right-section {
-            width: 40%;
-            padding: 10px;
-          }
-          .header-title {
-            font-size: 20px;
-            font-weight: bold;
-            text-align: center;
-            margin-bottom: 20px;
-          }
-          .section-title {
-            font-weight: bold;
-            margin-top: 10px;
-          }
-          .barcode {
-            margin-top: 20px;
-            text-align: center;
-          }
-          .details-table,
-          .address-table {
+          .header-table {
             width: 100%;
+            border-bottom: 2px solid #FF6B00;
+            padding-bottom: 24px;
+            margin-bottom: 28px;
+          }
+          .brand-title {
+            font-size: 26px;
+            font-weight: 800;
+            color: #FF6B00;
+            letter-spacing: -0.5px;
+          }
+          .brand-subtitle {
+            font-size: 12px;
+            color: #64748B;
+            margin-top: 2px;
+          }
+          .invoice-badge {
+            display: inline-block;
+            background-color: #FFF7ED;
+            border: 1px solid #FFEDD5;
+            color: #EA580C;
+            font-size: 18px;
+            font-weight: 800;
+            padding: 6px 16px;
+            border-radius: 8px;
+            text-align: right;
+          }
+          .info-grid {
+            width: 100%;
+            margin-bottom: 28px;
             border-collapse: collapse;
           }
-          .details-table td,
-          .address-table td {
-            padding: 5px;
-            vertical-align: top;
-          }
-          .address-table td {
+          .info-col {
             width: 50%;
+            vertical-align: top;
+            padding: 16px;
+            background-color: #F8FAFC;
+            border: 1px solid #E2E8F0;
+            border-radius: 12px;
           }
-          .center-text {
+          .info-title {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #FF6B00;
+            margin-bottom: 8px;
+          }
+          .items-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 24px;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid #E2E8F0;
+          }
+          .items-table th {
+            background-color: #F1F5F9;
+            color: #334155;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            padding: 12px 16px;
+            text-align: left;
+          }
+          .items-table td {
+            padding: 14px 16px;
+            border-bottom: 1px solid #E2E8F0;
+            color: #1E293B;
+          }
+          .totals-table {
+            width: 320px;
+            margin-left: auto;
+            border-collapse: collapse;
+            margin-bottom: 30px;
+          }
+          .totals-table td {
+            padding: 8px 12px;
+            font-size: 13px;
+          }
+          .totals-table .total-row td {
+            border-top: 2px solid #FF6B00;
+            font-size: 16px;
+            font-weight: 800;
+            color: #FF6B00;
+            padding-top: 12px;
+          }
+          .footer {
+            border-top: 1px solid #E2E8F0;
+            padding-top: 20px;
             text-align: center;
-          }
-          .footer-text {
-            font-size: 10px;
-            text-align: center;
-            margin-top: 20px;
-          }
-          .bold {
-            font-weight: bold;
-          }
-          .table-bordered {
-            border: 1px solid black;
-          }
-          .table-bordered td {
-            border: 1px solid black;
-          }
-          .invoice-container {
-            width: 90vw;
-            max-width: 1200px;
-            border: 3px solid black;
-            border-top: none;
-            padding: 10px;
-            height: auto;
-          }
-          .invoice-header,
-          .invoice-footer {
-            text-align: center;
-            margin-bottom: 20px;
-          }
-          .invoice-title {
-            font-size: 22px;
-            font-weight: bold;
-            text-align: center;
-          }
-          .invoice-details {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 10px;
-          }
-          .invoice-details .seller-info,
-          .invoice-details .buyer-info {
-            width: 48%;
+            font-size: 11px;
+            color: #94A3B8;
           }
         </style>
       </head>
       <body>
-        <div class="label-container">
-          <table class="address-table">
+        <table class="header-table">
+          <tr>
+            <td>
+              <div class="brand-title">MarketingKart<span style="color: #0F172A;">.ai</span></div>
+              <div class="brand-subtitle">AI-Powered Marketing & Lead Growth Platform</div>
+            </td>
+            <td style="text-align: right;">
+              <div class="invoice-badge">TAX INVOICE</div>
+              <div style="margin-top: 8px; font-size: 12px; color: #64748B;">
+                <strong>Invoice #:</strong> MK-INV-${invoiceNumber}<br/>
+                <strong>Date:</strong> ${date}<br/>
+                <strong>Txn ID:</strong> ${transactionId || "N/A"}
+              </div>
+            </td>
+          </tr>
+        </table>
+
+        <table class="info-grid">
+          <tr>
+            <td class="info-col" style="margin-right: 10px;">
+              <div class="info-title">Sold By (Service Provider)</div>
+              <p style="font-weight: 700; color: #0F172A; font-size: 14px;">${companyData?.name || "MarketingKart.ai"}</p>
+              <p style="color: #475569; margin-top: 4px;">${companyData?.address || "India"}</p>
+              <p style="color: #475569; margin-top: 2px;">Email: ${companyData?.email || "support@marketingkart.in"}</p>
+              <p style="color: #475569; margin-top: 2px;">Phone: ${companyData?.phone || "N/A"}</p>
+            </td>
+            <td style="width: 20px;"></td>
+            <td class="info-col">
+              <div class="info-title">Billed To (Client)</div>
+              ${adata}
+            </td>
+          </tr>
+        </table>
+
+        <table class="items-table">
+          <thead>
             <tr>
-              <td class="left-section">
-                <div class="header-title">
-                  <p>Tax Invoice</p>
-                </div>
-                <p><strong>Invoice Number:</strong> INVOICE -${invoiceNumber}</p>
-                <p><strong>Invoice Date:</strong> ${date}</p>
-                <p><strong>Status:</strong> Active</p>
-                <p><strong>Campaign Name:</strong> ${
-                  advertismentType.title || "N/A"
-                }</p>
-                <p><strong>Channel:</strong> ${addType}</p>
-              </td>
-              <td class="right-section">
-                <div class="header-title">
-                  <p>Sold By</p>
-                </div>
-                <p><strong>${companyData?.name || "MarketingKart.ai"}</strong></p>
-                <p>${companyData?.address || "N/A"}</p>
-                <p>Email: ${companyData?.email || "N/A"}</p>
-                <p>Phone: ${companyData?.phone || "N/A"}</p>
-              </td>
+              <th>Description / Campaign</th>
+              <th>Channel</th>
+              <th style="text-align: right;">Taxable Amount</th>
             </tr>
+          </thead>
+          <tbody>
             <tr>
               <td>
-                <div class="section-title">Billing Address:</div>
-                ${htmlData}
+                <strong>${advertismentType?.title || "Ad Campaign"}</strong>
+                <div style="font-size: 11px; color: #64748B; margin-top: 2px;">Meta Ad Placement & Lead Optimization</div>
               </td>
-              <td style="display: flex; justify-content: center; align-items: center;">
-                <img style="width: 250px; height: 100px; object-fit: contain;" src="${
-                  companyData?.logo || ""
-                }" alt="Logo" />
-              </td>
+              <td>${addType}</td>
+              <td style="text-align: right; font-weight: 600;">₹${Amount.toFixed(2)}</td>
             </tr>
-            <tr>
-              <td colspan="2">
-                <p><strong>Transaction ID:</strong> ${transactionId}</p>
-              </td>
-            </tr>
-          </table>
-        </div>
-        <div class="invoice-container">
-          <h2 class="invoice-title">TAX INVOICE</h2>
-          <div class="invoice-details">
-            <div class="seller-info">
-              <p><strong>Ads Amount:</strong> ₹${Amount.toFixed(2)} (Inc. GST: ${gstPercent}%)</p>
-            
-              <p><strong>Platform Fee:</strong> ₹${PlatformFee.toFixed(2)} (${platformPercent}% platform charges)</p>
-              <div class="underline"> </div>
-              <p><strong>Sub Total:</strong> ₹${amount.toFixed(2)}</p>
-              <p><strong>Payment Gateway Fee:</strong> ₹${PaymentGetwayFee.toFixed(2)} (${gatewayPercent}%)</p>
+          </tbody>
+        </table>
 
-              <div class="underline"> </div>
-              <p>Total Amount: <strong>₹${totalAmount.toFixed(2)}</strong></p>
-            </div>
-          </div>
+        <table class="totals-table">
+          <tr>
+            <td style="color: #64748B;">Ad Budget Spend:</td>
+            <td style="text-align: right; font-weight: 600;">₹${Amount.toFixed(2)}</td>
+          </tr>
+          <tr>
+            <td style="color: #64748B;">Platform Fee (${platformPercent}%):</td>
+            <td style="text-align: right; font-weight: 600;">₹${PlatformFee.toFixed(2)}</td>
+          </tr>
+          <tr>
+            <td style="color: #64748B;">GST (${gstPercent}%):</td>
+            <td style="text-align: right; font-weight: 600;">₹${GST.toFixed(2)}</td>
+          </tr>
+          <tr>
+            <td style="color: #64748B;">Payment Gateway (${gatewayPercent}%):</td>
+            <td style="text-align: right; font-weight: 600;">₹${PaymentGetwayFee.toFixed(2)}</td>
+          </tr>
+          <tr class="total-row">
+            <td>Total Paid:</td>
+            <td style="text-align: right;">₹${totalAmount.toFixed(2)}</td>
+          </tr>
+        </table>
+
+        <div class="footer">
+          <p>Thank you for choosing MarketingKart.ai for your business marketing!</p>
+          <p style="margin-top: 4px;">This is a computer-generated tax invoice and requires no physical signature.</p>
         </div>
       </body>
-    </html>
-            `;
+    </html>`;
 
     // Generate PDF
     const browser = await puppeteer.launch({
       args: ["--no-sandbox", "--disable-setuid-sandbox"],
       headless: true,
-      timeout: 60000, // Increase timeout to 60 seconds
+      timeout: 60000,
     });
     const page = await browser.newPage();
     await page.setContent(htmlContent, { waitUntil: "load" });
@@ -278,29 +302,111 @@ exports.generateInvoice = async (
 
     // Upload PDF to Cloudinary
     const uploadedFile = await uploadBuffer(pdfBuffer, {
-      folder: "LEADKART/INVOICES",
+      folder: "MARKETINGKART/INVOICES",
       resourceType: "raw",
       publicId: `invoice-${Date.now()}`,
     });
     const invoiceUrl = uploadedFile.secure_url;
 
     // Send Email
+    const user = process.env.EMAIL_USER || "ayotrix1@gmail.com";
+    const pass = process.env.EMAIL_PASS || "ijewaofeggqbwmmm";
+
     const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
+        user,
+        pass,
       },
     });
 
     const mailOptions = {
-      from: process.env.EMAIL_USER,
+      from: `"MarketingKart.ai" <${user}>`,
       to: business?.businessEmail,
-      subject: "Your Invoice",
-      text: "Please find the attached invoice.",
+      subject: `🧾 Your MarketingKart.ai Tax Invoice (#MK-INV-${invoiceNumber})`,
+      html: `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Your Tax Invoice</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #F8FAFC; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+  <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #F8FAFC; padding: 30px 10px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" style="width: 100%; max-width: 560px; border-collapse: collapse; background-color: #FFFFFF; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.06); overflow: hidden; border: 1px solid #E2E8F0;">
+          
+          <!-- Banner -->
+          <tr>
+            <td style="background: linear-gradient(135deg, #FF6B00 0%, #FF8800 100%); padding: 35px 30px; text-align: center;">
+              <h1 style="margin: 0; color: #FFFFFF; font-size: 26px; font-weight: 800;">MarketingKart<span style="opacity: 0.9;">.ai</span></h1>
+              <p style="margin: 6px 0 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Payment Received & Invoice Confirmation</p>
+            </td>
+          </tr>
+
+          <!-- Content -->
+          <tr>
+            <td style="padding: 35px 30px;">
+              <p style="margin: 0 0 16px 0; font-size: 16px; color: #0F172A; font-weight: 700;">
+                Hello ${business?.businessName || "Valued Customer"},
+              </p>
+              <p style="margin: 0 0 24px 0; color: #64748B; font-size: 14px; line-height: 22px;">
+                Thank you for your payment. Your ad campaign order has been confirmed, and your official GST tax invoice has been generated.
+              </p>
+
+              <!-- Summary Card -->
+              <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #F8FAFC; border-radius: 14px; border: 1px solid #E2E8F0; margin-bottom: 24px;">
+                <tr>
+                  <td style="padding: 16px 20px; border-bottom: 1px solid #E2E8F0;">
+                    <span style="color: #64748B; font-size: 13px;">Invoice Number:</span>
+                    <strong style="float: right; color: #0F172A; font-size: 13px;">#MK-INV-${invoiceNumber}</strong>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding: 16px 20px; border-bottom: 1px solid #E2E8F0;">
+                    <span style="color: #64748B; font-size: 13px;">Campaign:</span>
+                    <strong style="float: right; color: #0F172A; font-size: 13px;">${advertismentType?.title || "Ad Campaign"}</strong>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding: 16px 20px; border-bottom: 1px solid #E2E8F0;">
+                    <span style="color: #64748B; font-size: 13px;">Date:</span>
+                    <strong style="float: right; color: #0F172A; font-size: 13px;">${date}</strong>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding: 16px 20px; background-color: #FFF7ED; border-radius: 0 0 14px 14px;">
+                    <span style="color: #EA580C; font-size: 14px; font-weight: 700;">Total Amount Paid:</span>
+                    <strong style="float: right; color: #EA580C; font-size: 17px; font-weight: 800;">₹${totalAmount.toFixed(2)}</strong>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin: 0; color: #64748B; font-size: 13px; line-height: 20px;">
+                📎 <strong>Attachment:</strong> A PDF copy of your tax invoice is attached to this email for your accounting records.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 20px 30px; text-align: center; background-color: #FAFAFA; border-top: 1px solid #F1F5F9;">
+              <p style="margin: 0; color: #64748B; font-size: 12px;">
+                © ${new Date().getFullYear()} MarketingKart.ai — All rights reserved.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`,
       attachments: [
         {
-          filename: "Invoice.pdf",
+          filename: `Invoice-MK-${invoiceNumber}.pdf`,
           content: pdfBuffer,
           contentType: "application/pdf",
         },
@@ -308,8 +414,7 @@ exports.generateInvoice = async (
     };
 
     await transporter.sendMail(mailOptions);
-
-    console.log("Invoice sent successfully");
+    console.log("Invoice sent successfully to", business?.businessEmail);
 
     const data = await new invoiceModel({
       adsAmount: parseInt(Amount),

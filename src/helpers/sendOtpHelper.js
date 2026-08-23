@@ -168,70 +168,111 @@ exports.sendOtp = (mobile, otp) => {
 
 exports.sendOtpInMail = (email, otp) => {
   async function main() {
+    const user = process.env.EMAIL_USER || "ayotrix1@gmail.com";
+    const pass = process.env.EMAIL_PASS || "ijewaofeggqbwmmm";
+
     const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
-        user: "node.satyakabir@gmail.com",
-        pass: "ucax pjqz npwg ywam",
+        user,
+        pass,
       },
     });
 
+    const otpDigits = String(otp).split("");
+
     const info = {
-      from: '"LeadKart" <node.satyakabir@gmail.com>',
-      to: `${email}`, //"developerrudra@yahoo.com",
-      subject: "Your One-Time Password (OTP)",
+      from: `"MarketingKart.ai" <${user}>`,
+      to: `${email}`,
+      subject: `🔐 Your MarketingKart Verification Code: ${otp}`,
       html: `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LeadKart</title>
-  <style>
-   strong, a{
-       color: rgb(0, 115, 128) !important;
-    }
-  </style>
+  <title>MarketingKart.ai - Verification Code</title>
 </head>
-<body style="margin: 0; padding: 0;">
-  <table role="presentation" style="width: 100%; border-collapse: collapse; border-spacing: 0; background-color: #f7f7f7;">
+<body style="margin: 0; padding: 0; background-color: #F8FAFC; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+  <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #F8FAFC; padding: 30px 10px;">
     <tr>
-      <td align="center" style="padding: 20px 0;">
-        <table role="presentation" style="width: 100%; max-width: 600px; border-collapse: collapse; border-spacing: 0; background-color: #ffffff; border-radius: 10px; box-shadow: 0px 4px 6px rgba(0,0,0,0.3);">
+      <td align="center">
+        <table role="presentation" style="width: 100%; max-width: 540px; border-collapse: collapse; background-color: #FFFFFF; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.06); overflow: hidden; border: 1px solid #E2E8F0;">
+          
+          <!-- Header Banner -->
           <tr>
-            <td align="center" style="padding: 20px;">
-              <img src="cid:emailImg" alt="otpImg" style="width: 100px; height: 100px; border-radius: 10px;">
-              <h1 style="font-size: 24px; color: #007380; margin: 20px 0;">Email Confirmation</h1>
-              <div style="font-size: 24px; margin: 20px 0;">
-                <span style="border: 1px solid #b6b6b6; padding: 10px 20px; border-radius: 5px;">1</span>
-                <span style="border: 1px solid #b6b6b6; padding: 10px 20px; border-radius: 5px;">2</span>
-                <span style="border: 1px solid #b6b6b6; padding: 10px 20px; border-radius: 5px;">3</span>
-                <span style="border: 1px solid #b6b6b6; padding: 10px 20px; border-radius: 5px;">4</span>
-              </div>
-              <p style="font-size: 16px; color: #000000;">We have sent an email to <strong style="color: #007380;">${email}</strong> to confirm the validity of your email address. After receiving the email, follow the link provided to complete your registration.</p>
+            <td style="background: linear-gradient(135deg, #FF6B00 0%, #FF8800 100%); padding: 35px 30px; text-align: center;">
+              <h1 style="margin: 0; color: #FFFFFF; font-size: 26px; font-weight: 800; letter-spacing: -0.5px;">MarketingKart<span style="opacity: 0.9;">.ai</span></h1>
+              <p style="margin: 6px 0 0 0; color: rgba(255,255,255,0.9); font-size: 14px; font-weight: 500;">AI-Powered Marketing & Lead Growth</p>
             </td>
           </tr>
+
+          <!-- Main Content -->
+          <tr>
+            <td style="padding: 40px 35px 30px 35px; text-align: center;">
+              <h2 style="margin: 0 0 12px 0; color: #0F172A; font-size: 20px; font-weight: 700;">Email Verification Code</h2>
+              <p style="margin: 0 0 28px 0; color: #64748B; font-size: 14px; line-height: 22px;">
+                We received a request to verify your email address for <strong style="color: #0F172A;">${email}</strong>. Use the One-Time Password (OTP) below to continue:
+              </p>
+
+              <!-- OTP Code Display -->
+              <div style="margin: 30px 0; text-align: center;">
+                <table role="presentation" style="margin: 0 auto; border-collapse: separate; border-spacing: 8px;">
+                  <tr>
+                    ${otpDigits
+                      .map(
+                        (digit) => `
+                    <td style="width: 48px; height: 54px; background-color: #FFF7ED; border: 2px solid #FFEDD5; border-radius: 12px; text-align: center; vertical-align: middle;">
+                      <span style="font-size: 26px; font-weight: 800; color: #EA580C; font-family: 'Courier New', Courier, monospace;">${digit}</span>
+                    </td>`
+                      )
+                      .join("")}
+                  </tr>
+                </table>
+              </div>
+
+              <div style="background-color: #FEF3C7; border: 1px solid #FDE68A; border-radius: 12px; padding: 12px 16px; margin-top: 25px; text-align: left; display: inline-block;">
+                <p style="margin: 0; color: #92400E; font-size: 12.5px; line-height: 18px;">
+                  ⏱️ <strong>Note:</strong> This verification code is valid for <strong>10 minutes</strong>. Never share this OTP with anyone.
+                </p>
+              </div>
+            </td>
+          </tr>
+
+          <!-- Divider -->
+          <tr>
+            <td style="padding: 0 35px;">
+              <div style="height: 1px; background-color: #F1F5F9;"></div>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 24px 35px 30px 35px; text-align: center; background-color: #FAFAFA;">
+              <p style="margin: 0 0 6px 0; color: #94A3B8; font-size: 12px;">
+                If you did not request this email, please ignore it or contact support.
+              </p>
+              <p style="margin: 0; color: #64748B; font-size: 12px; font-weight: 600;">
+                © ${new Date().getFullYear()} MarketingKart.ai — All rights reserved.
+              </p>
+            </td>
+          </tr>
+
         </table>
       </td>
     </tr>
   </table>
 </body>
 </html>`,
-      attachments: [
-        {
-          filename: "emailImg.webp",
-          path: "https://leadkart.in-maa-1.linodeobjects.com/LEADKART/IMAGE/1753096394019_1660706448320.jpeg",
-          cid: "emailImg", // same cid value as in the html img src
-        },
-      ],
     };
 
     try {
       let result = await transporter.sendMail(info);
-      console.log("Email sent:", result);
+      console.log("OTP Email sent successfully:", result.messageId);
     } catch (error) {
-      console.error("Error sending email:", error);
+      console.error("Error sending OTP email:", error.message);
     }
   }
 
   main();
 };
+
