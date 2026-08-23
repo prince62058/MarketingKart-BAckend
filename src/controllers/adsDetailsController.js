@@ -29,10 +29,6 @@ const Notification = require("../models/notificationModel");
 const OpenAI = require("openai");
 const { uploadUrlToBucket } = require("../utils/bucketHelper");
 
-if (!process.env.systemUserAccessToken || process.env.systemUserAccessToken.startsWith("EAAWT")) {
-  process.env.systemUserAccessToken = "EAAJeydN1ENwBPjY8DDmwcjiiRFf2iGncTF8cgtAyn8DvZBZBH96elpA8Vs0GZAjZCoBkMbsyiQvrEsblwYDab0cI0yNMnHZAwQuPSnmQN4DSZBfbWuo8n0oS3j9jKZBWY1M3AvmGqJRZCgzjZANpM2KF5N0vz71PJSyAb7RPQYS9DCpDUUcEMlpRbuDhyNFbXnmyLggZDZD";
-}
-
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || "dummy-key",
 });

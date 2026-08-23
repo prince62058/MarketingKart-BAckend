@@ -8,11 +8,6 @@ const transtionModel = require("../models/transtionModel");
 const crypto = require("crypto");
 const axios = require("axios");
 
-// Replace these variables with your actual access token and app secret
-// const accessToke =
-//   "EAAWTFXvGZBMoBO0GRnCi9pTqoopZCdDUQkmDxJYdL5HWblFwqdmGKXYLI4wcWDl5bbksl7AI8the5xms95TlzqliBr0obDskFhsZCChfq6kuiB4XzvT4ZCkgo7HqFm0HebdiiOutYVwItB1SToLe6zLgVZA2VB7SSeqjUhLRQvUx30Ak8XZCrcEwlkntpk4IFiO4h6hMhX";
-// const appSecre = "0dd5ddd645af8441f5bc2aeca97d8997";
-
 // Create the appsecret_proof
 exports.permanentToken = (req, res) => {
   try {
