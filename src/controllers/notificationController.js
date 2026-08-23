@@ -185,10 +185,11 @@ const sendNotificationToMultipleToken = async (
 const sendNotificationToAllUsersBusiness = async (req, res) => {
   try {
     const { title, message } = req.body;
-    const businesses = await Business.find().select("userId");
-    const tokens = await User.find({
-      _id: { $in: businesses.map((b) => b.userId) },
-    }).select("fcm");
+    const allUsers = await User.find({ disable: { $ne: true } }).select("_id fcm");
+    const tokens = allUsers
+      .map((u) => (Array.isArray(u.fcm) ? u.fcm : [u.fcm]))
+      .flat()
+      .filter((t) => typeof t === "string" && t.trim().length > 0);
 
     const notificationPayload = {
       title,
@@ -196,20 +197,23 @@ const sendNotificationToAllUsersBusiness = async (req, res) => {
       customData: "default",
     };
 
-    await sendNotificationToMultipleTokens(
-      tokens.map((t) => t.fcm),
-      notificationPayload
-    );
+    if (tokens.length > 0) {
+      await sendNotificationToMultipleTokens(tokens, notificationPayload);
+    }
 
-    const notifications = businesses.map((business) => ({
-      userId: business?.userId,
+    const notifications = allUsers.map((user) => ({
+      userId: user._id,
       title,
       message,
-      businessId: business?._id,
       image: req.file?.location,
+      read: false,
+      status: "sent",
+      createdAt: new Date(),
     }));
 
-    await Notification.insertMany(notifications);
+    if (notifications.length > 0) {
+      await Notification.insertMany(notifications);
+    }
 
     res
       .status(200)
@@ -218,6 +222,7 @@ const sendNotificationToAllUsersBusiness = async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 };
+
 
 // Function to send notification to users of a specific business
 const sendNotificationToBusinessUsers = async (req, res) => {
