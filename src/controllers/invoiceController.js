@@ -360,8 +360,9 @@ exports.getInvoiceByBusinessId = async (req, res) => {
 
 exports.getInvoiceDetails = async (req, res) => {
   try {
-    const invoiceId = req.query.invoiceId;
+    const invoiceId = req.query.invoiceId || req.params.invoiceId;
     const invoice = await invoiceModel.findById(invoiceId);
+
 
     if (!invoice) {
       return res.status(404).json({

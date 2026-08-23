@@ -28,6 +28,9 @@ router.post(
   updateCompany
 );
 router.get('/getNewCompany',getCompany)
+router.get('/company',getCompany)
+router.put('/company',updateCompany)
 router.put('/toggleMaintenance',toggleMaintenance)
 router.put('/updateAppVersion',updateAppVersion)
 module.exports = router;
+

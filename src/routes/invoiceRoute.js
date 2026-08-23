@@ -5,6 +5,9 @@ const router = express.Router();
 
 // Example route to get all invoices
 router.get('/invoices', getInvoiceDetails);
+router.get('/getInvoiceDetails', getInvoiceDetails);
+router.get('/getInvoiceDetails/:invoiceId', getInvoiceDetails);
+
 
 // Example route to create a new invoice
 router.get('/getInvoiceByBusinessId',getInvoiceByBusinessId );
