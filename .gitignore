@@ -15,6 +15,9 @@ webhook_payloads.log
 env
 env.production
 !env.example
+src/config/firebase.json
+!src/config/firebase.example.json
+
 
 # Archives / data exports (PII)
 *.zip

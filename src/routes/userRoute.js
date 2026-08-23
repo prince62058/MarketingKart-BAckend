@@ -91,5 +91,7 @@ router.put(
 router.post("/user/V2/mobileLogInV2", asyncHandler(controller.mobileLogInV2));
 router.post("/user/V2/verifyMobileOtpV2", asyncHandler(controller.verifyOtpV2));
 
+router.post("/user/updateFcm", asyncHandler(authUser), asyncHandler(controller.updateFcm));
 
 module.exports = router;
+

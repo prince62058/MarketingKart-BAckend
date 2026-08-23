@@ -4,14 +4,26 @@ const Business = require("../models/businessModel");
 const InternalCampaign = require("../models/internalCampiagnModel");
 
 const admin = require("firebase-admin");
-const serviceAccount = require("../config/firebase.json");
+let serviceAccount;
+try {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    serviceAccount = typeof process.env.FIREBASE_SERVICE_ACCOUNT === 'string' && process.env.FIREBASE_SERVICE_ACCOUNT.startsWith('{')
+      ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
+      : require(process.env.FIREBASE_SERVICE_ACCOUNT);
+  } else {
+    serviceAccount = require("../config/firebase.json");
+  }
+} catch (err) {
+  console.warn("⚠️ Firebase service account not loaded:", err.message);
+}
 
 // Initialize the Firebase Admin SDK
-if (!admin.apps.length) {
+if (!admin.apps.length && serviceAccount) {
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
   });
 }
+
 
 const isInvalidFcmTokenError = (error) => {
   const errorCode = error?.errorInfo?.code;

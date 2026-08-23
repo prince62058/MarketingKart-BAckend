@@ -1391,3 +1391,33 @@ exports.getAllUsersWithBusiness = async (req, res) => {
     });
   }
 };
+
+exports.updateFcm = async (req, res) => {
+  try {
+    const { fcm } = req.body;
+    if (!fcm) {
+      return res.status(400).json({
+        success: false,
+        message: "FCM token is required",
+      });
+    }
+    const userId = req.user?._id;
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+    await userModel.findByIdAndUpdate(userId, { fcm: fcm });
+    return res.status(200).json({
+      success: true,
+      message: "FCM token updated successfully",
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to update FCM token",
+    });
+  }
+};
+
