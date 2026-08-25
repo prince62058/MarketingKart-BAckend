@@ -50,6 +50,10 @@ router.put(
   "/business/unLinkPage",
   asyncHandler(controller.unLinkPage)
 );
+router.post(
+  "/business/unLinkPage",
+  asyncHandler(controller.unLinkPage)
+);
 
 router.get(
   "/business/getBusinessIdForAdmin",
