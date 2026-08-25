@@ -4,7 +4,7 @@ const cron = require("node-cron");
 const { assignCallToStaff, distributeUnassignedCalls } = require("../services/autoAssignService");
 
 exports.createCall = async (req, res) => {
-  const { userId } = req.body;
+  const { userId } = req.params;
   try {
     const user = await userModel.findById(userId);
     if (!user) {

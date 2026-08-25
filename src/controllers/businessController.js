@@ -179,6 +179,15 @@ exports.updateBusiness = async (req, res) => {
 
     const updateData = extractUpdateData(req.body, businessImage);
 
+    // If pageId is provided, explicitly mark the business as Facebook page linked
+    if (req.body.pageId) {
+      updateData.isFacebookPageLinked = true;
+      updateData.pageId = req.body.pageId;
+      if (req.body.pageName) {
+        updateData.pageName = req.body.pageName;
+      }
+    }
+
     // Handle Meta Access Token only when explicitly provided (don't wipe on name/contact edits)
     if (req.body.metaAccessToken) {
       const metaTokenResponse = await handleMetaAccessToken(
@@ -188,15 +197,20 @@ exports.updateBusiness = async (req, res) => {
         return res.status(500).json(metaTokenResponse.error);
       updateData.metaAccessToken = metaTokenResponse.token;
 
-      // Fetch long-lived Page Access Token (60 days/Never expiring)
+      // Fetch long-lived Page Access Token (60 days/Never expiring) and Page Name
       if (req.body.pageId && metaTokenResponse.token) {
         try {
           const pageResponse = await axios.get(
-            `https://graph.facebook.com/v21.0/${req.body.pageId}?fields=access_token&access_token=${metaTokenResponse.token}`,
+            `https://graph.facebook.com/v21.0/${req.body.pageId}?fields=access_token,name&access_token=${metaTokenResponse.token}`,
           );
-          if (pageResponse.data && pageResponse.data.access_token) {
-            updateData.pageAccessToken = pageResponse.data.access_token;
-            req.body.pageAccessToken = pageResponse.data.access_token;
+          if (pageResponse.data) {
+            if (pageResponse.data.access_token) {
+              updateData.pageAccessToken = pageResponse.data.access_token;
+              req.body.pageAccessToken = pageResponse.data.access_token;
+            }
+            if (pageResponse.data.name && !updateData.pageName) {
+              updateData.pageName = pageResponse.data.name;
+            }
           }
         } catch (err) {
           console.warn(
@@ -241,7 +255,7 @@ exports.updateBusiness = async (req, res) => {
           {
             isFacebookPageLinked: true,
             isBmAccessProvidedToAdminBm: false,
-            pageName: clientUserName || updatedBusiness.pageName,
+            pageName: req.body.pageName || clientUserName || updatedBusiness.pageName,
           },
         );
         return res
@@ -259,7 +273,17 @@ exports.updateBusiness = async (req, res) => {
         { _id: businessManagerResponse.updatedBusiness._id },
         {
           isFacebookPageLinked: true,
-          pageName: clientUserName || businessManagerResponse.updatedBusiness.pageName,
+          pageName: req.body.pageName || clientUserName || businessManagerResponse.updatedBusiness.pageName,
+        }
+      );
+    } else if (req.body.pageId) {
+      // Ensure pageId and isFacebookPageLinked are persisted even if pageAccessToken wasn't resolved
+      updatedBusiness = await businessService.updateBusiness(
+        { _id: business._id },
+        {
+          isFacebookPageLinked: true,
+          pageId: req.body.pageId,
+          pageName: req.body.pageName || updatedBusiness.pageName,
         }
       );
     }
@@ -305,6 +329,8 @@ function extractUpdateData(body, businessImage) {
     businessEmail: body.businessEmail,
     metaAccessToken: body.metaAccessToken,
     pageId: body.pageId,
+    pageName: body.pageName,
+    isFacebookPageLinked: body.isFacebookPageLinked,
     pageAccessToken: body.pageAccessToken,
     metaAdAccountId: body.metaAdAccountId,
   };
@@ -698,6 +724,26 @@ exports.disableBusiness = async (req, res) => {
 
 exports.getAllBusinessByUserId = async (req, res) => {
   const getAll = await businessService.getAllBusinessByUserId(req.user);
+
+  // Auto-backfill pageName for any linked business that is missing it
+  for (const b of getAll) {
+    if (b.pageId && !b.pageName) {
+      const token = b.pageAccessToken || b.metaAccessToken;
+      if (token) {
+        try {
+          const { data } = await axios.get(
+            `https://graph.facebook.com/v21.0/${b.pageId}?fields=name&access_token=${token}`,
+            { timeout: 3000 }
+          );
+          if (data && data.name) {
+            b.pageName = data.name;
+            await businessModel.findByIdAndUpdate(b._id, { pageName: data.name });
+          }
+        } catch (_) {}
+      }
+    }
+  }
+
   return res
     .status(statusCodes.OK)
     .json(
