@@ -1,10 +1,12 @@
 const callRequestModel = require("../models/callRequestModel");
 const userModel = require("../models/userModel");
+const businessModel = require("../models/businessModel");
 const cron = require("node-cron");
 const { assignCallToStaff, distributeUnassignedCalls } = require("../services/autoAssignService");
 
 exports.createCall = async (req, res) => {
   const { userId } = req.params;
+  const { businessId } = req.body || {};
   try {
     const user = await userModel.findById(userId);
     if (!user) {
@@ -19,7 +21,17 @@ exports.createCall = async (req, res) => {
         message: "You have already used it today. Try again after 12 AM.",
       });
     }
-    const data = await callRequestModel.create({ userId });
+
+    let resolvedBusinessId = businessId;
+    if (!resolvedBusinessId) {
+      const biz = await businessModel.findOne({ userId, disable: false }).sort({ createdAt: -1 });
+      if (biz) resolvedBusinessId = biz._id;
+    }
+
+    const data = await callRequestModel.create({
+      userId,
+      ...(resolvedBusinessId && { businessId: resolvedBusinessId }),
+    });
     
     // Auto assignment
     await assignCallToStaff(data._id);
@@ -30,8 +42,12 @@ exports.createCall = async (req, res) => {
       { new: true },
     );
     
-    // Fetch updated data with assignedStaff populated
-    const updatedData = await callRequestModel.findById(data._id).populate("assignedStaff");
+    // Fetch updated data with assignedStaff & business populated
+    const updatedData = await callRequestModel
+      .findById(data._id)
+      .populate("userId")
+      .populate("businessId")
+      .populate("assignedStaff");
 
     res.status(201).json({
       success: true,
@@ -60,14 +76,35 @@ exports.listCallRequest = async (req, res) => {
     }),
   };
   try {
-    const data = await callRequestModel
+    const rawData = await callRequestModel
       .find(filter)
       .populate("userId")
+      .populate("businessId")
       .populate("assignedStaff")
       .populate("statusUpdatedBy", "name image mobile")
       .sort({ createdAt: parseInt(sort) })
       .skip(skip)
-      .limit(limit);
+      .limit(limit)
+      .lean();
+
+    // Enrich missing business data so customer name, email, phone are properly resolved
+    const data = await Promise.all(
+      rawData.map(async (call) => {
+        let business = call.businessId;
+        if (!business && call.userId?._id) {
+          business = await businessModel
+            .findOne({ userId: call.userId._id, disable: false })
+            .select("businessName businessEmail businessContact businessImage")
+            .sort({ createdAt: -1 })
+            .lean();
+        }
+        return {
+          ...call,
+          businessId: business || null,
+        };
+      })
+    );
+
     const total = await callRequestModel.countDocuments(filter);
     res.status(200).json({
       success: true,

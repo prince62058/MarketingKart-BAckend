@@ -7,6 +7,11 @@ const callRequestModel = new mongoose.Schema(
       type: ObjectId,
       ref: "userModel",
     },
+    businessId: {
+      type: ObjectId,
+      ref: "business",
+      default: null,
+    },
     status: {
       type: String,
       enum: ["Pending", "Completed", "No Response", "Busy", "Scheduled", "Converted", "Call me Later"],
