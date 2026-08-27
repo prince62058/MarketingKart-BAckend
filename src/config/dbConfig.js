@@ -112,7 +112,7 @@ const connectAdditionalDatabases = async () => {
 const connect = async () => {
   const primaryUri =
     process.env.MONGO_URI ||
-    "mongodb+srv://leadkartai:JFahjNo8JikXZeQL@leadkart.d7ppzbt.mongodb.net/Leadkart?retryWrites=true&w=majority";
+    "mongodb+srv://leadkartai:JFahjNo8JikXZeQL@leadkart.d7ppzbt.mongodb.net/marketingkart?retryWrites=true&w=majority";
 
   try {
     await mongoose.connect(primaryUri, baseConnectionOptions);
