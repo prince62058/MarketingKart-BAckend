@@ -354,9 +354,11 @@ exports.getAllUser = async (req, res) => {
 
     let obj = {};
 
-    // Filter by userType
+    // Filter by userType (exclude ADMIN accounts from customer list by default)
     if (userType) {
       obj.userType = userType;
+    } else {
+      obj.userType = { $ne: "ADMIN" };
     }
 
     // Filter by disable
