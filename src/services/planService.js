@@ -4,8 +4,14 @@ exports.createPlan = async (data) => {
   return await planModel.create(data);
 };
 
-exports.getAllPlan = async (query,skip) => {
-  return await planModel.find(query).populate("advertisementTypeId").skip(skip).sort({createdAt:-1}).limit(20).exec();
+exports.getAllPlan = async (query, skip) => {
+  return await planModel
+    .find(query)
+    .populate("advertisementTypeId")
+    .skip(skip || 0)
+    .sort({ price: 1 })
+    .limit(200)
+    .exec();
 };
 
 
