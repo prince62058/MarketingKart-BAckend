@@ -3,12 +3,14 @@ const { startFollowUpScheduler } = require("../controllers/fowllowUpController")
 const { startWhatsAppWorker } = require("../workers/whatsappWorker");
 const { startLiveSpendSync } = require("./liveSpendSync");
 const { seedCategoriesIfEmpty } = require("./seedBusinessCategories");
+const { seedAdminIfEmpty } = require("./seedAdmin");
 
 async function initializeBackgroundTasks() {
     console.log("🚀 Initializing background tasks...");
     try {
-        // Ensure default dynamic business categories exist
+        // Ensure default dynamic business categories and admin accounts exist
         await seedCategoriesIfEmpty();
+        await seedAdminIfEmpty();
 
         // Start the manual campaign manager (starts its own 5s loop)
         manageCampaigns();
