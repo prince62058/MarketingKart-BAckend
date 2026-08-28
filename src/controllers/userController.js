@@ -795,51 +795,30 @@ exports.adminLogIn = async (req, res) => {
         ),
       );
   }
-  if (user?.role == 2) {
-    let Otp = 1234;
-    // let Otp = otp();
-    sendOtpInMail(email, Otp);
-    const cyperOtp = CryptoJS.AES.encrypt(
-      Otp.toString(),
-      "CRYPTOKEY",
-    ).toString();
-    // let adminFcm = user?.adminFcm.push(fcm)
-    // await userService.finOne({ email: email }, { otp: cyperOtp, adminFcm: adminFcm });
+  const generate = await jwt.sign(
+    { User: user._id, userType: "ADMIN" },
+    process.env.JWT_SECRET || "SECRETEKEY",
+    {
+      expiresIn: "30d",
+    },
+  );
+  let permission = await staffModel.findOne({ userId: user?._id });
+  user._doc.token = generate;
+  user._doc.permission = permission?.permissions || ["ALL"];
+  user._doc.staffId = permission?._id || "";
 
+  if (fcm) {
     await userModel.updateOne(
       { email },
-      {
-        otp: cyperOtp,
-        $addToSet: { adminFcm: fcm }, // Use $addToSet to avoid duplicate FCM tokens
-      },
+      { $addToSet: { adminFcm: fcm } },
     );
-    return res
-      .status(statusCodes.Created)
-      .json(
-        responseBuilder(
-          apiResponseStatusCode[200],
-          "otp send successfully",
-          true,
-        ),
-      );
-  } else {
-    const generate = await jwt.sign(
-      { User: user._id, userType: "ADMIN" },
-      process.env.JWT_SECRET || "SECRETEKEY",
-      {
-        expiresIn: "30d",
-      },
-    );
-    let permission = await staffModel.findOne({ userId: user?._id });
-    user._doc.token = generate;
-    user._doc.permission = permission?.permissions;
-    user._doc.staffId = permission?._id;
-    return res
-      .status(statusCodes.OK)
-      .json(
-        responseBuilder(apiResponseStatusCode[200], "LogIn Successfully", user),
-      );
   }
+
+  return res
+    .status(statusCodes.OK)
+    .json(
+      responseBuilder(apiResponseStatusCode[200], "LogIn Successfully", user),
+    );
 };
 // Verify Admin OTP
 exports.verifyAdminEmailOtp = async (req, res) => {
