@@ -2,10 +2,7 @@ const CryptoJS = require("crypto-js");
 const userModel = require("../models/userModel");
 
 const ADMIN_ACCOUNTS = [
-  { email: "superadmin@livechat.com", name: "Super Admin" },
   { email: "admin@marketingkart.ai", name: "MarketingKart Admin" },
-  { email: "admin@marketingkart.in", name: "MarketingKart Admin IN" },
-  { email: "admin@leadkart.com", name: "Leadkart Admin" },
 ];
 
 async function seedAdminIfEmpty() {
