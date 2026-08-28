@@ -7,7 +7,7 @@ exports.mobileLogIn = async (UserData) => {
 };
 
 exports.getAllUsers = async (obj,skip) => {
-  return await User.find(obj).skip(skip).sort({createdAt:-1}).populate("userRole").limit(20).exec();
+  return await User.find(obj).skip(skip).sort({createdAt:-1}).populate("userRole").populate("businessId", "businessName businessImage pageName pageId isFacebookPageLinked").limit(20).exec();
 };
 
 // Update an User by ID

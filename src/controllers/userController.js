@@ -1257,6 +1257,7 @@ exports.getByIdUserForAdmin = async (req, res) => {
     userDoc.totalBusiness = totalBusiness;
     userDoc.liveBusiness = liveBusiness;
     userDoc.unlinkBusiness = unlinkBusiness;
+    userDoc.walletAmount = userDoc.wallet || 0;
 
     // ------------------ Final Response ------------------
     return res
