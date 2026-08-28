@@ -80,7 +80,7 @@ exports.listCallRequest = async (req, res) => {
       .find(filter)
       .populate("userId")
       .populate("businessId")
-      .populate("assignedStaff")
+      .populate({ path: "assignedStaff", populate: { path: "userId", select: "name email mobile" } })
       .populate("statusUpdatedBy", "name image mobile")
       .sort({ createdAt: parseInt(sort) })
       .skip(skip)

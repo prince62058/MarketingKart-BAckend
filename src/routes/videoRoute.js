@@ -1,9 +1,10 @@
 const express = require('express')
 const router = express.Router()
 const controller = require('../controllers/videoController')
-const {upload} = require('../middlewares/multer')
 
-router.post('/createVideo',upload.fields([{name:'videoUrl'},{name:'thumbnail'}]),controller.createVideo)
+router.post('/createVideo',controller.createVideo)
+router.get('/getVideos',controller.getAllVideos)
+router.put('/updateVideo',controller.updateVideo)
 router.delete("/deleteVideo",controller.deleteVideo)
 
 module.exports = router;

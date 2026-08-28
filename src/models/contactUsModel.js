@@ -17,7 +17,7 @@ const contactUsSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: "userModel",
   },
-});
+}, { timestamps: true });
 
 const ContactUs = mongoose.model("ContactUs", contactUsSchema);
 

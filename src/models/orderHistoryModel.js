@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const orderHistorySchema = new mongoose.Schema(
   {
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "userModel" },
     type: { type: String, enum: ["UGC", "VOICE", "SIMPLE", "IMAGE"] },
     orderdDetail: {},
     status: {

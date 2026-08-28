@@ -18,7 +18,7 @@ exports.createCategory = async (req, res) => {
 
   const data = await categoryService.createCategory({
     title,
-    icon: req.file.location,
+    icon: req.file ? req.file.location : req.body.icon,
     categoryId: categoryId,
   });
 

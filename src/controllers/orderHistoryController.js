@@ -169,6 +169,7 @@ exports.getOrderHistoriesAdmin = async (req, res) => {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
+      .populate("userId", "name email mobile")
       .lean();
     const total = await OrderHistory.countDocuments(obj);
     res.json({

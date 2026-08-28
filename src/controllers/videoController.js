@@ -3,9 +3,11 @@ const commpanyModel = require("../models/commpanyModel");
 const {deleteFileFromObjectStorage} = require('../middlewares/multer')
 exports.createVideo = async (req, res) => {
   try {
-    let videoUrl = req.files ? req.files.videoUrl[0].key : null;
-    let thumbnail = req.files ? req.files.thumbnail[0].key : null;
+    const title = req.body?.title || null;
+    const videoUrl = req.files?.videoUrl?.[0]?.key || req.body?.url || null;
+    const thumbnail = req.files?.thumbnail?.[0]?.key || req.body?.thumbnail || null;
     let data = await videoModel.create({
+      title,
       videoUrl,
       thumbnail,
     });
@@ -16,6 +18,40 @@ exports.createVideo = async (req, res) => {
         message: "video created successfully",
         data: data,
       });
+  } catch (error) {
+    return res.status(500).send({ success: false, message: error.message });
+  }
+};
+
+exports.getAllVideos = async (req, res) => {
+  try {
+    const data = await videoModel.find().sort({ createdAt: -1 });
+    return res
+      .status(200)
+      .send({ success: true, message: "videos fetched successfully", data });
+  } catch (error) {
+    return res.status(500).send({ success: false, message: error.message });
+  }
+};
+
+exports.updateVideo = async (req, res) => {
+  try {
+    const { videoId } = req.query;
+    if (!videoId) {
+      return res.status(400).send({ success: false, message: "please provide valid videoId" });
+    }
+    const update = {};
+    if (req.body?.title !== undefined) update.title = req.body.title;
+    if (req.body?.url !== undefined) update.videoUrl = req.body.url;
+    if (req.body?.thumbnail !== undefined) update.thumbnail = req.body.thumbnail;
+
+    const data = await videoModel.findByIdAndUpdate(videoId, update, { new: true });
+    if (!data) {
+      return res.status(400).send({ success: false, message: "please provide valid videoId" });
+    }
+    return res
+      .status(200)
+      .send({ success: true, message: "video updated successfully", data });
   } catch (error) {
     return res.status(500).send({ success: false, message: error.message });
   }

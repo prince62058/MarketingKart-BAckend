@@ -800,7 +800,7 @@ exports.getBusinessListForAdmin = async (req, res) => {
   const getAll = await businessModel
     .find(query)
     .populate("userId")
-    .populate("assignedStaff")
+    .populate({ path: "assignedStaff", populate: { path: "userId", select: "name email mobile" } })
     .populate("statusUpdatedBy", "name image mobile")
     .sort({ createdAt: parseInt(sort) || -1 })
     .skip(skip)
