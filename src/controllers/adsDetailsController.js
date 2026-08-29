@@ -2988,20 +2988,36 @@ exports.targetingLocation = async (req, res) => {
 };
 
 exports.targetingInterest = async (req, res) => {
-  const { businessId, search } = req.query;
-  if (!businessId) {
-    return res
-      .status(400)
-      .send({ success: false, message: "businessId is required" });
+  try {
+    const { businessId, search } = req.query;
+    if (!businessId) {
+      return res
+        .status(400)
+        .send({ success: false, message: "businessId is required" });
+    }
+    if (!search || String(search).trim().length < 1) {
+      return res.status(200).send({
+        success: true,
+        message: "Target Search Interest Data",
+        data: [],
+      });
+    }
+    const q = encodeURIComponent(String(search).trim());
+    const apiUrl = `https://graph.facebook.com/v22.0/search?type=adinterest&q=${q}&access_token=${process.env.systemUserAccessToken}`;
+    let response = await axios.get(apiUrl);
+    return res.status(200).send({
+      success: true,
+      message: "Target Search Interest Data",
+      data: response?.data?.data || [],
+    });
+  } catch (error) {
+    console.error("targetingInterest error:", error.response?.data || error.message);
+    return res.status(500).send({
+      success: false,
+      message: error.response?.data?.error?.message || error.message,
+      data: [],
+    });
   }
-  // let businessData = await businessModel.findById(businessId)
-  const apiUrl = `https://graph.facebook.com/v22.0/search?type=adinterest&q=${search}&access_token=${process.env.systemUserAccessToken}`;
-  let response = await axios.get(apiUrl);
-  return res.status(200).send({
-    success: true,
-    message: "Target Search Interest Data",
-    data: response?.data?.data,
-  });
 };
 
 exports.forDemoAd = async (req, res) => {
