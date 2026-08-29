@@ -1591,11 +1591,7 @@ async function processAdCreation({
     const cleanedInterest = interest.replace(/\\/g, "");
     const parsedInterest = JSON.parse(cleanedInterest);
     const parsedLocation = await fixParseAndConvertLocationString(location);
-    if (
-      !parsedLocation ||
-      !Array.isArray(parsedLocation.custom_locations) ||
-      !parsedLocation.custom_locations.length
-    ) {
+    if (!parsedLocation || !hasUsableGeoTarget(parsedLocation)) {
       throw new Error(
         "Target area is required. Select at least one location on the map and retry.",
       );
@@ -1923,11 +1919,7 @@ async function processAdCreation({
           },
         };
 
-    if (
-      !parsedLocation ||
-      !Array.isArray(parsedLocation.custom_locations) ||
-      !parsedLocation.custom_locations.length
-    ) {
+    if (!parsedLocation || !hasUsableGeoTarget(parsedLocation)) {
       throw new Error(
         "Target area is required. Select at least one location on the map and retry.",
       );
@@ -3068,6 +3060,19 @@ exports.updateMetaAdsId = async (req, res) => {
   }
 };
 
+/**
+ * True when a parsed geo spec carries something Meta can actually target —
+ * either pin-and-radius custom_locations, or a country/region selection (Pan India).
+ */
+function hasUsableGeoTarget(geo) {
+  if (!geo || typeof geo !== "object") return false;
+  return Boolean(
+    (Array.isArray(geo.custom_locations) && geo.custom_locations.length) ||
+      (Array.isArray(geo.countries) && geo.countries.length) ||
+      (Array.isArray(geo.regions) && geo.regions.length),
+  );
+}
+
 function convertLocationToMetaGeo(inputString) {
   try {
     let b =
@@ -3108,8 +3113,23 @@ function convertLocationToMetaGeo(inputString) {
           Number.isFinite(c.latitude) && Number.isFinite(c.longitude),
       );
 
+    // Country / region targeting (e.g. Pan India) is a first-class Meta geo spec and
+    // carries no coordinates, so pass it straight through instead of dropping it.
+    const passthrough = {};
+    if (Array.isArray(locations?.countries) && locations.countries.length) {
+      passthrough.countries = locations.countries.map((c) => String(c).toUpperCase());
+    }
+    if (Array.isArray(locations?.regions) && locations.regions.length) {
+      passthrough.regions = locations.regions;
+    }
+
+    if (!custom_locations.length && Object.keys(passthrough).length) {
+      return passthrough;
+    }
+
     return {
       custom_locations,
+      ...passthrough,
     };
   } catch (err) {
     console.error("Failed to fix, parse, and convert location string:", err);
