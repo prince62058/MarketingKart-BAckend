@@ -1,10 +1,24 @@
 const mongoose = require("mongoose");
+const { normalizeMobileNumber } = require("../utils/mobileValidetionHandler");
 const objectId = mongoose.Schema.Types.ObjectId;
+
+// Every write path (login, sub-user, staff, admin panel, imports) funnels its
+// mobile through this setter, so the stored value is always the same canonical
+// 10-digit number. Without it "+919876543210", "09876543210" and 9876543210
+// become three separate accounts for one person.
+// Setters do NOT run on query filters in Mongoose 6 — callers must still pass
+// normalizeMobileNumber(...) when building a lookup.
+const setMobile = (value) => {
+  const normalized = normalizeMobileNumber(value);
+  // Unparseable input is passed through untouched so Mongoose's own cast error
+  // still surfaces instead of being silently swallowed into null.
+  return normalized === null ? value : normalized;
+};
 
 const userModel = mongoose.Schema(
   {
     name: { type: String, default: null, trim: true },
-    mobile: { type: Number, default: null, trim: true },
+    mobile: { type: Number, default: null, trim: true, set: setMobile },
     image: { type: String, default: null, trim: true },
     email: { type: String, default: null, trim: true },
     fcm:{ type: String, default: null, trim: true },
@@ -70,6 +84,14 @@ const userModel = mongoose.Schema(
 	uninstalled: {
       type: Boolean,
       default: false,
+    },
+    // Set by scripts/repairDuplicateMobileAccounts.js when this account was a
+    // duplicate of another one for the same phone number. Its mobile is cleared
+    // so the surviving account owns the number; nothing else is deleted.
+    mergedInto: {
+      type: objectId,
+      ref: "userModel",
+      default: null,
     }
 },
   { timestamps: true }

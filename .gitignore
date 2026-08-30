@@ -27,8 +27,8 @@ All_Users_With_Business.*
 
 # One-off / scratch (never ship) -- anchored to repo root so nested
 # legitimate files like src/helpers/checkPermission.js aren't caught
-scratch/
-scripts/
+/scratch/
+/scripts/
 /debug*.js
 /check*.js
 /find*.js

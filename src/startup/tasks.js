@@ -5,10 +5,20 @@ const { startLiveSpendSync } = require("./liveSpendSync");
 const { seedCategoriesIfEmpty } = require("./seedBusinessCategories");
 const { seedAdminIfEmpty } = require("./seedAdmin");
 const { seedAdTypesAndPlans } = require("./seedAdTypesAndPlans");
+const { ensureUserIndexes } = require("./ensureUserIndexes");
 
 async function initializeBackgroundTasks() {
     console.log("🚀 Initializing background tasks...");
     try {
+        // Make the database itself enforce one account per phone number before
+        // anything can write users. A failure here is loud but must not stop
+        // the rest of the workers from booting.
+        try {
+            await ensureUserIndexes();
+        } catch (error) {
+            console.error("❌ Failed to ensure user indexes:", error.message);
+        }
+
         // Ensure default dynamic business categories, admin accounts, and ad plans exist
         await seedCategoriesIfEmpty();
         await seedAdminIfEmpty();

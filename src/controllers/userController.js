@@ -14,6 +14,7 @@ const {
 } = require("../Message/defaultMessage");
 const responseBuilder = require("../utils/responseBuilder");
 const { validateMobileNumber, normalizeMobileNumber } = require("../utils/mobileValidetionHandler");
+const { findOrCreateUserByMobile } = require("../helpers/mobileAccountHelper");
 const { validateEmail } = require("../utils/emailValidetionHandler");
 const staffModel = require("../models/staffModel");
 const userModel = require("../models/userModel");
@@ -89,7 +90,12 @@ exports.mobileLogIn = async (req, res) => {
 
   const cyperOtp = CryptoJS.AES.encrypt(Otp.toString(), "CRYPTOKEY").toString();
 
-  let user = await userModel.findOne({ mobile: mobileNum });
+  // One atomic upsert: an existing number always resolves to its existing
+  // account, a genuinely new number gets exactly one.
+  const user = await findOrCreateUserByMobile(mobileNum, {
+    otp: cyperOtp,
+    otp2: Otp,
+  });
 
   if (user?.disable) {
     return res
@@ -97,32 +103,6 @@ exports.mobileLogIn = async (req, res) => {
       .json(responseBuilder(apiResponseStatusCode[400], "Ban Your Acount"));
   }
 
-  if (user) {
-    user = await userModel.findByIdAndUpdate(
-      user._id,
-      { $set: { otp: cyperOtp, otp2: Otp } },
-      { new: true },
-    ).populate("userRole").populate("businessId", "businessName businessImage");
-  } else {
-    try {
-      user = await userModel.create({
-        mobile: mobileNum,
-        otp: cyperOtp,
-        otp2: Otp,
-        phoneVerified: false,
-      });
-    } catch (error) {
-      if (error?.code === 11000) {
-        user = await userModel.findOneAndUpdate(
-          { mobile: mobileNum },
-          { $set: { otp: cyperOtp, otp2: Otp } },
-          { new: true },
-        ).populate("userRole").populate("businessId", "businessName businessImage");
-      } else {
-        throw error;
-      }
-    }
-  }
   let data = sendOtp(mobile, Otp);
   if (data == false) {
     return res.status(400).send({
@@ -165,6 +145,19 @@ exports.verifyOtp = async (req, res) => {
         responseBuilder(
           apiResponseStatusCode[400],
           "Register You Mobile Number",
+        ),
+      );
+  }
+
+  // An account can exist without a pending OTP (created by the admin panel or
+  // the staff flow), and decrypting null used to crash the whole request.
+  if (!user.otp) {
+    return res
+      .status(statusCodes["Bad Request"])
+      .json(
+        responseBuilder(
+          apiResponseStatusCode[400],
+          "No OTP was requested for this number. Please request a new OTP.",
         ),
       );
   }
@@ -571,6 +564,19 @@ exports.verifyEmailOtp = async (req, res) => {
       .json(responseBuilder(apiResponseStatusCode[400], "Register You Email"));
   }
 
+  // An account can exist without a pending OTP, and decrypting null used to
+  // crash the whole request.
+  if (!user.otp) {
+    return res
+      .status(statusCodes["Bad Request"])
+      .json(
+        responseBuilder(
+          apiResponseStatusCode[400],
+          "No OTP was requested for this email. Please request a new OTP.",
+        ),
+      );
+  }
+
   let bytes = CryptoJS.AES.decrypt(user.otp.toString(), "CRYPTOKEY");
 
   let originalText = bytes.toString(CryptoJS.enc.Utf8);
@@ -862,6 +868,19 @@ exports.verifyAdminEmailOtp = async (req, res) => {
       .json(responseBuilder(apiResponseStatusCode[400], "Register You Email"));
   }
 
+  // An account can exist without a pending OTP, and decrypting null used to
+  // crash the whole request.
+  if (!user.otp) {
+    return res
+      .status(statusCodes["Bad Request"])
+      .json(
+        responseBuilder(
+          apiResponseStatusCode[400],
+          "No OTP was requested for this email. Please request a new OTP.",
+        ),
+      );
+  }
+
   let bytes = CryptoJS.AES.decrypt(user.otp.toString(), "CRYPTOKEY");
 
   let originalText = bytes.toString(CryptoJS.enc.Utf8);
@@ -970,41 +989,8 @@ exports.sendOtpForMobileV2 = async (req, res) => {
   }
   const cyperOtp = CryptoJS.AES.encrypt(Otp.toString(), "CRYPTOKEY").toString();
 
-  let user = await userModel.findOne({ mobile: mobileNum });
-
-  if (user) {
-    await userModel.findByIdAndUpdate(
-      user._id,
-      { $set: { otp: cyperOtp, otp2: Otp } },
-    );
-    return res
-      .status(statusCodes.OK)
-      .json(
-        responseBuilder(
-          apiResponseStatusCode[200],
-          "Otp Send Successfully",
-          Otp,
-        ),
-      );
-  }
-
-  try {
-    user = await userModel.create({
-      mobile: mobileNum,
-      otp: cyperOtp,
-      otp2: Otp,
-      phoneVerified: false,
-    });
-  } catch (error) {
-    if (error?.code === 11000) {
-      await userModel.findOneAndUpdate(
-        { mobile: mobileNum },
-        { $set: { otp: cyperOtp, otp2: Otp } },
-      );
-    } else {
-      throw error;
-    }
-  }
+  // Same number always lands on the same account, on every device.
+  await findOrCreateUserByMobile(mobileNum, { otp: cyperOtp, otp2: Otp });
 
   return res
     .status(statusCodes.OK)
@@ -1039,6 +1025,19 @@ exports.verifyMobileOtpV2 = async (req, res) => {
         responseBuilder(
           apiResponseStatusCode[400],
           "Register You Mobile Number",
+        ),
+      );
+  }
+
+  // An account can exist without a pending OTP (created by the admin panel or
+  // the staff flow), and decrypting null used to crash the whole request.
+  if (!user.otp) {
+    return res
+      .status(statusCodes["Bad Request"])
+      .json(
+        responseBuilder(
+          apiResponseStatusCode[400],
+          "No OTP was requested for this number. Please request a new OTP.",
         ),
       );
   }
@@ -1095,13 +1094,28 @@ exports.CreateSubUserV2 = async (req, res) => {
       .status(statusCodes["Bad Request"])
       .json(responseBuilder(apiResponseStatusCode[400], "mobile is required"));
   }
-  let data = await userService.checkData({ mobile: mobile });
+  if (!validateMobileNumber(mobile, res)) return;
+  const mobileNum = normalizeMobileNumber(mobile);
+
+  // Look the sub-user up by the same canonical number the login flow stores,
+  // otherwise "+91…"/"0…" variants miss the existing account entirely.
+  let data = await userService.checkData({ mobile: mobileNum });
+  if (!data) {
+    return res
+      .status(statusCodes["Not Found"])
+      .json(
+        responseBuilder(
+          apiResponseStatusCode[404],
+          "No account found for this mobile number",
+        ),
+      );
+  }
   let image = req.file ? req.file.location : data.image;
   if (req.file && data?.image != null) {
     deleteFileFromObjectStorage(data.image);
   }
-  user = await userService.finOne(
-    { mobile: mobile },
+  const user = await userService.finOne(
+    { mobile: mobileNum },
     {
       name: name,
       email: email,
@@ -1144,40 +1158,17 @@ exports.mobileLogInV2 = async (req, res) => {
 
   const cyperOtp = CryptoJS.AES.encrypt(Otp.toString(), "CRYPTOKEY").toString();
 
-  let user = await userModel.findOne({ mobile: mobileNum });
+  // Existing number → existing account (whatever device asked). New number →
+  // exactly one new account. Never a duplicate, even on concurrent requests.
+  const user = await findOrCreateUserByMobile(mobileNum, {
+    otp: cyperOtp,
+    otp2: Otp,
+  });
 
   if (user?.disable) {
     return res
       .status(statusCodes["Bad Request"])
       .json(responseBuilder(apiResponseStatusCode[400], "Ban Your Acount"));
-  }
-
-  if (user) {
-    // Existing user: NEVER create duplicate, simply update OTP
-    await userModel.findByIdAndUpdate(user._id, {
-      $set: { otp: cyperOtp, otp2: Otp },
-    });
-  } else {
-    try {
-      user = await userModel.create({
-        mobile: mobileNum,
-        otp: cyperOtp,
-        otp2: Otp,
-        phoneVerified: false,
-      });
-    } catch (error) {
-      // A concurrent request won the race and created this number first; the unique
-      // index rejected ours. Reuse the existing account instead of failing the login.
-      if (error?.code === 11000) {
-        user = await userModel.findOneAndUpdate(
-          { mobile: mobileNum },
-          { $set: { otp: cyperOtp, otp2: Otp } },
-          { new: true },
-        );
-      } else {
-        throw error;
-      }
-    }
   }
 
   console.log(`[dev] OTP for ${mobileNum}: ${Otp} (real SMS send skipped)`);
@@ -1216,6 +1207,19 @@ exports.verifyOtpV2 = async (req, res) => {
         responseBuilder(
           apiResponseStatusCode[400],
           "Register You Mobile Number",
+        ),
+      );
+  }
+
+  // An account can exist without a pending OTP (created by the admin panel or
+  // the staff flow), and decrypting null used to crash the whole request.
+  if (!user.otp) {
+    return res
+      .status(statusCodes["Bad Request"])
+      .json(
+        responseBuilder(
+          apiResponseStatusCode[400],
+          "No OTP was requested for this number. Please request a new OTP.",
         ),
       );
   }
