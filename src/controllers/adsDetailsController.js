@@ -29,15 +29,21 @@ const Notification = require("../models/notificationModel");
 const OpenAI = require("openai");
 const { uploadUrlToBucket } = require("../utils/bucketHelper");
 const { sendAdStatusNotification, sendLeadNotification } = require("../helpers/appNotificationHelper");
+const {
+  AD_KIND,
+  kindFromAdvertisementType,
+  metaOutcomeFromAdvertisementType,
+} = require("../helpers/adTypeHelper");
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || "dummy-key",
 });
 
 /** Leadkart advertisement type ObjectIds */
-const AD_TYPE_LEAD_FORM = "676bd7b708acbc4f1ca6a8b6";
-const AD_TYPE_WHATSAPP = "676bd7b708acbc4f1ca6a8b5";
-const AD_TYPE_CALL = "686fa888860c7d3bdbc087c6";
+// Ad behaviour is keyed off advertisementModel.advertisementType (a schema
+// enum, stable across databases) via helpers/adTypeHelper. It used to be keyed
+// off hardcoded _ids, which stopped matching the moment the ad types were
+// re-seeded — see that helper for what broke.
 
 const normalizeWhatsAppPhone = (raw) => {
   if (!raw) return null;
@@ -74,10 +80,9 @@ const buildWhatsAppCtaLink = (rawPhone) => {
  * Map LeadKart advertisementType / ad-type id → Meta campaign objective.
  * DB stores LEADS / WHATSAPP_MESSAGES; Meta needs OUTCOME_* values.
  */
-const mapAdvertisementTypeToMetaOutcome = (advertisementType, addTypeId) => {
-  const typeId = String(addTypeId || "");
-  if (typeId === AD_TYPE_WHATSAPP) return "OUTCOME_ENGAGEMENT";
-  if (typeId === AD_TYPE_LEAD_FORM) return "OUTCOME_LEADS";
+const mapAdvertisementTypeToMetaOutcome = (advertisementType) => {
+  const resolved = metaOutcomeFromAdvertisementType(advertisementType);
+  if (resolved) return resolved;
 
   const map = {
     LEADS: "OUTCOME_LEADS",
@@ -180,7 +185,7 @@ const getMetaAccessToken = () =>
  * Resolve Meta optimization / destination / promoted_object for Lead Form + WhatsApp.
  */
 const resolveMetaAdSetConfig = ({
-  addTypeId,
+  adKind,
   pageId,
   leadFormId,
   mobileNumber,
@@ -189,8 +194,7 @@ const resolveMetaAdSetConfig = ({
   application_id,
   destinationUrl,
 }) => {
-  const typeId = String(addTypeId || "");
-  if (typeId === AD_TYPE_LEAD_FORM) {
+  if (adKind === AD_KIND.LEAD_FORM) {
     return {
       optimization_goal: "LEAD_GENERATION",
       billing_event: "IMPRESSIONS",
@@ -201,7 +205,7 @@ const resolveMetaAdSetConfig = ({
       },
     };
   }
-  if (typeId === AD_TYPE_WHATSAPP) {
+  if (adKind === AD_KIND.WHATSAPP) {
     const phone = normalizeWhatsAppPhone(mobileNumber);
     return {
       optimization_goal: "CONVERSATIONS",
@@ -512,6 +516,7 @@ async function createFacebookCampaign(
   name,
   businessData,
   adTypeId,
+  adKind,
   outcomeType,
   destinationUrl,
   application_id,
@@ -534,10 +539,7 @@ async function createFacebookCampaign(
 
   let leadFormId = null;
   let fromName = "";
-  if (
-    outcomeType === "OUTCOME_LEADS" &&
-    String(adTypeId) == AD_TYPE_LEAD_FORM
-  ) {
+  if (adKind === AD_KIND.LEAD_FORM) {
     let check = await getFormId(
       businessData,
       adTypeId,
@@ -680,6 +682,8 @@ async function addCreativeImg(
   headline,
   primaryText,
 ) {
+  // Kind, not id: the creative's CTA must follow what the ad type does.
+  const adKind = kindFromAdvertisementType(advertisementType);
   let filePath;
   try {
     const fileUrl = imgLocation;
@@ -732,7 +736,7 @@ async function addCreativeImg(
         name: headline || "Your Headline Here", // Headline (max 40 chars)
         description: caption || "Your Description Here", // Description (optional, max 30 chars)
       };
-    } else if (addTypeId == AD_TYPE_WHATSAPP) {
+    } else if (adKind === AD_KIND.WHATSAPP) {
       const waLink = buildWhatsAppCtaLink(
         businessData?._effectiveWhatsApp || businessData?.whatsappNumber,
       );
@@ -747,7 +751,7 @@ async function addCreativeImg(
         name: headline || "Your Headline Here",
         description: caption || "Your Description Here",
       };
-    } else if (addTypeId == AD_TYPE_CALL) {
+    } else if (adKind === AD_KIND.CALL) {
       obj = {
         call_to_action: {
           type: "LEARN_MORE",
@@ -771,7 +775,7 @@ async function addCreativeImg(
         description: caption || "Your Description Here", // Description (optional, max 30 chars)
         image_hash: hashKey,
       };
-    } else if (advertisementType === "OUTCOME_TRAFFIC") {
+    } else if (kindFromAdvertisementType(advertisementType) === AD_KIND.TRAFFIC) {
       obj = {
         call_to_action: {
           type: "SEE_MORE",
@@ -865,6 +869,8 @@ async function addCreativeMultiImg(
   headline,
   primaryText,
 ) {
+  // Kind, not id: the creative's CTA must follow what the ad type does.
+  const adKind = kindFromAdvertisementType(advertisementType);
   let filePath;
   let tempFiles = [];
   try {
@@ -959,7 +965,7 @@ async function addCreativeMultiImg(
           ),
         },
       };
-    } else if (addTypeId == AD_TYPE_WHATSAPP) {
+    } else if (adKind === AD_KIND.WHATSAPP) {
       const waLink = buildWhatsAppCtaLink(
         businessData?._effectiveWhatsApp || businessData?.whatsappNumber,
       );
@@ -983,7 +989,7 @@ async function addCreativeMultiImg(
           ),
         },
       };
-    } else if (addTypeId == AD_TYPE_CALL) {
+    } else if (adKind === AD_KIND.CALL) {
       objectStorySpec = {
         ...baseAdStructure,
         link_data: {
@@ -1028,7 +1034,7 @@ async function addCreativeMultiImg(
           ),
         },
       };
-    } else if (advertisementType === "OUTCOME_TRAFFIC") {
+    } else if (kindFromAdvertisementType(advertisementType) === AD_KIND.TRAFFIC) {
       objectStorySpec = {
         ...baseAdStructure,
         link_data: {
@@ -1158,6 +1164,8 @@ async function addCreativeVideo(
   headline,
   primaryText,
 ) {
+  // Kind, not id: the creative's CTA must follow what the ad type does.
+  const adKind = kindFromAdvertisementType(advertisementType);
   let filePath;
   try {
     if (thambnail) {
@@ -1303,7 +1311,7 @@ async function addCreativeVideo(
         value: { lead_gen_form_id: leadFormId },
       };
     }
-    if (addTypeId == AD_TYPE_WHATSAPP) {
+    if (adKind === AD_KIND.WHATSAPP) {
       const waLink = buildWhatsAppCtaLink(
         businessData?._effectiveWhatsApp || businessData?.whatsappNumber,
       );
@@ -1314,7 +1322,7 @@ async function addCreativeVideo(
         },
       };
     }
-    if (addTypeId == AD_TYPE_CALL) {
+    if (adKind === AD_KIND.CALL) {
       videoData.call_to_action = {
         type: "LEARN_MORE",
         value: {
@@ -1567,10 +1575,16 @@ async function processAdCreation({
         "Facebook Page is not linked. Link your Page in Business settings before creating ads.",
       );
     }
-    if (
-      String(addTypeId) === AD_TYPE_LEAD_FORM &&
-      !businessData.pageAccessToken
-    ) {
+
+    // Resolved before any Meta call so every downstream branch (objective, lead
+    // form, CTA, ad set destination) agrees on what this ad is supposed to do.
+    const findAddTypeId = await advertisementModel
+      .findById(addTypeId)
+      .session(session);
+    if (!findAddTypeId) throw new Error("Invalid advertisement type");
+    const adKind = kindFromAdvertisementType(findAddTypeId.advertisementType);
+
+    if (adKind === AD_KIND.LEAD_FORM && !businessData.pageAccessToken) {
       throw new Error(
         "Page access token missing. Re-link your Facebook Page to create Lead Form ads.",
       );
@@ -1583,11 +1597,6 @@ async function processAdCreation({
     const planData = planId
       ? await planModel.findById(planId).session(session)
       : null;
-    const findAddTypeId = await advertisementModel
-      .findById(addTypeId)
-      .session(session);
-    if (!findAddTypeId) throw new Error("Invalid advertisement type");
-
     // Parse interest and location
     const cleanedInterest = interest.replace(/\\/g, "");
     const parsedInterest = JSON.parse(cleanedInterest);
@@ -1772,7 +1781,7 @@ async function processAdCreation({
     }
 
     if (
-      String(addTypeId) === AD_TYPE_WHATSAPP &&
+      adKind === AD_KIND.WHATSAPP &&
       !normalizeWhatsAppPhone(effectiveMobileNumber)
     ) {
       throw new Error(
@@ -1783,7 +1792,6 @@ async function processAdCreation({
     // Map DB types (LEADS / WHATSAPP_MESSAGES) → Meta OUTCOME_* objectives
     const outcomeType = mapAdvertisementTypeToMetaOutcome(
       findAddTypeId?.advertisementType,
-      addTypeId,
     );
 
     // Create Facebook campaign
@@ -1791,6 +1799,7 @@ async function processAdCreation({
       name,
       businessData,
       addTypeId,
+      adKind,
       outcomeType,
       destinationUrl,
       aaplicationId,
@@ -2056,11 +2065,11 @@ async function processAdCreation({
       }
 
       // Call ads still skip Meta adset/ad (out of scope). Lead Form + WhatsApp now create full Meta objects.
-      const skipMetaAdSetAndAd = String(addTypeId) === AD_TYPE_CALL;
+      const skipMetaAdSetAndAd = adKind === AD_KIND.CALL;
 
       if (!skipMetaAdSetAndAd) {
         const adSetConfig = resolveMetaAdSetConfig({
-          addTypeId,
+          adKind,
           pageId: businessData?.pageId,
           leadFormId: externalCampiagnData?.leadFormId,
           mobileNumber: effectiveMobileNumber,
@@ -2071,7 +2080,7 @@ async function processAdCreation({
         });
 
         if (
-          String(addTypeId) === AD_TYPE_LEAD_FORM &&
+          adKind === AD_KIND.LEAD_FORM &&
           !externalCampiagnData?.leadFormId
         ) {
           throw new Error(
@@ -5212,4 +5221,13 @@ exports.getMetaAdAccountCampaigns = async (req, res) => {
     console.error("Error in getMetaAdAccountCampaigns:", error?.response?.data || error.message);
     return res.status(500).json({ success: false, message: error?.response?.data?.error?.message || error.message });
   }
+};
+
+// Exposed for src/scripts/testAdTypeRouting.js — the pure Meta-payload builders,
+// so ad routing can be regression-tested without calling Meta.
+exports.__test__ = {
+  resolveMetaAdSetConfig,
+  buildWhatsAppCtaLink,
+  normalizeWhatsAppPhone,
+  mapAdvertisementTypeToMetaOutcome,
 };

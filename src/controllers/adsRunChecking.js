@@ -3,6 +3,14 @@ const userModel = require("../models/userModel");
 const mongoose = require("mongoose");
 const { sendNotificationToMultipleTokens } = require("./notificationController");
 const { sendAdStatusNotification } = require("../helpers/appNotificationHelper");
+const { AD_KIND, resolveAdKind } = require("../helpers/adTypeHelper");
+
+// Lead Form and WhatsApp ads only count as "running" once Meta has them live,
+// so their start/end notifications are gated differently from other ad types.
+const isLeadStyleAd = async (campaign) => {
+  const kind = await resolveAdKind(campaign.addTypeId);
+  return kind === AD_KIND.LEAD_FORM || kind === AD_KIND.WHATSAPP;
+};
 
 function getCurrentTime() {
   const now = new Date();
@@ -44,10 +52,7 @@ async function manageCampaigns() {
 
             // Send start notification only if not sent and at exact start time
             // Safe guard: null check for addTypeId
-            const addTypeIdStr = campaign.addTypeId?.toString() || "";
-            const isLeadAd =
-              addTypeIdStr === "676bd7b708acbc4f1ca6a8b6" ||
-              addTypeIdStr === "676bd7b708acbc4f1ca6a8b5";
+            const isLeadAd = await isLeadStyleAd(campaign);
             if (
               isExactStartTime &&
               !campaign.startNotificationSent &&
@@ -81,10 +86,7 @@ async function manageCampaigns() {
 
           // Send end notification only if not sent and at exact end time
           // Safe guard: null check for addTypeId
-          const addTypeIdStr = campaign.addTypeId?.toString() || "";
-          const isLeadAd =
-            addTypeIdStr === "676bd7b708acbc4f1ca6a8b6" ||
-            addTypeIdStr === "676bd7b708acbc4f1ca6a8b5";
+          const isLeadAd = await isLeadStyleAd(campaign);
           if (
             isExactEndTime &&
             !campaign.endNotificationSent &&

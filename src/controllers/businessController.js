@@ -17,6 +17,7 @@ const businessModel = require("../models/businessModel");
 const { assignBusinessToStaff } = require("../services/autoAssignService");
 const internalCampaignModel = require("../models/internalCampiagnModel");
 const { uploadUrlToBucket } = require("../utils/bucketHelper");
+const { AD_KIND, findAdTypeIdByKind } = require("../helpers/adTypeHelper");
 
 exports.createBusiness = async (req, res) => {
   const {
@@ -1345,11 +1346,14 @@ exports.linkMetaAd = async (req, res) => {
     }
 
     // 3. Create/Update InternalCampaignModel Record — store real Meta AD id for webhooks
+    // Looked up rather than hardcoded so the imported campaign lands on the ad
+    // type this database actually has.
+    const importedAdTypeId = await findAdTypeIdByKind(AD_KIND.LEAD_FORM);
     const campaignData = {
       mainAdId: resolvedAdId,
       metaAdId: resolvedAdId,
       businessId: business._id,
-      addTypeId: "676bd7b708acbc4f1ca6a8b6",
+      ...(importedAdTypeId ? { addTypeId: importedAdTypeId } : {}),
       title: campaignName,
       pageName: finalPageName,
       status: "ACTIVE",

@@ -7,6 +7,7 @@ const business = require("../models/businessModel");
 const userModel = require("../models/userModel");
 const { sendNotificationToMultipleToken } = require("./notificationController");
 const { sendLeadNotification } = require("../helpers/appNotificationHelper");
+const { AD_KIND, findAdTypeIdByKind } = require("../helpers/adTypeHelper");
 
 // ✅ Prevent multiple schedulers from starting
 
@@ -16,9 +17,17 @@ cron.schedule("10 * * * *", async () => {
 
 
   try {
+    // Resolved per run instead of hardcoded: a hardcoded id meant this scheduler
+    // matched nothing after the ad types were re-seeded, so no lead ever synced.
+    const leadFormAdTypeId = await findAdTypeIdByKind(AD_KIND.LEAD_FORM);
+    if (!leadFormAdTypeId) {
+      console.warn("⚠️ No Lead Form advertisement type configured — skipping lead sync");
+      return;
+    }
+
     const businessData = await internalCampiagnModel
       .find({
-        addTypeId:"676bd7b708acbc4f1ca6a8b6",
+        addTypeId: leadFormAdTypeId,
         status: "ACTIVE",
       })
       .populate("businessId", "pageId pageAccessToken lastSchedulerRunTime metaAdsetId mainAdId userId")
