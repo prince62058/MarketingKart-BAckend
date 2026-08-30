@@ -5,6 +5,7 @@ const User = require("../models/userModel");
 const WhatsAppPlan = require("../models/whatsappPlanModel");
 const WhatsAppTransaction = require("../models/whatsappTransactionModel");
 const WhatsAppSubscription = require("../models/whatsappSubscriptionModel");
+const { sendWalletNotification } = require("../helpers/walletNotificationHelper");
 
 const isAdminUser = (user) => user?.userType === "ADMIN";
 
@@ -127,6 +128,16 @@ exports.addMoney = async (req, res) => {
     user.whatsappWallet = newBal;
     await user.save({ session });
     await session.commitTransaction();
+
+    // Send in-app and push notifications
+    sendWalletNotification({
+      user,
+      type: "CREDIT",
+      walletType: "WHATSAPP",
+      amount: roundedAmount,
+      newBalance: newBal,
+      description: isAdminCredit ? "Admin WhatsApp wallet credit" : `Razorpay wallet recharge (${orderId})`,
+    }).catch((notifErr) => console.error("WhatsApp wallet notification dispatch error:", notifErr.message));
 
     return res.status(200).json({
       success: true,

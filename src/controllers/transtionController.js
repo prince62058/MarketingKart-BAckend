@@ -1,6 +1,7 @@
 	  const Transaction = require("../models/transtionModel");
   const mongoose = require("mongoose");
   const User = require("../models/userModel");
+  const { sendWalletNotification } = require("../helpers/walletNotificationHelper");
   const Razorpay = require('razorpay');
   const crypto = require('crypto');
 
@@ -167,6 +168,16 @@ const createTransactions = async (req, res) => {
     await user.save({ session });
 
     await session.commitTransaction();
+
+    // Send in-app and push notifications
+    sendWalletNotification({
+      user,
+      type,
+      walletType: resolvedWalletType,
+      amount: roundedAmount,
+      newBalance,
+      description: finalDescription,
+    }).catch((notifErr) => console.error("Wallet notification dispatch error:", notifErr.message));
 
     return res.status(200).json({
       success: true,
