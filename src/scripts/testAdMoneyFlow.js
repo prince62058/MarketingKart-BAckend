@@ -20,6 +20,7 @@ const {
   seedCompanySettingsIfMissing,
   DEFAULT_FEES,
 } = require("../startup/seedCompanySettings");
+const { __test__ } = require("../controllers/adsDetailsController");
 
 let passed = 0;
 let failed = 0;
@@ -35,20 +36,19 @@ const check = (label, condition, detail = "") => {
 
 const TEST_MOBILE = 9999900020;
 
-/** The backend's fee math, with the NaN-proof fallback. */
-const backendAdCost = (adSpend, company) => {
-  const feePercent = (value, fallback) => {
-    const n = Number(value);
-    return Number.isFinite(n) ? n / 100 : fallback / 100;
-  };
-  const platformValue = feePercent(company?.serviceFee, DEFAULT_FEES.serviceFee);
-  const gatewayValue = feePercent(
-    company?.paymentGetWayFee,
-    DEFAULT_FEES.paymentGetWayFee,
-  );
-  const platformCharge = adSpend * platformValue;
-  const gatewayCharge = (adSpend + platformCharge) * gatewayValue;
-  return Math.ceil(adSpend + platformCharge + gatewayCharge);
+const backendAdCost = (adSpend, company) =>
+  __test__.computeAdChargeBreakdown(adSpend, company).total;
+
+/** The mobile app's calculateFromTotal, mirrored. */
+const appBreakdown = (totalAmount, fees = DEFAULT_FEES) => {
+  const feesMult = 1 + fees.serviceFee / 100 + fees.gstFee / 100;
+  const gatewayMult = 1 + fees.paymentGetWayFee / 100;
+  const adSpend = Math.max(1, Math.round(totalAmount / (feesMult * gatewayMult)));
+  const platformFee = Math.round(((adSpend * fees.serviceFee) / 100) * 100) / 100;
+  const gst = Math.round(((adSpend * fees.gstFee) / 100) * 100) / 100;
+  const subtotal = adSpend + platformFee + gst;
+  const paymentGatewayFee = Math.max(0, Math.round((totalAmount - subtotal) * 100) / 100);
+  return { adSpend, platformFee, gst, paymentGatewayFee, totalPayable: totalAmount };
 };
 
 const cleanup = async () => {
@@ -164,7 +164,30 @@ const main = async () => {
     String(afterWalletAd.wallet),
   );
 
-  console.log("\n7. Meta only ever receives the net ad spend");
+  console.log("\n7. The app's breakdown adds up to what is charged");
+  for (const total of [1100, 2000, 500, 199]) {
+    const b = appBreakdown(total);
+    const sum = Number((b.adSpend + b.platformFee + b.gst + b.paymentGatewayFee).toFixed(2));
+    check(
+      `₹${total} → ad ₹${b.adSpend} + fee ₹${b.platformFee} + GST ₹${b.gst} + gw ₹${b.paymentGatewayFee} = ₹${sum}`,
+      sum === total,
+      `sums to ${sum}`,
+    );
+  }
+  check("GST is actually collected now", appBreakdown(1100).gst > 0);
+
+  console.log("\n8. App and backend agree on what an ad costs");
+  for (const total of [1100, 2000, 500]) {
+    const b = appBreakdown(total);
+    const backend = backendAdCost(b.adSpend, company);
+    check(
+      `₹${total} plan: app charges ₹${total}, backend recomputes ₹${backend}`,
+      Math.abs(backend - total) <= 2,
+      `off by ${backend - total}`,
+    );
+  }
+
+  console.log("\n9. Meta only ever receives the net ad spend");
   const adSpend = 2000;
   const cost = backendAdCost(adSpend, company);
   check("the customer pays more than the ad spend", cost > adSpend, `${cost} vs ${adSpend}`);

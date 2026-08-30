@@ -182,6 +182,37 @@ const buildMetaAdSetSchedule = (days, dayStartTime, dayEndTime) => {
   ];
 };
 
+/**
+ * What a customer is charged for `adSpend` rupees of Meta budget.
+ *
+ * All-inclusive, and the exact mirror of the app's calculateFromTotal: the
+ * platform fee and GST are charged on the ad spend, and the gateway fee on top
+ * of all three. Two things this must never do again — read a fee as
+ * `undefined / 100` (NaN, which failed the ad's DEBIT cast and killed the ad
+ * before Meta was called), or leave GST out (which made a wallet-funded ad
+ * cheaper than the identical ad bought through Razorpay).
+ */
+const computeAdChargeBreakdown = (adSpend, company) => {
+  const pct = (value, fallback) => {
+    const n = Number(value);
+    return (Number.isFinite(n) ? n : fallback) / 100;
+  };
+  const base = Number(adSpend) || 0;
+  const platformCharge = base * pct(company?.serviceFee, DEFAULT_FEES.serviceFee);
+  const gstCharge = base * pct(company?.gstFee, DEFAULT_FEES.gstFee);
+  const gatewayCharge =
+    (base + platformCharge + gstCharge) *
+    pct(company?.paymentGetWayFee, DEFAULT_FEES.paymentGetWayFee);
+
+  return {
+    adSpend: base,
+    platformCharge,
+    gstCharge,
+    gatewayCharge,
+    total: Math.ceil(base + platformCharge + gstCharge + gatewayCharge),
+  };
+};
+
 const getMetaAccessToken = () =>
   process.env.systemUserAccessToken || process.env.admin_access_token;
 
@@ -1725,36 +1756,12 @@ async function processAdCreation({
         )
       : Math.ceil((Number(facebookBudget) || 0) + (Number(instaBudget) || 0));
 
-    // With no company row (or a row missing a fee) these used to become
-    // `undefined / 100` → NaN, which propagated into the ad's DEBIT amount and
-    // failed its Number cast — rolling the whole ad back as DELIVERY_ERROR
-    // before Meta was ever called. Never let a missing setting become NaN.
     let abs = await commpanyModel.findOne();
-    const feePercent = (value, fallback) => {
-      const n = Number(value);
-      return Number.isFinite(n) ? n / 100 : fallback / 100;
-    };
-    const platformValue = feePercent(abs?.serviceFee, DEFAULT_FEES.serviceFee);
-    const gatewayValue = feePercent(
-      abs?.paymentGetWayFee,
-      DEFAULT_FEES.paymentGetWayFee,
-    );
-
-    const platformCharge = Number(amountWithGst * platformValue);
-    const gatewayCharge = Number(
-      (amountWithGst + platformCharge) * gatewayValue,
-    );
-    const finalAmountWith2Percent =
-      Number(amountWithGst) + platformCharge + gatewayCharge;
+    const charges = computeAdChargeBreakdown(amountWithGst, abs);
     console.log("internalCampaignData?._id", internalCampaignData[0]?._id);
     trackedInternalCampaignId = internalCampaignData[0]?._id;
 
-    // Add 10% first, then add 2% to the new total
-    // const amountWith10Percent = amountWithGst * 1.1; // +10%
-    // const finalAmountWith2Percent = amountWith10Percent * 1.02; // +2% on top
-
-    // Round to nearest integer (or use Math.floor/toFixed(2) if needed)
-    const finalAmount = Math.ceil(finalAmountWith2Percent);
+    const finalAmount = charges.total;
     let fid = await businessModel.findById(businessId);
 
     // What this ad actually cost. For a Razorpay-paid ad that is the verified
@@ -4229,18 +4236,7 @@ exports.resetAd = async (req, res) => {
       : Math.ceil((Number(facebookBudget) || 0) + (Number(instaBudget) || 0));
 
     let abs = await commpanyModel.findOne();
-    const platformValue = abs?.serviceFee / 100;
-    const gatewayValue = abs?.paymentGetWayFee / 100;
-
-    const platformCharge = Number(amountWithGst * platformValue);
-    const gatewayCharge = Number(
-      (amountWithGst + platformCharge) * gatewayValue,
-    );
-
-    const finalAmountWith2Percent =
-      Number(amountWithGst) + platformCharge + gatewayCharge;
-
-    const finalAmount = Math.ceil(finalAmountWith2Percent);
+    const finalAmount = computeAdChargeBreakdown(amountWithGst, abs).total;
 
     let fid = await businessModel.findById({
       _id: ad_id_awareness?.businessId,
@@ -5296,3 +5292,5 @@ exports.__test__ = {
   timeToMinutes,
   convertLocationToMetaGeo,
 };
+
+exports.__test__.computeAdChargeBreakdown = computeAdChargeBreakdown;
