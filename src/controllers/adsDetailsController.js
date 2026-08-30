@@ -25,6 +25,8 @@ const internalCampaignServices = require("../services/internalCampiagnService");
 const { generateInvoice } = require("./invoiceController");
 const mongoose = require("mongoose");
 const { createTransaction } = require("./transtionController");
+const Transaction = require("../models/transtionModel");
+const { DEFAULT_FEES } = require("../startup/seedCompanySettings");
 const Notification = require("../models/notificationModel");
 const OpenAI = require("openai");
 const { uploadUrlToBucket } = require("../utils/bucketHelper");
@@ -1723,10 +1725,20 @@ async function processAdCreation({
         )
       : Math.ceil((Number(facebookBudget) || 0) + (Number(instaBudget) || 0));
 
+    // With no company row (or a row missing a fee) these used to become
+    // `undefined / 100` → NaN, which propagated into the ad's DEBIT amount and
+    // failed its Number cast — rolling the whole ad back as DELIVERY_ERROR
+    // before Meta was ever called. Never let a missing setting become NaN.
     let abs = await commpanyModel.findOne();
-    // const gstValue = getCompanyData?.gstFee / 100;
-    const platformValue = abs?.serviceFee / 100;
-    const gatewayValue = abs?.paymentGetWayFee / 100;
+    const feePercent = (value, fallback) => {
+      const n = Number(value);
+      return Number.isFinite(n) ? n / 100 : fallback / 100;
+    };
+    const platformValue = feePercent(abs?.serviceFee, DEFAULT_FEES.serviceFee);
+    const gatewayValue = feePercent(
+      abs?.paymentGetWayFee,
+      DEFAULT_FEES.paymentGetWayFee,
+    );
 
     const platformCharge = Number(amountWithGst * platformValue);
     const gatewayCharge = Number(
@@ -1744,9 +1756,26 @@ async function processAdCreation({
     // Round to nearest integer (or use Math.floor/toFixed(2) if needed)
     const finalAmount = Math.ceil(finalAmountWith2Percent);
     let fid = await businessModel.findById(businessId);
+
+    // What this ad actually cost. For a Razorpay-paid ad that is the verified
+    // amount already charged, not this recomputed figure — otherwise the ledger
+    // debit and the payment credit differ by the rounding between them.
+    let adCost = finalAmount;
+    if (transactionId) {
+      const paidTxn = await Transaction.findOne({
+        transactionId,
+        type: "CREDIT",
+      })
+        .session(session)
+        .lean();
+      if (paidTxn && Number.isFinite(Number(paidTxn.amount))) {
+        adCost = Number(paidTxn.amount);
+      }
+    }
+
     let transtion = {
       type: "DEBIT",
-      amount: finalAmount,
+      amount: adCost,
       businessId: fid?._id,
       adsId: internalCampaignData[0]?._id,
       userId: fid?.userId,
@@ -1766,11 +1795,20 @@ async function processAdCreation({
     );
 
     console.log(transactionId || internalTxId, "transactionId");
-    // 3. Update user's wallet only if not paid directly via Razorpay
-    if (!transactionId) {
+
+    // 3. Deduct what this ad cost from the wallet.
+    //
+    // A Razorpay-paid ad is verified through POST /transactions as a CREDIT,
+    // which puts the full amount into the wallet first. Skipping the debit here
+    // (as this used to) meant the payment was banked and never spent: the ad
+    // came out free and the wallet grew by the ad's price every time. So the
+    // debit always runs — matched to the exact amount that was credited, so
+    // the two cancel to zero instead of drifting by the rounding difference
+    // between the app's total and this recomputed one.
+    if (Number.isFinite(adCost) && adCost > 0) {
       await userModel.findByIdAndUpdate(
         fid?.userId,
-        { $inc: { wallet: -finalAmount } }, // Deduct amount from wallet
+        { $inc: { wallet: -adCost } },
         { session },
       );
     }

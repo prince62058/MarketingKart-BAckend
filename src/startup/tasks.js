@@ -6,6 +6,7 @@ const { seedCategoriesIfEmpty } = require("./seedBusinessCategories");
 const { seedAdminIfEmpty } = require("./seedAdmin");
 const { seedAdTypesAndPlans } = require("./seedAdTypesAndPlans");
 const { ensureUserIndexes } = require("./ensureUserIndexes");
+const { seedCompanySettingsIfMissing } = require("./seedCompanySettings");
 
 async function initializeBackgroundTasks() {
     console.log("🚀 Initializing background tasks...");
@@ -18,6 +19,9 @@ async function initializeBackgroundTasks() {
         } catch (error) {
             console.error("❌ Failed to ensure user indexes:", error.message);
         }
+
+        // Fee percentages must exist before any ad can be paid for.
+        await seedCompanySettingsIfMissing();
 
         // Ensure default dynamic business categories, admin accounts, and ad plans exist
         await seedCategoriesIfEmpty();
