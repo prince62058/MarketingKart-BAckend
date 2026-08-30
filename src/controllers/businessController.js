@@ -200,26 +200,22 @@ exports.updateBusiness = async (req, res) => {
         return res.status(500).json(metaTokenResponse.error);
       updateData.metaAccessToken = metaTokenResponse.token;
 
-      // Fetch long-lived Page Access Token (60 days/Never expiring) and Page Name
-      if (req.body.pageId && metaTokenResponse.token) {
-        try {
-          const pageResponse = await axios.get(
-            `https://graph.facebook.com/v21.0/${req.body.pageId}?fields=access_token,name&access_token=${metaTokenResponse.token}`,
-          );
-          if (pageResponse.data) {
-            if (pageResponse.data.access_token) {
-              updateData.pageAccessToken = pageResponse.data.access_token;
-              req.body.pageAccessToken = pageResponse.data.access_token;
-            }
-            if (pageResponse.data.name && !updateData.pageName) {
-              updateData.pageName = pageResponse.data.name;
-            }
-          }
-        } catch (err) {
-          console.warn(
-            "Failed to fetch long-lived page access token",
-            err.message,
-          );
+    }
+
+    // Resolve the Page access token whenever we have a page, not only when this
+    // request carried a fresh user token. A business linked once without one
+    // used to stay broken forever: no lead form, no webhook, no leads.
+    if (req.body.pageId && !req.body.pageAccessToken) {
+      const userToken =
+        updateData.metaAccessToken ||
+        req.body.metaAccessToken ||
+        business.metaAccessToken;
+      const resolved = await resolvePageAccessToken(req.body.pageId, userToken);
+      if (resolved) {
+        updateData.pageAccessToken = resolved.token;
+        req.body.pageAccessToken = resolved.token;
+        if (resolved.name && !updateData.pageName) {
+          updateData.pageName = resolved.name;
         }
       }
     }
@@ -280,15 +276,30 @@ exports.updateBusiness = async (req, res) => {
         }
       );
     } else if (req.body.pageId) {
-      // Ensure pageId and isFacebookPageLinked are persisted even if pageAccessToken wasn't resolved
+      // Page is linked but we could not get a Page access token. Keep the link
+      // (the user did connect the page) and say so, because in this state Lead
+      // Form ads cannot be created and no lead webhook will ever fire.
       updatedBusiness = await businessService.updateBusiness(
         { _id: business._id },
         {
           isFacebookPageLinked: true,
+          isPageSubscribe: false,
           pageId: req.body.pageId,
           pageName: req.body.pageName || updatedBusiness.pageName,
         }
       );
+      console.warn(
+        `⚠️ Business ${business._id}: page ${req.body.pageId} linked without a Page access token — lead forms and lead delivery are disabled until it is re-linked.`,
+      );
+      return res.status(statusCodes.OK).json({
+        ...responseBuilder(
+          apiResponseStatusCode[200],
+          defaultResponseMessage.UPDATED,
+          updatedBusiness,
+        ),
+        pageLinkWarning:
+          "Page linked, but we could not get permission to manage it. Re-link the page and grant the Pages and Leads permissions, otherwise lead ads cannot run.",
+      });
     }
 
     return res
@@ -364,6 +375,56 @@ async function handleMetaAccessToken(metaAccessToken) {
       },
     };
   }
+}
+
+/**
+ * Resolve a Page access token for `pageId` using the user's token.
+ *
+ * Without one the business can never create a Lead Form, subscribe to the
+ * leadgen webhook, or receive a single lead — so this tries the direct page
+ * read first and then /me/accounts, which returns page tokens for every page
+ * the user manages and succeeds in cases where the direct read does not.
+ */
+async function resolvePageAccessToken(pageId, userAccessToken) {
+  if (!pageId || !userAccessToken) return null;
+
+  try {
+    const direct = await axios.get(
+      `https://graph.facebook.com/v21.0/${pageId}`,
+      { params: { fields: "access_token,name", access_token: userAccessToken } },
+    );
+    if (direct.data?.access_token) {
+      return { token: direct.data.access_token, name: direct.data.name || null };
+    }
+  } catch (error) {
+    console.warn(
+      `resolvePageAccessToken: direct read failed for ${pageId}:`,
+      error.response?.data?.error?.message || error.message,
+    );
+  }
+
+  try {
+    const accounts = await axios.get(
+      "https://graph.facebook.com/v21.0/me/accounts",
+      { params: { fields: "id,name,access_token", limit: 200, access_token: userAccessToken } },
+    );
+    const page = (accounts.data?.data || []).find(
+      (p) => String(p.id) === String(pageId),
+    );
+    if (page?.access_token) {
+      return { token: page.access_token, name: page.name || null };
+    }
+    console.warn(
+      `resolvePageAccessToken: ${pageId} not among the ${(accounts.data?.data || []).length} pages this user manages`,
+    );
+  } catch (error) {
+    console.warn(
+      "resolvePageAccessToken: /me/accounts failed:",
+      error.response?.data?.error?.message || error.message,
+    );
+  }
+
+  return null;
 }
 
 async function handlePageSubscription(business, pageId, pageAccessToken) {

@@ -801,7 +801,11 @@ exports.getLeadOfYourBussinessByMemberId = async (req, res) => {
     // Fetch lead
     const [leads, totalCount, count] = await Promise.all([
       leadModel.find(filter)
-        .populate("internalCampiagnId")
+        .populate({
+          path: "internalCampiagnId",
+          select: "title image thambnail addTypeId status",
+          populate: { path: "addTypeId", select: "title advertisementType" },
+        })
         .sort(sortOptions)
        .skip(skip)
        .limit(20),
@@ -809,15 +813,18 @@ exports.getLeadOfYourBussinessByMemberId = async (req, res) => {
       leadModel.countDocuments(fi),
     ]);
 
-    // Attach ad image
-    const leadsWithAds = await Promise.all(
-      leads.map(async (lead) => {
-        return {
-          ...lead.toObject(),
-          adImage: lead?.internalCampiagnId?.image || lead?.internalCampiagnId?.thambnail || null,
-        };
-      })
-    );
+    // Attach the source ad so the app can show which campaign produced the lead
+    const leadsWithAds = leads.map((lead) => {
+      const ad = lead?.internalCampiagnId;
+      const image = Array.isArray(ad?.image) ? ad.image[0] : ad?.image;
+      return {
+        ...lead.toObject(),
+        adImage: image || ad?.thambnail || null,
+        adName: ad?.title || null,
+        adTypeName: ad?.addTypeId?.title || null,
+        adStatus: ad?.status || null,
+      };
+    });
 
     // Send response
     return res.status(200).json({
@@ -827,6 +834,8 @@ exports.getLeadOfYourBussinessByMemberId = async (req, res) => {
       totalPages: Math.ceil(totalCount / 20),
       currentPage: parseInt(page),
       totalCount,
+      // Same number under the name the mobile app reads.
+      totalLeads: totalCount,
 	  check: count == 0 ? true : false
     });
   } catch (error) {

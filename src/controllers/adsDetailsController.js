@@ -5230,4 +5230,10 @@ exports.__test__ = {
   buildWhatsAppCtaLink,
   normalizeWhatsAppPhone,
   mapAdvertisementTypeToMetaOutcome,
+  extractAdSetRequest,
+  validateAdSetRequest,
+  prepareProcessAdCreationPayload,
+  fixParseAndConvertLocationString,
+  hasUsableGeoTarget,
+  normalizeMediaArray,
 };
