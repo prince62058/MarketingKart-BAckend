@@ -1097,7 +1097,17 @@ exports.mobileLogInV2 = async (req, res) => {
   }
 
   if (!user) {
-    user = await userService.mobileLogIn({ mobile: mobileNum, otp: cyperOtp });
+    try {
+      user = await userService.mobileLogIn({ mobile: mobileNum, otp: cyperOtp });
+    } catch (error) {
+      // A concurrent request won the race and created this number first; the unique
+      // index rejected ours. Reuse the existing account instead of failing the login.
+      if (error?.code === 11000) {
+        user = await userService.finOne({ mobile: mobileNum }, { otp: cyperOtp });
+      } else {
+        throw error;
+      }
+    }
   }
 
   console.log(`[dev] OTP for ${mobile}: ${Otp} (real SMS send skipped)`);

@@ -78,4 +78,16 @@ const userModel = mongoose.Schema(
 userModel.index({ createdAt: -1 });
 userModel.index({ userType: 1 });
 
+// One account per phone number, enforced by the database so a race between two
+// concurrent "send OTP" calls can never create a duplicate login.
+// Partial filter: admin/email-only accounts keep mobile === null and are exempt.
+userModel.index(
+  { mobile: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { mobile: { $type: "number" } },
+    name: "mobile_unique_when_set",
+  },
+);
+
 module.exports = mongoose.model("userModel", userModel);
