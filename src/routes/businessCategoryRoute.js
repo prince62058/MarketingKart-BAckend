@@ -14,20 +14,16 @@ router.post(
 );
 router.get(
   "/category/getAllCategory",
-  asyncHandler(authUser),
   asyncHandler(controller.getAllCategory)
 );
 
-
 router.get(
   "/category/getAllPCategory",
-  asyncHandler(authUser),
   asyncHandler(controller.getAllPCategory)
 );
 
 router.get(
   "/category/getCategoryById/:categoryId",
-  asyncHandler(authUser),
   asyncHandler(categoryMid),
   asyncHandler(controller.getCategoryById)
 );

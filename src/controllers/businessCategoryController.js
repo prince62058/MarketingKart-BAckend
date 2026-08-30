@@ -63,24 +63,25 @@ exports.getAllPCategory = async (req, res) => {
 };
 
 exports.getAllCategory = async (req, res) => {
-  const { title, page = 1, categoryId, disable, type, sort } = req.query;
-  const skip = (page - 1) * 20;
+  const { title, page, categoryId, disable, type, sort, limit: reqLimit } = req.query;
+  const limit = reqLimit ? parseInt(reqLimit, 10) : (page ? 20 : 100);
+  const skip = page ? (parseInt(page, 10) - 1) * limit : 0;
   const obj = {};
-  const obj1 = {};
+  const obj1 = { orderNumber: 1, createdAt: -1 };
   if (title) {
     obj.title = new RegExp(title, "i");
   }
   if (sort == 1) {
     obj1.orderNumber = 1;
-  } else  if(sort == -1){
+  } else if (sort == -1) {
     obj1.orderNumber = -1;
   }
 
   if (categoryId) {
     obj.categoryId = categoryId;
   }
-  if (disable) {
-    obj.disable = disable;
+  if (disable !== undefined) {
+    obj.disable = disable === "true" || disable === true;
   }
   if (type === "category") {
     obj.categoryId = null;
@@ -89,11 +90,11 @@ exports.getAllCategory = async (req, res) => {
   }
 
   // Fetch the data with pagination
-  const data = await categoryService.getAllCategory(obj, skip, obj1);
+  const data = await categoryService.getAllCategory(obj, skip, obj1, limit);
 
   // Fetch the total count
-  const totalCount = await categoryModel.countDocuments(obj)
-  const pageCount = Math.ceil(totalCount / 20);
+  const totalCount = await categoryModel.countDocuments(obj);
+  const pageCount = Math.ceil(totalCount / limit);
 
   return res
     .status(statusCodes.OK)
@@ -102,8 +103,8 @@ exports.getAllCategory = async (req, res) => {
         apiResponseStatusCode[200],
         defaultResponseMessage?.FETCHED,
         data,
-        pageCount
-      )
+        pageCount,
+      ),
     );
 };
 
