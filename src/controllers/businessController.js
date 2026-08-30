@@ -93,6 +93,12 @@ exports.createBusiness = async (req, res) => {
   };
   const createData = await businessService.createBusiness(dataObj);
 
+  // Link business to user record
+  await userModel.findByIdAndUpdate(userId, {
+    $addToSet: { businessId: createData._id },
+    ...(businessName ? { name: businessName } : {}),
+  });
+
   // Auto assignment
   // await assignBusinessToStaff(createData._id);
 
@@ -723,7 +729,9 @@ exports.disableBusiness = async (req, res) => {
 };
 
 exports.getAllBusinessByUserId = async (req, res) => {
-  const getAll = await businessService.getAllBusinessByUserId(req.user);
+  const targetUserId = req.params?.userId || req.user?._id || req.query?.userId;
+  const user = req.user || (await userModel.findById(targetUserId));
+  const getAll = await businessService.getAllBusinessByUserId(user || { _id: targetUserId });
 
   // Auto-backfill pageName for any linked business that is missing it
   for (const b of getAll) {

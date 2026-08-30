@@ -40,7 +40,18 @@ exports.disableBusiness = async (getBusinessById) => {
 };
 
 exports.getAllBusinessByUserId = async (query) => {
-  return await businessModel.find({ userId: query?._id }).populate("businessCategoryId userId servicesId stateId cityId").exec();
+  const userId = query?._id || query;
+  const businessIds = Array.isArray(query?.businessId) ? query.businessId : [];
+  return await businessModel
+    .find({
+      $or: [
+        { userId: userId },
+        ...(businessIds.length ? [{ _id: { $in: businessIds } }] : []),
+      ],
+    })
+    .populate("businessCategoryId userId servicesId stateId cityId")
+    .sort({ createdAt: -1 })
+    .exec();
 };
 
 exports.getAllBusinessListForAdmin = async (query, skip, sort, limit = 20) => {

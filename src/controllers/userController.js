@@ -1013,9 +1013,13 @@ exports.verifyMobileOtpV2 = async (req, res) => {
       );
   }
 
+  const updateFields = { phoneVerified: true };
+  if (user.userType === "SUBUSER") {
+    updateFields.userType = "SUBUSER";
+  }
   user = await userService.finOne(
     { mobile: mobile },
-    { phoneVerified: true, userType: "SUBUSER" },
+    updateFields,
   );
 
   return res
