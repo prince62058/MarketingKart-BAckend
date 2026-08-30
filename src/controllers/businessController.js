@@ -8,6 +8,9 @@ const businessService = require("../services/businessService");
 const userService = require("../services/userService");
 const responseBuilder = require("../utils/responseBuilder");
 const axios = require("axios");
+const mongoose = require("mongoose");
+const userModel = require("../models/userModel");
+const businessCategoryModel = require("../models/businessCategoryModel");
 const permissionModel = require("../models/permissionModel");
 require("../models/staffModel"); // Added to fix Schema hasn't been registered for model "staff" error
 const businessModel = require("../models/businessModel");
