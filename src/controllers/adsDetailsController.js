@@ -135,6 +135,8 @@ const normalizeMetaScheduleDays = (days) => {
   if (!Array.isArray(parsed)) return [];
 
   const mapped = parsed
+    // Number(null) is 0, which would silently add Sunday to the schedule.
+    .filter((d) => d !== null && d !== undefined && d !== "")
     .map((d) => Number(d))
     .filter((n) => Number.isFinite(n))
     .map((n) => {
@@ -1961,8 +1963,16 @@ async function processAdCreation({
       flexible_spec: [{ interests: interestList }],
     };
 
-    if (platforms) {
-      targetingBase.user_os = [platforms];
+    // `platforms` is Meta's user_os targeting (App Install ads), NOT the
+    // Facebook/Instagram placement choice — that is publisher_platforms below.
+    // Anything else here makes Meta reject the whole ad set, so only real OS
+    // values are forwarded.
+    const requestedOs = (Array.isArray(platforms) ? platforms : [platforms])
+      .map((p) => String(p || "").trim().toLowerCase())
+      .map((p) => (p === "ios" ? "iOS" : p === "android" ? "Android" : null))
+      .filter(Boolean);
+    if (requestedOs.length) {
+      targetingBase.user_os = [...new Set(requestedOs)];
     }
 
     const targeting = {
@@ -3105,11 +3115,18 @@ function convertLocationToMetaGeo(inputString) {
         const lng = parseFloat(coord.longitude);
         if (!isNaN(lng)) newObj.longitude = lng;
 
-        // App sends radius in meters; Meta wants kilometers (min ~1km)
+        // Meta wants kilometres, 1–80. The app sends km (its picker is capped
+        // at 50); legacy callers sent metres, so a magnitude guess still covers
+        // them — but an explicit unit always wins over the guess.
         let radiusKm = parseFloat(coord.radius);
         if (!isNaN(radiusKm)) {
-          // If value looks like meters (> 200), convert to km
-          if (radiusKm > 200) radiusKm = radiusKm / 1000;
+          const unit = String(
+            coord.distance_unit || coord.radiusUnit || "",
+          ).toLowerCase();
+          const isMetres = unit
+            ? unit.startsWith("m") && !unit.startsWith("mi")
+            : radiusKm > 200;
+          if (isMetres) radiusKm = radiusKm / 1000;
           newObj.radius = Math.max(1, Math.min(80, radiusKm));
         } else {
           newObj.radius = 8;
@@ -5236,4 +5253,8 @@ exports.__test__ = {
   fixParseAndConvertLocationString,
   hasUsableGeoTarget,
   normalizeMediaArray,
+  buildMetaAdSetSchedule,
+  normalizeMetaScheduleDays,
+  timeToMinutes,
+  convertLocationToMetaGeo,
 };

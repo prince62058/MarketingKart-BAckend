@@ -5,6 +5,17 @@ const { sendNotificationToMultipleTokens } = require("./notificationController")
 const { sendAdStatusNotification } = require("../helpers/appNotificationHelper");
 const { AD_KIND, resolveAdKind } = require("../helpers/adTypeHelper");
 
+/**
+ * True only when this campaign really is delivering on Meta.
+ *
+ * This scheduler moves the DB status; it never touches Meta. Marking a campaign
+ * ACTIVE that Meta still has PAUSED makes the app show "Active" for an ad that
+ * is spending nothing — so a campaign only counts as running once it has the
+ * delivery ids that the admin approval flow creates.
+ */
+const hasLiveMetaDelivery = (campaign) =>
+  Boolean((campaign.mainAdId || campaign.metaAdId) && campaign.facebookAdSetId);
+
 // Lead Form and WhatsApp ads only count as "running" once Meta has them live,
 // so their start/end notifications are gated differently from other ad types.
 const isLeadStyleAd = async (campaign) => {
@@ -45,7 +56,13 @@ async function manageCampaigns() {
         const isExactStartTime =
           currentHour == dayStartHour && currentMinute == dayStartMinute;
 
-        if (isExactStartTime) {
+        // An admin's explicit pause/activate is the source of truth and must not
+        // be undone by the clock, and a campaign with no Meta delivery ids has
+        // never gone live at all.
+        const mayAutoActivate =
+          campaign?.byAdmin !== true && hasLiveMetaDelivery(campaign);
+
+        if (isExactStartTime && mayAutoActivate) {
           // Update status to ACTIVE if not already
           if (campaign.status !== "ACTIVE") {
             await updateCampaignStatus(campaign._id, "ACTIVE");
