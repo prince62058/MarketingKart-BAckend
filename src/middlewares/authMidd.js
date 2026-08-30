@@ -16,7 +16,7 @@ exports.authUser = async (req, res, next) => {
   ].filter(Boolean);
 
   const authHeader = req.headers["authorization"];
-  const userId = req.query?.userId || req.params?.userId || req.body?.userId;
+  const paramUserId = req.query?.userId || req.params?.userId || req.body?.userId;
 
   let decoded = null;
   const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : authHeader?.trim();
@@ -35,7 +35,8 @@ exports.authUser = async (req, res, next) => {
     }
   }
 
-  const check = userId || decoded?.User || decoded?.userId || decoded?.id || decoded?._id;
+  const tokenUserId = decoded?.User || decoded?.userId || decoded?.id || decoded?._id;
+  const check = tokenUserId || paramUserId;
   if (!check) {
     return res
       .status(statusCodes?.["Unauthorized"])

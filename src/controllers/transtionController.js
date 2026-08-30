@@ -63,6 +63,7 @@ const createTransactions = async (req, res) => {
       orderId,
       signature,
       type = "CREDIT", // CREDIT or DEBIT
+      walletType = "MAIN", // MAIN or WHATSAPP
       amount,
       businessId,
       adsId,
@@ -73,8 +74,8 @@ const createTransactions = async (req, res) => {
 
     // Convert amount to number and validate
     const transactionAmount = parseFloat(amount);
-    if (isNaN(transactionAmount)) {
-      throw new Error("Amount must be a valid number");
+    if (isNaN(transactionAmount) || transactionAmount <= 0) {
+      throw new Error("Amount must be a valid positive number");
     }
 
     // Round to 2 decimal places for currency
@@ -84,12 +85,14 @@ const createTransactions = async (req, res) => {
       throw new Error("Invalid transaction type (must be CREDIT or DEBIT)");
     }
 
-    // The authenticated caller always pays/gets credited for themselves —
-    // a client-supplied userId is never trusted, only an admin may target another user.
-    const isAdminCredit = Boolean(req.body.userId) && req.user?.userType === "ADMIN";
-    const userId = isAdminCredit ? req.body.userId : req.user._id;
+    const resolvedWalletType = walletType?.toUpperCase() === "WHATSAPP" ? "WHATSAPP" : "MAIN";
 
-    if (type === "CREDIT" && !isAdminCredit) {
+    // Check if caller is admin
+    const isAdmin = req.user?.userType === "ADMIN" || req.user?.role === 2 || req.user?.role === "ADMIN";
+    const isAdminAction = Boolean(req.body.userId) && isAdmin;
+    const targetUserId = isAdminAction ? req.body.userId : req.user._id;
+
+    if (type === "CREDIT" && !isAdminAction) {
       // A self-service credit must be a real, verified Razorpay payment.
       if (!orderId || !paymentId || !signature) {
         throw new Error("Missing Razorpay payment verification details");
@@ -103,44 +106,64 @@ const createTransactions = async (req, res) => {
       }
     }
 
-    // Fetch user with session
-    const user = await User.findById(userId).session(session);
+    // Fetch target user with session (supports ObjectId or 10-digit mobile)
+    let user;
+    if (typeof targetUserId === "string" && /^[0-9]{10}$/.test(targetUserId)) {
+      user = await User.findOne({ mobile: parseInt(targetUserId) }).session(session);
+    } else if (mongoose.Types.ObjectId.isValid(targetUserId)) {
+      user = await User.findById(targetUserId).session(session);
+    }
+
     if (!user) {
       throw new Error("User not found");
     }
 
-    // Convert user wallet to number (in case it's stored as string)
-    const currentBalance = parseFloat(user.wallet);
+    // Get current balance based on selected wallet
+    const currentBalance = resolvedWalletType === "WHATSAPP"
+      ? parseFloat(user.whatsappWallet || 0)
+      : parseFloat(user.wallet || 0);
 
-    // Handle transaction
+    // Handle transaction balance calculation
     let newBalance;
     if (type === "DEBIT") {
       if (currentBalance < roundedAmount) {
-        throw new Error("Insufficient wallet balance");
+        throw new Error(`Insufficient wallet balance (Current: ₹${currentBalance}, Requested: ₹${roundedAmount})`);
       }
       newBalance = parseFloat((currentBalance - roundedAmount).toFixed(2));
     } else {
       newBalance = parseFloat((currentBalance + roundedAmount).toFixed(2));
     }
 
+    // Determine description
+    const finalDescription = description || (
+      isAdminAction
+        ? `${resolvedWalletType === "WHATSAPP" ? "WhatsApp" : "Main"} Wallet ${type === "CREDIT" ? "Credit (Admin)" : "Debit (Admin)"}`
+        : (paymentId ? `Wallet Recharge (${orderId || paymentId})` : "Wallet Transaction")
+    );
+
     // Create transaction record
     const transactionData = {
       type,
+      walletType: resolvedWalletType,
       amount: roundedAmount,
       businessId,
       adsId,
-      userId,
+      userId: user._id,
       transactionId: paymentId || transactionId || generateTransactionId(),
       serviceAmount: serviceAmount ? parseFloat(serviceAmount).toFixed(2) : null,
-      description,
+      description: finalDescription,
       previousBalance: currentBalance,
       newBalance
     };
 
     const [transaction] = await Transaction.create([transactionData], { session });
 
-    // Update user wallet
-    user.wallet = newBalance;
+    // Update the corresponding wallet on the user model
+    if (resolvedWalletType === "WHATSAPP") {
+      user.whatsappWallet = newBalance;
+    } else {
+      user.wallet = newBalance;
+    }
     await user.save({ session });
 
     await session.commitTransaction();
@@ -148,10 +171,13 @@ const createTransactions = async (req, res) => {
     return res.status(200).json({
       success: true,
       data: {
-        walletBalance: user.wallet,
+        walletBalance: user.wallet || 0,
+        whatsappWalletBalance: user.whatsappWallet || 0,
+        updatedWallet: resolvedWalletType,
+        newBalance,
         transaction,
       },
-      message: getTransactionMessage(type, paymentId)
+      message: getTransactionMessage(type, paymentId, isAdminAction, resolvedWalletType)
     });
 
   } catch (error) {
@@ -173,7 +199,10 @@ function generateTransactionId() {
   return 'txn_' + Date.now() + Math.floor(Math.random() * 1000);
 }
 
-function getTransactionMessage(type, paymentId) {
+function getTransactionMessage(type, paymentId, isAdminAction, walletType) {
+  if (isAdminAction) {
+    return `${walletType === "WHATSAPP" ? "WhatsApp" : "Main"} wallet ${type === "CREDIT" ? "credited" : "debited"} successfully by admin`;
+  }
   return type === "DEBIT" 
     ? "Amount debited successfully" 
     : paymentId 
@@ -307,7 +336,7 @@ function getTransactionMessage(type, paymentId) {
         limit,
         sort,
         populate: [
-          { path: "userId", select: "name email" },
+          { path: "userId", select: "name email mobile wallet whatsappWallet" },
           { path: "businessId", select: "businessName" }, // Fixed typo here too
           { path: "adsId", select: "title" },
           { path: "addTypeId", select: "title" },
