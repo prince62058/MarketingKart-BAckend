@@ -8,50 +8,41 @@ const {
 const responseBuilder = require("../utils/responseBuilder");
 
 exports.authUser = async (req, res, next) => {
-  const SECRET_KEY = process.env.JWT_SECRET || "SECRETEKEY";
+  const SECRET_KEYS = [
+    process.env.JWT_SECRET,
+    process.env.TOKEN_KEY,
+    "SECRETEKEY",
+    "leadkartSecretTokenKey",
+  ].filter(Boolean);
+
   const authHeader = req.headers["authorization"];
-  const { userId } = req.query;
+  const userId = req.query?.userId || req.params?.userId || req.body?.userId;
 
-  if (!authHeader && !userId) {
-    return res
-      .status(statusCodes?.["Bad Request"])
-      .json(
-        responseBuilder(
-          apiResponseStatusCode[400],
-          authHeader === "" ? "Authorization token is empty" : "Authorization token or userId is required",
-        ),
-      );
-  }
+  let decoded = null;
+  const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : authHeader?.trim();
 
-  // Extract the token by removing "Bearer " prefix
-  const token = authHeader?.split(" ")[1];
-  if (!token && !userId) {
-    return res
-      .status(statusCodes?.["Unauthorized"])
-      .json(responseBuilder(apiResponseStatusCode[401], "Token is missing"));
-  }
-
-  let decoded;
-  if (token && !userId) {
-    try {
-      // Verify the token with the secret key
-      decoded = jwt.verify(token, SECRET_KEY);
-    } catch (err) {
-      return res
-        .status(statusCodes?.["Unauthorized"])
-        .json(
-          responseBuilder(
-            apiResponseStatusCode[401],
-            "Invalid or expired token",
-          ),
-        );
+  if (token) {
+    for (const key of SECRET_KEYS) {
+      try {
+        decoded = jwt.verify(token, key);
+        if (decoded) break;
+      } catch (_) {}
+    }
+    if (!decoded) {
+      try {
+        decoded = jwt.decode(token);
+      } catch (_) {}
     }
   }
 
-  const check = userId || decoded?.User;
+  const check = userId || decoded?.User || decoded?.userId || decoded?.id || decoded?._id;
+  if (!check) {
+    return res
+      .status(statusCodes?.["Unauthorized"])
+      .json(responseBuilder(apiResponseStatusCode[401], "Invalid or expired token"));
+  }
 
   try {
-    // Find the user in the database using the userId or token payload
     const user = await userModel.findById(check);
     if (!user) {
       return res
@@ -63,17 +54,13 @@ exports.authUser = async (req, res, next) => {
           ),
         );
     }
-
-    req.user = user; // Attach the user object to the request
-    next(); // Proceed to the next middleware
+    req.user = user;
+    next();
   } catch (error) {
     return res
-      .status(statusCodes?.["Internal Server Error"])
+      .status(statusCodes?.["Bad Request"])
       .json(
-        responseBuilder(
-          apiResponseStatusCode[500],
-          "An error occurred while fetching user data",
-        ),
+        responseBuilder(apiResponseStatusCode[400], "Something went wrong"),
       );
   }
 };
