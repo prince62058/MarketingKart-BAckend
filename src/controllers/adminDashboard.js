@@ -412,7 +412,11 @@ exports.adListForAdmin = async (req, res) => {
     // Sort ACTIVE ads first, then by createdAt descending
     let data = await internalCampiagnModel
       .find(query)
-      .select("status addTypeId businessId title pageName image thambnail createdAt instaBudget facebookBudget totalBudget mainAdId spendAmount")
+      // Performance columns come from here — without them the admin Ads list
+      // could only ever show 0 leads and 0 reach for every campaign.
+      .select(
+        "status addTypeId businessId title pageName image thambnail createdAt instaBudget facebookBudget totalBudget mainAdId spendAmount totalLeads totalFirstReplies totalReach totalImpression totalClicks",
+      )
       .populate("addTypeId", "title")
       .populate("businessId", "businessName userId")
       .sort({ 
