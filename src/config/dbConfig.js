@@ -118,6 +118,13 @@ const connect = async () => {
     await mongoose.connect(primaryUri, baseConnectionOptions);
     await connectAdditionalDatabases();
 
+    try {
+      await adminModel.syncIndexes();
+      log.info?.("UserModel indexes synchronized successfully.");
+    } catch (idxErr) {
+      log.warn?.(`Failed to sync indexes for userModel: ${idxErr.message}`);
+    }
+
     // await initializeAdmin();
     attachConnectionListeners(mongoose.connection);
 

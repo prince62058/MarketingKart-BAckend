@@ -13,7 +13,7 @@ const {
   defaultResponseMessage,
 } = require("../Message/defaultMessage");
 const responseBuilder = require("../utils/responseBuilder");
-const { validateMobileNumber } = require("../utils/mobileValidetionHandler");
+const { validateMobileNumber, normalizeMobileNumber } = require("../utils/mobileValidetionHandler");
 const { validateEmail } = require("../utils/emailValidetionHandler");
 const staffModel = require("../models/staffModel");
 const userModel = require("../models/userModel");
@@ -82,18 +82,14 @@ exports.mobileLogIn = async (req, res) => {
 
   if (!validateMobileNumber(mobile, res)) return;
 
-  const mobileNum = Number(mobile);
+  const mobileNum = normalizeMobileNumber(mobile);
   let Otp = otp();
-  // let Otp = 1234;
 
   console.log(`[AUTH] Generated OTP for ${mobileNum}: ${Otp}`);
 
   const cyperOtp = CryptoJS.AES.encrypt(Otp.toString(), "CRYPTOKEY").toString();
 
-  let user = await userService.finOne(
-    { mobile: mobileNum },
-    { otp: cyperOtp, otp2: Otp },
-  );
+  let user = await userModel.findOne({ mobile: mobileNum });
 
   if (user?.disable) {
     return res
@@ -101,12 +97,31 @@ exports.mobileLogIn = async (req, res) => {
       .json(responseBuilder(apiResponseStatusCode[400], "Ban Your Acount"));
   }
 
-  if (!user) {
-    user = await userService.mobileLogIn({
-      mobile: mobile,
-      otp: cyperOtp,
-      otp2: Otp,
-    });
+  if (user) {
+    user = await userModel.findByIdAndUpdate(
+      user._id,
+      { $set: { otp: cyperOtp, otp2: Otp } },
+      { new: true },
+    ).populate("userRole").populate("businessId", "businessName businessImage");
+  } else {
+    try {
+      user = await userModel.create({
+        mobile: mobileNum,
+        otp: cyperOtp,
+        otp2: Otp,
+        phoneVerified: false,
+      });
+    } catch (error) {
+      if (error?.code === 11000) {
+        user = await userModel.findOneAndUpdate(
+          { mobile: mobileNum },
+          { $set: { otp: cyperOtp, otp2: Otp } },
+          { new: true },
+        ).populate("userRole").populate("businessId", "businessName businessImage");
+      } else {
+        throw error;
+      }
+    }
   }
   let data = sendOtp(mobile, Otp);
   if (data == false) {
@@ -141,8 +156,8 @@ exports.verifyOtp = async (req, res) => {
       .status(statusCodes["Bad Request"])
       .json(responseBuilder(apiResponseStatusCode[400], "otp is required"));
   }
-  const mobileNum = Number(mobile);
-  let user = await userService.finOne({ mobile: mobileNum });
+  const mobileNum = normalizeMobileNumber(mobile);
+  let user = await userModel.findOne({ mobile: mobileNum });
   if (!user) {
     return res
       .status(statusCodes["Bad Request"])
@@ -166,25 +181,29 @@ exports.verifyOtp = async (req, res) => {
       );
   }
 
-  user = await userService.finOne(
-    { mobile: mobileNum },
-    { phoneVerified: true, fcm: fcm },
-  );
+  user = await userModel.findByIdAndUpdate(
+    user._id,
+    { $set: { phoneVerified: true, ...(fcm ? { fcm } : {}) } },
+    { new: true },
+  ).populate("userRole").populate("businessId", "businessName businessImage");
 
-  const token = jwt.sign({ User: user._id }, process.env.JWT_SECRET || "SECRETEKEY", {
-    expiresIn: "365d",
-  });
+  const token = jwt.sign(
+    { User: user._id, userId: user._id },
+    process.env.JWT_SECRET || process.env.TOKEN_KEY || "SECRETEKEY",
+    { expiresIn: "365d" },
+  );
   let Check = await isUserInBusiness(user._id);
 
-  user._doc.token = token;
-  user._doc.isUserBusinessExist = Check;
+  const userData = user.toObject ? user.toObject() : { ...user };
+  userData.token = token;
+  userData.isUserBusinessExist = Check;
   return res
     .status(statusCodes.OK)
     .json(
       responseBuilder(
         apiResponseStatusCode[200],
         "register successfully",
-        user,
+        userData,
       ),
     );
 };
@@ -938,8 +957,9 @@ exports.sendOtpForMobileV2 = async (req, res) => {
       .json(responseBuilder(apiResponseStatusCode[400], "mobile is required"));
   }
 
-  validateMobileNumber(mobile, res);
+  if (!validateMobileNumber(mobile, res)) return;
 
+  const mobileNum = normalizeMobileNumber(mobile);
   let Otp = otp();
   let data = sendOtp(mobile, Otp);
   if (data == false) {
@@ -948,12 +968,15 @@ exports.sendOtpForMobileV2 = async (req, res) => {
       message: "OTP limit exceeded for this mobile number. Try again later.",
     });
   }
-  // let Otp = otp();
   const cyperOtp = CryptoJS.AES.encrypt(Otp.toString(), "CRYPTOKEY").toString();
 
-  let user = await userService.finOne({ mobile: mobile }, { otp: cyperOtp });
+  let user = await userModel.findOne({ mobile: mobileNum });
 
   if (user) {
+    await userModel.findByIdAndUpdate(
+      user._id,
+      { $set: { otp: cyperOtp, otp2: Otp } },
+    );
     return res
       .status(statusCodes.OK)
       .json(
@@ -965,7 +988,23 @@ exports.sendOtpForMobileV2 = async (req, res) => {
       );
   }
 
-  user = await userService.mobileLogIn({ mobile: mobile, otp: cyperOtp });
+  try {
+    user = await userModel.create({
+      mobile: mobileNum,
+      otp: cyperOtp,
+      otp2: Otp,
+      phoneVerified: false,
+    });
+  } catch (error) {
+    if (error?.code === 11000) {
+      await userModel.findOneAndUpdate(
+        { mobile: mobileNum },
+        { $set: { otp: cyperOtp, otp2: Otp } },
+      );
+    } else {
+      throw error;
+    }
+  }
 
   return res
     .status(statusCodes.OK)
@@ -984,12 +1023,15 @@ exports.verifyMobileOtpV2 = async (req, res) => {
       .json(responseBuilder(apiResponseStatusCode[400], "mobile is required"));
   }
 
+  if (!validateMobileNumber(mobile, res)) return;
+
   if (!otp) {
     return res
       .status(statusCodes["Bad Request"])
       .json(responseBuilder(apiResponseStatusCode[400], "otp is required"));
   }
-  let user = await userService.checkData({ mobile: mobile });
+  const mobileNum = normalizeMobileNumber(mobile);
+  let user = await userModel.findOne({ mobile: mobileNum });
   if (!user) {
     return res
       .status(statusCodes["Bad Request"])
@@ -1017,15 +1059,16 @@ exports.verifyMobileOtpV2 = async (req, res) => {
   if (user.userType === "SUBUSER") {
     updateFields.userType = "SUBUSER";
   }
-  user = await userService.finOne(
-    { mobile: mobile },
-    updateFields,
-  );
+  user = await userModel.findByIdAndUpdate(
+    user._id,
+    { $set: updateFields },
+    { new: true },
+  ).populate("userRole").populate("businessId", "businessName businessImage");
 
   const token = jwt.sign(
     { User: user._id, userId: user._id },
     process.env.JWT_SECRET || process.env.TOKEN_KEY || "SECRETEKEY",
-    { expiresIn: "365d" }
+    { expiresIn: "365d" },
   );
 
   const userData = user.toObject ? user.toObject() : { ...user };
@@ -1095,13 +1138,13 @@ exports.mobileLogInV2 = async (req, res) => {
 
   if (!validateMobileNumber(mobile, res)) return;
 
-  const mobileNum = Number(mobile);
+  const mobileNum = normalizeMobileNumber(mobile);
   // TEMP: fixed dev OTP per user request — revert to otp() + sendOtp() below before production
   let Otp = 1234;
 
   const cyperOtp = CryptoJS.AES.encrypt(Otp.toString(), "CRYPTOKEY").toString();
 
-  let user = await userService.finOne({ mobile: mobileNum }, { otp: cyperOtp });
+  let user = await userModel.findOne({ mobile: mobileNum });
 
   if (user?.disable) {
     return res
@@ -1109,21 +1152,35 @@ exports.mobileLogInV2 = async (req, res) => {
       .json(responseBuilder(apiResponseStatusCode[400], "Ban Your Acount"));
   }
 
-  if (!user) {
+  if (user) {
+    // Existing user: NEVER create duplicate, simply update OTP
+    await userModel.findByIdAndUpdate(user._id, {
+      $set: { otp: cyperOtp, otp2: Otp },
+    });
+  } else {
     try {
-      user = await userService.mobileLogIn({ mobile: mobileNum, otp: cyperOtp });
+      user = await userModel.create({
+        mobile: mobileNum,
+        otp: cyperOtp,
+        otp2: Otp,
+        phoneVerified: false,
+      });
     } catch (error) {
       // A concurrent request won the race and created this number first; the unique
       // index rejected ours. Reuse the existing account instead of failing the login.
       if (error?.code === 11000) {
-        user = await userService.finOne({ mobile: mobileNum }, { otp: cyperOtp });
+        user = await userModel.findOneAndUpdate(
+          { mobile: mobileNum },
+          { $set: { otp: cyperOtp, otp2: Otp } },
+          { new: true },
+        );
       } else {
         throw error;
       }
     }
   }
 
-  console.log(`[dev] OTP for ${mobile}: ${Otp} (real SMS send skipped)`);
+  console.log(`[dev] OTP for ${mobileNum}: ${Otp} (real SMS send skipped)`);
 
   return res
     .status(statusCodes.Created)
@@ -1150,8 +1207,8 @@ exports.verifyOtpV2 = async (req, res) => {
       .status(statusCodes["Bad Request"])
       .json(responseBuilder(apiResponseStatusCode[400], "otp is required"));
   }
-  const mobileNum = Number(mobile);
-  let user = await userService.finOne({ mobile: mobileNum });
+  const mobileNum = normalizeMobileNumber(mobile);
+  let user = await userModel.findOne({ mobile: mobileNum });
   if (!user) {
     return res
       .status(statusCodes["Bad Request"])
@@ -1175,13 +1232,20 @@ exports.verifyOtpV2 = async (req, res) => {
       );
   }
 
-  user = await userService.finOne({ mobile: mobileNum }, { phoneVerified: true });
+  user = await userModel.findByIdAndUpdate(
+    user._id,
+    { $set: { phoneVerified: true } },
+    { new: true },
+  ).populate("userRole").populate("businessId", "businessName businessImage");
 
-  const generate = await jwt.sign({ User: user._id }, process.env.JWT_SECRET || "SECRETEKEY", {
-    expiresIn: "60d",
-  });
+  const generate = jwt.sign(
+    { User: user._id, userId: user._id },
+    process.env.JWT_SECRET || process.env.TOKEN_KEY || "SECRETEKEY",
+    { expiresIn: "60d" },
+  );
 
-  user._doc.token = generate;
+  const userData = user.toObject ? user.toObject() : { ...user };
+  userData.token = generate;
 
   return res
     .status(statusCodes.OK)
@@ -1189,7 +1253,7 @@ exports.verifyOtpV2 = async (req, res) => {
       responseBuilder(
         apiResponseStatusCode[200],
         "register successfully",
-        user,
+        userData,
       ),
     );
 };
