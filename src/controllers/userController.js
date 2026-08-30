@@ -226,7 +226,19 @@ exports.updateProfile = async (req, res) => {
 
 exports.disableUser = async (req, res) => {
   const user = req.user;
-  const updateDisable = await userService.disableUser(user);
+  // The admin panel sends the state it wants ("make this user Inactive"), not a
+  // flip. Toggling regardless meant clicking Deactivate on an already-disabled
+  // user quietly re-enabled them. An absent flag still toggles, for old callers.
+  const requested = req.body?.isDisable ?? req.body?.disable;
+  const desired =
+    typeof requested === "boolean"
+      ? requested
+      : requested === "true"
+        ? true
+        : requested === "false"
+          ? false
+          : undefined;
+  const updateDisable = await userService.disableUser(user, desired);
   let message = updateDisable.disable
     ? defaultResponseMessage?.DISABLED
     : defaultResponseMessage?.ENABLED;

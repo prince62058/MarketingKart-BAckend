@@ -15,11 +15,13 @@ exports.updateUser = async (id, updateData) => {
   return await User.findByIdAndUpdate(id, updateData, { new: true });
 };
 
-// Disable an User by ID
-exports.disableUser = async (id, getUser) => {
+// Disable/enable a User. `desired` sets an explicit state; omitting it toggles,
+// which is what the older callers relied on.
+exports.disableUser = async (user, desired) => {
+  const disable = typeof desired === "boolean" ? desired : !user?.disable;
   return await User.findByIdAndUpdate(
-    id?._id,
-    { $set: { disable: !id?.disable } },
+    user?._id,
+    { $set: { disable } },
     { new: true }
   );
 };
