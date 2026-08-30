@@ -2,6 +2,7 @@ const internalCampaignModel = require("../models/internalCampiagnModel");
 const userModel = require("../models/userModel");
 const mongoose = require("mongoose");
 const { sendNotificationToMultipleTokens } = require("./notificationController");
+const { sendAdStatusNotification } = require("../helpers/appNotificationHelper");
 
 function getCurrentTime() {
   const now = new Date();
@@ -146,15 +147,18 @@ async function updateCampaignStatus(campaignId, newStatus) {
 
 async function sendPushNotification(campaign, notification) {
   try {
-    const user = await userModel.findById(campaign.businessId.userId).select("fcm").lean();
-    if (user?.fcm) {
-      await sendNotificationToMultipleTokens([user.fcm], notification);
-      console.log(`Push notification sent to user ${user._id} for campaign ${campaign._id}`);
-    } else {
-      console.warn(`No FCM token found for user ${campaign.businessId.userId}`);
+    const userId = campaign?.businessId?.userId || campaign?.businessId;
+    if (userId) {
+      await sendAdStatusNotification({
+        userId,
+        businessId: campaign?.businessId?._id || campaign?.businessId,
+        campaignId: campaign._id,
+        campaignName: campaign.campaignName || campaign.mainAdId,
+        status: "COMPLETED",
+      });
     }
   } catch (err) {
-    console.error(`Error sending push notification for campaign ${campaign._id}`, err);
+    console.error(`Error sending push notification for campaign ${campaign?._id}:`, err.message);
   }
 }
 

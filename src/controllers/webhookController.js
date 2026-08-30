@@ -15,6 +15,7 @@ const whatsappCampaignModel = require("../models/whatsappCampaignModel");
 const Notification = require("../models/notificationModel");
 const User = require("../models/userModel");
 const { sendNotificationToMultipleToken } = require("./notificationController");
+const { sendLeadNotification } = require("../helpers/appNotificationHelper");
 
 const getPhoneVariants = (rawPhone) => {
   const digits = String(rawPhone || "").replace(/\D/g, "");
@@ -163,34 +164,19 @@ exports.postWebhook = async (req, res) => {
       }
     }
 
-    // Send aggregated notifications for this webhook hit
+    // Send notifications for this webhook hit
     for (const [userId, notifData] of userNotifications) {
-      try {
-        const user = await User.findById(userId).select("fcm").lean();
-        if (user?.fcm) {
-          const count = notifData.count;
-          const notificationPayload = {
-            title: "New Lead Received",
-            description: count === 1 
-              ? "Aapki 1 nayi lead aayi hai!" 
-              : `Aapki ${count} nayi leads aayi hain!`,
-            customData: "default",
-          };
-          
-          await sendNotificationToMultipleToken([user.fcm], notificationPayload, count);
-          
-          await Notification.create({
-            userId: userId,
-            businessId: notifData.businessId,
-            title: notificationPayload.title,
-            message: notificationPayload.description,
-            status: "sent"
-          });
-          console.log(`[Webhook] Aggregated push notification (${count}) sent to user: ${userId}`);
-        }
-      } catch (notifErr) {
-        console.error("[Webhook] Error sending aggregated lead notification:", notifErr.message);
-      }
+       try {
+         const count = notifData.count;
+         await sendLeadNotification({
+           userId,
+           businessId: notifData.businessId,
+           count,
+         });
+         console.log(`[Webhook] Lead notification (${count}) dispatched to user: ${userId}`);
+       } catch (notifErr) {
+         console.error("[Webhook] Error sending aggregated lead notification:", notifErr.message);
+       }
     }
   }
 

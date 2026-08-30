@@ -6,6 +6,7 @@ const internalCampiagnModel = require("../models/internalCampiagnModel");
 const business = require("../models/businessModel");
 const userModel = require("../models/userModel");
 const { sendNotificationToMultipleToken } = require("./notificationController");
+const { sendLeadNotification } = require("../helpers/appNotificationHelper");
 
 // ✅ Prevent multiple schedulers from starting
 
@@ -213,16 +214,19 @@ async function fetchLeads(formId, accessToken, afterCursor = null) {
 
 async function sendPushNotification(campaign, notification, newLeadsCount) {
   try {
-    const busines = await business.findById(campaign._id);
-    const user = await userModel.findById(busines?.businessId?.userId).select("fcm").lean();
-
-    if (user?.fcm) {
-      await sendNotificationToMultipleToken([user.fcm], notification, newLeadsCount);
-    } else {
-      console.warn(`⚠️ No FCM token found for user ${busines?.businessId?.userId}`);
+    const busines = await business.findById(campaign._id || campaign.businessId);
+    const userId = busines?.userId || busines?.businessId?.userId;
+    if (userId) {
+      await sendLeadNotification({
+        userId,
+        businessId: busines?._id,
+        campaignId: campaign._id,
+        campaignName: campaign.campaignName || campaign.mainAdId,
+        count: newLeadsCount || 1,
+      });
     }
   } catch (err) {
-    console.error("❌ Error sending notification:", err.message);
+    console.error("❌ Error sending lead notification in LeadData:", err.message);
   }
 }
 

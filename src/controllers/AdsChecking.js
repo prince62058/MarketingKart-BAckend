@@ -3,6 +3,7 @@ const cron = require("node-cron");
 const internalCampaignModel = require("../models/internalCampiagnModel");
 const userModel = require("../models/userModel");
 const { sendNotificationToMultipleTokens } = require("./notificationController");
+const { sendAdStatusNotification, dispatchNotification } = require("../helpers/appNotificationHelper");
 
 const ACCESS_TOKEN = process.env.systemUserAccessToken; // Meta system user token
 const API_VERSION = "v22.0";
@@ -127,18 +128,32 @@ async function pauseEverythingInCampaign(campaignId) {
  */
 async function sendPushNotification(campaign, spend, leads, reach) {
   try {
-    const user = await userModel.findById(campaign?.businessId?.userId).select("fcm").lean();
-    if (user?.fcm) {
+    const userId = campaign?.businessId?.userId || campaign?.businessId;
+    if (userId) {
       const spendWithGst = spend * (1 + GST_RATE);
-      const notification = {
-        title: "📢 Campaign Completed!",
-        body: `Your campaign ${campaign.campaignId} has ended.\n` +
-              `📈 Leads: ${leads}\n` +
-              `👥 Reach: ${reach}\n` +
-              `💰 Spend (incl. GST): ₹${spendWithGst.toFixed(2)}`
-      };
-      await sendNotificationToMultipleTokens([user.fcm], notification);
-      console.log(`📩 Notification sent to user ${user._id} for campaign ${campaign._id}`);
+      const title = "📢 Campaign Completed!";
+      const body = `Your campaign "${campaign.campaignName || campaign.campaignId || 'Ad'}" has ended.\n` +
+            `📈 Leads: ${leads || 0} | 👥 Reach: ${reach || 0}\n` +
+            `💰 Spend (incl. GST): ₹${spendWithGst.toFixed(2)}`;
+
+      await dispatchNotification({
+        userId,
+        businessId: campaign?.businessId?._id || campaign?.businessId,
+        title,
+        message: body,
+        type: "ad",
+        metadata: {
+          campaignId: campaign._id,
+          leads,
+          reach,
+          spend: spendWithGst,
+        },
+        customData: {
+          campaignId: campaign._id,
+          leads,
+        },
+      });
+      console.log(`📩 Notification dispatched to user for campaign ${campaign._id}`);
     }
   } catch (err) {
     console.error(`❌ Error sending push notification for campaign ${campaign._id}:`, err.message);

@@ -28,6 +28,7 @@ const { createTransaction } = require("./transtionController");
 const Notification = require("../models/notificationModel");
 const OpenAI = require("openai");
 const { uploadUrlToBucket } = require("../utils/bucketHelper");
+const { sendAdStatusNotification, sendLeadNotification } = require("../helpers/appNotificationHelper");
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || "dummy-key",
@@ -3972,6 +3973,25 @@ exports.updateInternalCampaignStatus = async (req, res) => {
       { $set: patch },
       { new: true },
     );
+
+    if (updatedCampaign && (status === "ACTIVE" || status === "PAUSED" || status === "COMPLETED")) {
+      (async () => {
+        try {
+          const businessDoc = await businessModel.findById(updatedCampaign.businessId).select("userId").lean();
+          if (businessDoc?.userId) {
+            await sendAdStatusNotification({
+              userId: businessDoc.userId,
+              businessId: updatedCampaign.businessId,
+              campaignId: updatedCampaign._id,
+              campaignName: updatedCampaign.campaignName || updatedCampaign.mainAdId,
+              status,
+            });
+          }
+        } catch (e) {
+          console.error("Ad status notification error:", e.message);
+        }
+      })();
+    }
 
     return res.status(200).json({
       success: true,
