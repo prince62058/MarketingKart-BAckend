@@ -1022,13 +1022,22 @@ exports.verifyMobileOtpV2 = async (req, res) => {
     updateFields,
   );
 
+  const token = jwt.sign(
+    { User: user._id, userId: user._id },
+    process.env.JWT_SECRET || process.env.TOKEN_KEY || "SECRETEKEY",
+    { expiresIn: "365d" }
+  );
+
+  const userData = user.toObject ? user.toObject() : { ...user };
+  userData.token = token;
+
   return res
     .status(statusCodes.OK)
     .json(
       responseBuilder(
         apiResponseStatusCode[200],
         "Otp Verify Successfully",
-        user,
+        userData,
       ),
     );
 };
