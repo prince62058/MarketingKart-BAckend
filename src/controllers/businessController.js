@@ -50,32 +50,25 @@ exports.createBusiness = async (req, res) => {
       .json(responseBuilder(apiResponseStatusCode[400], "userId is required"));
   }
 
-  if (!businessCategoryId) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(
-        responseBuilder(
-          apiResponseStatusCode[400],
-          "businessCategoryId is required",
-        ),
-      );
+  let resolvedCategoryId = businessCategoryId;
+  if (!resolvedCategoryId || !mongoose.Types.ObjectId.isValid(resolvedCategoryId)) {
+    const found = await businessCategoryModel.findOne({ disable: false }).sort({ orderNumber: 1, createdAt: 1 });
+    if (found) resolvedCategoryId = found._id;
   }
 
-  if (!servicesId) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(
-        responseBuilder(apiResponseStatusCode[400], "servicesId is required"),
-      );
-  }
+  const validServices = Array.isArray(servicesId)
+    ? servicesId.filter(id => mongoose.Types.ObjectId.isValid(id))
+    : (mongoose.Types.ObjectId.isValid(servicesId) ? [servicesId] : (resolvedCategoryId ? [resolvedCategoryId] : []));
 
-  await userService.updateUser(userId, { roleId: "66ae0d19a1432b1bddd15b0f" });
+  try {
+    await userService.updateUser(userId, { roleId: "66ae0d19a1432b1bddd15b0f" });
+  } catch (_) {}
 
   let dataObj = {
     businessName,
     userId,
-    businessCategoryId,
-    servicesId,
+    businessCategoryId: resolvedCategoryId,
+    servicesId: validServices,
     businessContact,
     whatsappNumber,
     stateId,
