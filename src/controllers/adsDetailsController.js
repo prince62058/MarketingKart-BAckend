@@ -217,6 +217,19 @@ const computeAdChargeBreakdown = (adSpend, company) => {
   };
 };
 
+/**
+ * Meta ad account ids address as `act_<id>` on the Graph API. The env value is
+ * stored without that prefix, and the create calls used it raw — so every
+ * campaign, ad set, ad and creative POST went to /<id>/... and came back as
+ * "Object with ID '<id>' does not exist, cannot be loaded due to missing
+ * permissions", which reads like a permissions problem but is an addressing one.
+ */
+const metaAdAccountPath = (accountId = process.env.adAccountId) => {
+  const id = String(accountId || "").trim();
+  if (!id) return "";
+  return id.startsWith("act_") ? id : `act_${id}`;
+};
+
 const getMetaAccessToken = () =>
   process.env.systemUserAccessToken || process.env.admin_access_token;
 
@@ -589,7 +602,7 @@ async function createFacebookCampaign(
     fromName = check?.fromName;
   }
 
-  const apiUrl = `https://graph.facebook.com/v22.0/${process.env.adAccountId}/campaigns`;
+  const apiUrl = `https://graph.facebook.com/v22.0/${metaAdAccountPath()}/campaigns`;
   // Start PAUSED — admin approve flips Meta objects to ACTIVE (CC go-live policy).
   // Meta requires is_adset_budget_sharing_enabled when not using campaign budget (CBO).
   const payload = {
@@ -754,7 +767,7 @@ async function addCreativeImg(
 
     const requestOptions = { headers: formdata.getHeaders() };
     const apiResponse = await axios.post(
-      `https://graph.facebook.com/v22.0/${process.env.adAccountId}/adimages`,
+      `https://graph.facebook.com/v22.0/${metaAdAccountPath()}/adimages`,
       formdata,
       requestOptions,
     );
@@ -873,7 +886,7 @@ async function addCreativeImg(
     };
 
     const finalRes = await axios.post(
-      `https://graph.facebook.com/v22.0/${process.env.adAccountId}/adcreatives`,
+      `https://graph.facebook.com/v22.0/${metaAdAccountPath()}/adcreatives`,
       payload,
     );
 
@@ -950,7 +963,7 @@ async function addCreativeMultiImg(
 
       const requestOptions = { headers: formdata.getHeaders() };
       const apiResponse = await axios.post(
-        `https://graph.facebook.com/v22.0/${process.env.adAccountId}/adimages`,
+        `https://graph.facebook.com/v22.0/${metaAdAccountPath()}/adimages`,
         formdata,
         requestOptions,
       );
@@ -1164,7 +1177,7 @@ async function addCreativeMultiImg(
 
     // try {
     const finalRes = await axios.post(
-      `https://graph.facebook.com/v22.0/${process.env.adAccountId}/adcreatives`,
+      `https://graph.facebook.com/v22.0/${metaAdAccountPath()}/adcreatives`,
       payload,
     );
     console.log("Ad creative created successfully:", finalRes.data);
@@ -1237,7 +1250,7 @@ async function addCreativeVideo(
 
       const requestOptions = { headers: formdata.getHeaders() };
       const apiResponse = await axios.post(
-        `https://graph.facebook.com/v22.0/${process.env.adAccountId}/adimages`,
+        `https://graph.facebook.com/v22.0/${metaAdAccountPath()}/adimages`,
         formdata,
         requestOptions,
       );
@@ -1278,7 +1291,7 @@ async function addCreativeVideo(
       );
 
       const uploadResponse = await axios.post(
-        `https://graph-video.facebook.com/v21.0/${process.env.adAccountId}/advideos`,
+        `https://graph-video.facebook.com/v21.0/${metaAdAccountPath()}/advideos`,
         formdata,
         {
           headers: formdata.getHeaders(),
@@ -1383,7 +1396,7 @@ async function addCreativeVideo(
 
     // 4. Create the video ad creative
     const finalRes = await axios.post(
-      `https://graph.facebook.com/v21.0/${process.env.adAccountId}/adcreatives`,
+      `https://graph.facebook.com/v21.0/${metaAdAccountPath()}/adcreatives`,
       payload,
     );
 
@@ -1427,7 +1440,7 @@ async function createFacebookAdSet(
   destinationType = null,
 ) {
   try {
-    const apiUrl = `https://graph.facebook.com/v22.0/${process.env.adAccountId}/adsets`;
+    const apiUrl = `https://graph.facebook.com/v22.0/${metaAdAccountPath()}/adsets`;
     console.info("Creating Facebook Ad Set with data:", {
       name,
       optimization_goal,
@@ -1513,7 +1526,7 @@ async function createAd(
   internalCampaign,
 ) {
   try {
-    const apiUrl = `https://graph.facebook.com/v22.0/${process.env.adAccountId}/ads`;
+    const apiUrl = `https://graph.facebook.com/v22.0/${metaAdAccountPath()}/ads`;
     const payload = {
       name,
       adset_id: adsetId,
@@ -2997,7 +3010,7 @@ exports.scheduleDeliveryOfAdd = async (req, res) => {
     let internalCampaignData = await internalCampaignModel
       .findById(internalCampaignId)
       .populate("businessId", "metaAccessToken");
-    const apiUrl = `https://graph.facebook.com/v22.0/${process.env.adAccountId}/ads`;
+    const apiUrl = `https://graph.facebook.com/v22.0/${metaAdAccountPath()}/ads`;
     if (internalCampaignData.facebookAdSetId) {
       let response = await axios.post(apiUrl, {
         name: internalCampaignData.title,
@@ -5326,6 +5339,7 @@ exports.getMetaAdAccountCampaigns = async (req, res) => {
 // Exposed for src/scripts/testAdTypeRouting.js — the pure Meta-payload builders,
 // so ad routing can be regression-tested without calling Meta.
 exports.__test__ = {
+  metaAdAccountPath,
   resolveMetaAdSetConfig,
   buildWhatsAppCtaLink,
   normalizeWhatsAppPhone,
