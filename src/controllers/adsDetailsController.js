@@ -591,6 +591,7 @@ async function createFacebookCampaign(
 
   let leadFormId = null;
   let fromName = "";
+  let leadFormError = null;
   if (adKind === AD_KIND.LEAD_FORM) {
     let check = await getFormId(
       businessData,
@@ -600,6 +601,7 @@ async function createFacebookCampaign(
     );
     leadFormId = check?.leadFormId;
     fromName = check?.fromName;
+    leadFormError = check?.error || null;
   }
 
   const apiUrl = `https://graph.facebook.com/v22.0/${metaAdAccountPath()}/campaigns`;
@@ -641,7 +643,7 @@ async function createFacebookCampaign(
       { new: true },
     );
     console.info("Campaign saved to database:", data[0]);
-    return { data: data[0], leadFormId };
+    return { data: data[0], leadFormId, leadFormError };
   } catch (error) {
     await logMetaError({
       businessId: businessData._id,
@@ -717,7 +719,10 @@ async function getFormId(businessData, addTypeId, session, internalCampaign) {
       error,
       internalCampaignId: internalCampaign,
     });
-    return null;
+    // Carry Meta's own wording up. Returning a bare null let the run continue
+    // and fail later on a missing creative link, which told the advertiser
+    // nothing about the permission that actually blocked them.
+    return { leadFormId: null, fromName: "", error: formatMetaAxiosError(error) };
   }
 }
 
@@ -877,6 +882,10 @@ async function addCreativeImg(
       };
     }
 
+    // Meta rejects link_data without a link ("The link field is required"),
+    // and every branch above is supposed to set one — this guarantees it even
+    // if a new ad type lands here without its own destination.
+    if (!obj.link) obj.link = destinationUrl || "http://fb.me/";
     const objectStorySpec = { page_id, link_data: obj };
     const payload = {
       name: businessData.businessName,
@@ -1898,6 +1907,17 @@ async function processAdCreation({
       throw new Error(
         externalCampiagnData?.error ||
           "Meta campaign creation failed. Check ad account permissions and try again.",
+      );
+    }
+
+    // A Lead Form ad without its form cannot be built. Stop here with the
+    // reason Meta gave, rather than assembling a creative that has no lead
+    // form and no link and failing on "The link field is required" — which
+    // says nothing about the permission that actually blocked it.
+    if (adKind === AD_KIND.LEAD_FORM && !externalCampiagnData?.leadFormId) {
+      throw new Error(
+        externalCampiagnData?.leadFormError ||
+          "Meta would not create the Instant Form for this Page. Re-link the Page with the lead-ad permissions and try again.",
       );
     }
 
