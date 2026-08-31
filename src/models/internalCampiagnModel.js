@@ -99,6 +99,10 @@ const internalCampiagnModel = new mongoose.Schema(
         "COMPLETED",
         "SCHEDULED",
         "DELIVERY_ERROR",
+        // Meta reviewed the ad and turned it down. Distinct from DELIVERY_ERROR,
+        // which is our own failure to build the ad — the two need different
+        // wording and different next steps for the advertiser.
+        "REJECTED",
       ],
       default: "IN_REVIEW",
     },
@@ -145,6 +149,22 @@ const internalCampiagnModel = new mongoose.Schema(
     },
     metaCreateError: {
       type: String,
+      default: null,
+    },
+    // Meta's own view of this ad, refreshed on every list/detail read.
+    // `metaEffectiveStatus` is the raw Graph value (PENDING_REVIEW,
+    // DISAPPROVED, ADSET_PAUSED, ...) kept for support and debugging;
+    // `metaStatusReason` is the human-readable line Meta gives with it.
+    metaEffectiveStatus: {
+      type: String,
+      default: null,
+    },
+    metaStatusReason: {
+      type: String,
+      default: null,
+    },
+    metaStatusSyncedAt: {
+      type: Date,
       default: null,
     },
 	oldInsights: {

@@ -7,6 +7,10 @@ const AdErrorLog = require("../models/AdErrorLog");
 const transtionModel = require("../models/transtionModel");
 const crypto = require("crypto");
 const axios = require("axios");
+const {
+  syncCampaignStatuses,
+  applyStatusToDocs,
+} = require("../helpers/metaStatusHelper");
 
 // Create the appsecret_proof
 exports.permanentToken = (req, res) => {
@@ -434,6 +438,8 @@ exports.adListForAdmin = async (req, res) => {
       'PREPARING': 1,
       'PAUSED': 2,
       'COMPLETED': 3,
+      // Rejected sorts with the other things needing attention, above completed.
+      'REJECTED': 4,
       'DELIVERY_ERROR': 4,
     };
 
@@ -444,38 +450,11 @@ exports.adListForAdmin = async (req, res) => {
       return new Date(b.createdAt) - new Date(a.createdAt);
     });
 
-    // Sync real-time status from Meta for ads that have mainAdId (background, non-blocking)
-    const adsWithMetaId = data.filter(d => d.mainAdId);
-    if (adsWithMetaId.length > 0 && process.env.systemUserAccessToken) {
-      await Promise.allSettled(
-        adsWithMetaId.map(async (ad) => {
-          try {
-            const statusUrl = `https://graph.facebook.com/v22.0/${ad.mainAdId}?fields=effective_status&access_token=${process.env.systemUserAccessToken}`;
-            const { data: statusRes } = await axios.get(statusUrl);
-            const metaStatus = statusRes?.effective_status;
-            if (metaStatus) {
-              const statusMap = {
-                'ACTIVE': 'ACTIVE', 'PAUSED': 'PAUSED', 'DELETED': 'COMPLETED',
-                'ARCHIVED': 'COMPLETED', 'IN_PROCESS': 'PREPARING',
-                'WITH_ISSUES': 'DELIVERY_ERROR', 'CAMPAIGN_PAUSED': 'PAUSED',
-                'ADSET_PAUSED': 'PAUSED', 'PENDING_REVIEW': 'IN_REVIEW',
-                'DISAPPROVED': 'DELIVERY_ERROR', 'PREAPPROVED': 'PREPARING',
-                'PENDING_BILLING_INFO': 'PREPARING',
-              };
-              const mappedStatus = statusMap[metaStatus] || ad.status;
-              if (mappedStatus !== ad.status) {
-                console.log(`[adListForAdmin] Status sync: ${ad._id} DB=${ad.status} -> Meta=${metaStatus} -> ${mappedStatus}`);
-                await internalCampiagnModel.findByIdAndUpdate(ad._id, { $set: { status: mappedStatus } });
-                ad._doc.status = mappedStatus;
-              }
-            }
-          } catch (err) {
-            // Ignore individual ad status fetch errors
-          }
-        })
-      );
-
-      // Re-sort after status sync
+    // One shared reading of Meta's truth — the same mapping the app's list uses,
+    // so admin and advertiser never disagree about whether an ad is live.
+    const statusResults = await syncCampaignStatuses(data);
+    if (statusResults.size) {
+      applyStatusToDocs(data, statusResults);
       data = data.sort((a, b) => {
         const pA = statusPriority[a._doc?.status || a.status] ?? 5;
         const pB = statusPriority[b._doc?.status || b.status] ?? 5;

@@ -36,6 +36,10 @@ const {
   kindFromAdvertisementType,
   metaOutcomeFromAdvertisementType,
 } = require("../helpers/adTypeHelper");
+const {
+  syncCampaignStatuses,
+  applyStatusToDocs,
+} = require("../helpers/metaStatusHelper");
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || "dummy-key",
@@ -1768,7 +1772,7 @@ async function processAdCreation({
     // amount already charged, not this recomputed figure — otherwise the ledger
     // debit and the payment credit differ by the rounding between them.
     let adCost = finalAmount;
-    if (transactionId) {
+    if (transactionId && !transactionId.startsWith('wallet_') && !transactionId.startsWith('WAL_')) {
       const paidTxn = await Transaction.findOne({
         transactionId,
         type: "CREDIT",
@@ -1777,6 +1781,15 @@ async function processAdCreation({
         .lean();
       if (paidTxn && Number.isFinite(Number(paidTxn.amount))) {
         adCost = Number(paidTxn.amount);
+      }
+    } else {
+      // Wallet payment: verify user has sufficient funds
+      const currentUser = await userModel.findById(fid?.userId).session(session).lean();
+      const currentWallet = Number(currentUser?.wallet) || 0;
+      if (currentWallet < adCost) {
+        throw new Error(
+          `Insufficient wallet balance. Available: ₹${currentWallet.toLocaleString('en-IN')}, Required: ₹${adCost.toLocaleString('en-IN')}. Please top up your wallet or pay online.`
+        );
       }
     }
 
@@ -2284,6 +2297,21 @@ async function processAdCreation({
             },
           },
         );
+      } else {
+        // The run failed before the campaign row existed — a missing page
+        // token, an unknown ad type, no usable targeting. The request already
+        // answered 201, so without a row here the advertiser is told the ad was
+        // created and then finds nothing at all. Leave a visible, explained row.
+        await internalCampaignModel.create({
+          businessId,
+          title: name || "Untitled Campaign",
+          addTypeId: addTypeId || null,
+          status: "DELIVERY_ERROR",
+          metaCreateError: formatMetaAxiosError(error),
+          paymentStatus: transactionId ? "APPROVED" : "PENDING",
+          totalBudget: Number(totalBudget) || 0,
+          startDate: new Date().toUTCString(),
+        });
       }
     } catch (statusErr) {
       console.error("Failed to persist DELIVERY_ERROR:", statusErr.message);
@@ -2572,6 +2600,11 @@ exports.getAllAdsList = async (req, res) => {
         skip,
       );
 
+    // Refresh every campaign against Meta in one parallel pass before we
+    // serialize, so the list reports what Meta actually says right now —
+    // in review, live, paused, finished or rejected — not what we last wrote.
+    applyStatusToDocs(data, await syncCampaignStatuses(data));
+
     for (let i = 0; i < data.length; i++) {
       let totalReach = 0;
       let totalSpendBudget = 0;
@@ -2647,37 +2680,6 @@ exports.getAllAdsList = async (req, res) => {
       if (data[i].mainAdId) {
         await fetchInsights(data[i].mainAdId);
 
-        // Sync real-time status from Meta
-        try {
-          const statusUrl = `https://graph.facebook.com/v22.0/${data[i].mainAdId}?fields=effective_status&access_token=${process.env.systemUserAccessToken}`;
-          const { data: statusRes } = await axios.get(statusUrl);
-          const metaStatus = statusRes?.effective_status;
-          if (metaStatus) {
-            const statusMap = {
-              'ACTIVE': 'ACTIVE',
-              'PAUSED': 'PAUSED',
-              'DELETED': 'COMPLETED',
-              'ARCHIVED': 'COMPLETED',
-              'IN_PROCESS': 'PREPARING',
-              'WITH_ISSUES': 'DELIVERY_ERROR',
-              'CAMPAIGN_PAUSED': 'PAUSED',
-              'ADSET_PAUSED': 'PAUSED',
-              'PENDING_REVIEW': 'IN_REVIEW',
-              'DISAPPROVED': 'DELIVERY_ERROR',
-              'PREAPPROVED': 'PREPARING',
-              'PENDING_BILLING_INFO': 'PREPARING',
-            };
-            const mappedStatus = statusMap[metaStatus] || data[i].status;
-            if (mappedStatus !== data[i].status) {
-              console.log(`[getAllAdsList] Status sync: Campaign ${data[i]._id} DB=${data[i].status} -> Meta=${metaStatus} -> Mapped=${mappedStatus}`);
-              await internalCampaignModel.findByIdAndUpdate(data[i]._id, { $set: { status: mappedStatus } });
-              data[i]._doc.status = mappedStatus;
-              data[i].status = mappedStatus;
-            }
-          }
-        } catch (statusErr) {
-          console.warn(`[getAllAdsList] Failed to fetch status for ad ${data[i].mainAdId}:`, statusErr.message);
-        }
       }
 
       totalBudget = data[i]?.totalBudget || 0;
@@ -2730,6 +2732,11 @@ exports.getAllAdsList = async (req, res) => {
         totalBudget: (addAmount?.totalBudget || 0) || totalBudget,
         dailyBudget: data[i]?.dailyBudget || 0,
         metaCreateError: data[i]?.metaCreateError || null,
+        // What Meta itself says, so the app can show the real reason a
+        // campaign is in review, paused or rejected rather than a bare badge.
+        metaEffectiveStatus: data[i]?.metaEffectiveStatus || null,
+        metaStatusReason: data[i]?.metaStatusReason || null,
+        metaStatusSyncedAt: data[i]?.metaStatusSyncedAt || null,
         totalClicks: finalClicks,
         totalLeads: finalLeads,
         totalFirstReplies: finalFirstReplies,
