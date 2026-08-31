@@ -242,7 +242,13 @@ exports.updateBusiness = async (req, res) => {
         req.body.pageId,
         req.body.pageAccessToken,
       );
-      
+
+      // A Page token that is missing a permission still links fine and then
+      // fails much later, deep inside ad creation. Say so now, by name.
+      const missingScopes = await findMissingScopes(
+        updateData.metaAccessToken || req.body.metaAccessToken || business.metaAccessToken,
+      );
+
       const clientUserName = await fetchClientUserName(req.body.pageAccessToken).catch(() => null);
 
       if (businessManagerResponse.error) {
@@ -275,6 +281,24 @@ exports.updateBusiness = async (req, res) => {
           pageName: req.body.pageName || clientUserName || businessManagerResponse.updatedBusiness.pageName,
         }
       );
+
+      if (missingScopes.length) {
+        console.warn(
+          `⚠️ Business ${business._id}: Page linked without ${missingScopes.join(", ")}`,
+        );
+        return res.status(statusCodes.OK).json({
+          ...responseBuilder(
+            apiResponseStatusCode[200],
+            defaultResponseMessage.UPDATED,
+            updatedBusiness,
+          ),
+          pageLinkWarning:
+            "Page linked, but Facebook did not grant " +
+            missingScopes.map((s) => REQUIRED_PAGE_SCOPES[s]).join(", ") +
+            ". Re-link the page and accept every permission, otherwise lead ads cannot run.",
+          missingPermissions: missingScopes,
+        });
+      }
     } else if (req.body.pageId) {
       // Page is linked but we could not get a Page access token. Keep the link
       // (the user did connect the page) and say so, because in this state Lead
@@ -374,6 +398,42 @@ async function handleMetaAccessToken(metaAccessToken) {
         error: error.response?.data || error.message,
       },
     };
+  }
+}
+
+/**
+ * Permissions the Page token must carry for a Lead Form ad to work end to end.
+ * Each one maps to a call the backend makes later; without it that call fails
+ * with a Graph error the advertiser cannot act on.
+ */
+const REQUIRED_PAGE_SCOPES = {
+  pages_show_list: "list your Pages",
+  pages_read_engagement: "read the Page",
+  pages_manage_metadata: "receive leads through the webhook",
+  pages_manage_ads: "create the Instant Form",
+  leads_retrieval: "read your leads",
+};
+
+/**
+ * Which of the required permissions this token is actually missing.
+ * Returns [] when the check itself could not run — never block a link on it.
+ */
+async function findMissingScopes(userAccessToken) {
+  if (!userAccessToken) return [];
+  try {
+    const { data } = await axios.get(
+      "https://graph.facebook.com/v22.0/debug_token",
+      {
+        params: { input_token: userAccessToken, access_token: userAccessToken },
+        timeout: 8000,
+      },
+    );
+    const granted = new Set(data?.data?.scopes || []);
+    if (!granted.size) return [];
+    return Object.keys(REQUIRED_PAGE_SCOPES).filter((s) => !granted.has(s));
+  } catch (error) {
+    console.warn("findMissingScopes failed:", error.message);
+    return [];
   }
 }
 
