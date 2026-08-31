@@ -1293,12 +1293,16 @@ async function addCreativeVideo(
 ) {
   // Kind, not id: the creative's CTA must follow what the ad type does.
   const adKind = kindFromAdvertisementType(advertisementType);
+  // Both the thumbnail and the video land here, and the video used to overwrite
+  // the thumbnail's path — so neither could be cleaned up afterwards.
+  const tempFiles = [];
   let filePath;
   try {
     if (thambnail) {
       const fileUrl = thambnail;
       const fileName = path.basename(fileUrl);
       filePath = path.resolve(__dirname, fileName);
+      tempFiles.push(filePath);
 
       const response = await axios({
         url: fileUrl,
@@ -1340,6 +1344,7 @@ async function addCreativeVideo(
       const fileUrl = videoLocation;
       const fileName = path.basename(fileUrl);
       filePath = path.resolve(__dirname, fileName);
+      tempFiles.push(filePath);
 
       const response = await axios({
         url: fileUrl,
@@ -1375,7 +1380,14 @@ async function addCreativeVideo(
         },
       );
 
-      var videoId = uploadResponse.data.id || 1372784820829306;
+      // Falling back to a hardcoded id here put a completely unrelated video
+      // into the advertiser's ad, and the ad still reported success.
+      if (!uploadResponse.data?.id) {
+        throw new Error(
+          "Meta accepted the video upload but returned no video id, so the ad would carry the wrong creative.",
+        );
+      }
+      var videoId = uploadResponse.data.id;
       console.info("Video uploaded to Facebook successfully. ID:", videoId);
     }
 
@@ -1384,8 +1396,16 @@ async function addCreativeVideo(
       video_id: videoId,
       message: primaryText || "Check out our video!",
       title: headline || "Your Video Title", // Title (max 40 chars)
-      image_hash: hashKey || "0bb4fbf2cf32ede42ab11fea438207fd",
     };
+
+    // The description the advertiser typed was accepted as a parameter and then
+    // never sent, so it existed everywhere except on the ad itself. `video_data`
+    // spells it `link_description`, not `description` as `link_data` does.
+    if (caption) videoData.link_description = caption;
+
+    // Only a thumbnail we actually uploaded. The hardcoded hash that used to
+    // stand in here was a stranger's image on the advertiser's ad.
+    if (hashKey) videoData.image_hash = hashKey;
 
     // Add call-to-action based on advertisement type
     switch (advertisementType) {
@@ -1486,10 +1506,16 @@ async function addCreativeVideo(
     });
     return { id: null, videoId: null, error: error.message };
   } finally {
-    // if (filePath && fs.existsSync(filePath)) {
-    //   fs.unlinkSync(filePath);
-    //   console.info("Temporary video file deleted:", filePath);
-    // }
+    for (const temp of tempFiles) {
+      try {
+        if (temp && fs.existsSync(temp)) {
+          fs.unlinkSync(temp);
+          console.info("Temporary file deleted:", temp);
+        }
+      } catch (cleanupError) {
+        console.warn("Temp cleanup failed:", temp, cleanupError.message);
+      }
+    }
   }
 }
 
