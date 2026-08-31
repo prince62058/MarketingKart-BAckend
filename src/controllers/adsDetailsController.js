@@ -677,56 +677,110 @@ async function getFormId(businessData, addTypeId, session, internalCampaign) {
       addTypeId,
       internalCampaign,
     );
-    if (!checkLeadForm?.check) {
-      if (!businessData?.pageId || !businessData?.pageAccessToken) {
-        throw new Error("Missing required page data or access token");
-      }
-      let fromName =
-        `${businessData.businessName}__${checkLeadForm.count}__${internalCampaign}`.substring(
-          0,
-          60,
-        );
-      const apiUrl = `https://graph.facebook.com/v22.0/${businessData.pageId}/leadgen_forms`;
-      const formData = {
-        name: fromName,
-        locale: "en_US",
-        questions: [
-          { type: "FULL_NAME", key: "full_name" },
-          { type: "EMAIL", key: "email" },
-          { type: "PHONE", key: "phone_number" },
-        ],
-        privacy_policy: {
-          url: "https://www.freeprivacypolicy.com/live/58f3de93-84fc-4b26-95ae-ff312f7bf298",
-          link_text: "Our Privacy Policy",
-        },
-        follow_up_action_url: "https://leadkart.in",
+    if (checkLeadForm?.check?.formId) {
+      return {
+        leadFormId: checkLeadForm.check.formId,
+        fromName: checkLeadForm.check.fromName || "",
       };
+    }
 
-      const response = await axios.post(apiUrl, formData, {
-        params: { access_token: businessData.pageAccessToken },
+    if (!businessData?.pageId) {
+      throw new Error("Missing required Facebook Page ID");
+    }
+
+    // 1. Check if the Page already has existing LeadGen forms on Meta
+    const userToken = businessData.pageAccessToken || businessData.metaAccessToken || process.env.systemUserAccessToken;
+    if (userToken) {
+      try {
+        const existingFormsRes = await axios.get(
+          `https://graph.facebook.com/v22.0/${businessData.pageId}/leadgen_forms`,
+          {
+            params: {
+              access_token: userToken,
+              fields: "id,name,status",
+              limit: 20,
+            },
+          },
+        );
+        const forms = existingFormsRes.data?.data || [];
+        const activeForm = forms.find(f => f.status === "ACTIVE") || forms[0];
+        if (activeForm?.id) {
+          console.info("Discovered existing LeadGen form on Meta Page:", activeForm.id, activeForm.name);
+          await leadFormModel.create(
+            [
+              {
+                fromName: activeForm.name || "Default Lead Form",
+                formId: activeForm.id,
+                adTypeId: addTypeId,
+                pageId: businessData.pageId,
+                businessId: businessData._id,
+                internalCampiagnId: internalCampaign,
+              },
+            ],
+            { session },
+          );
+          return { leadFormId: activeForm.id, fromName: activeForm.name || "" };
+        }
+      } catch (checkErr) {
+        console.warn("Could not list existing forms on Page:", checkErr.message);
+      }
+    }
+
+    // 2. Create new form on Meta
+    let fromName =
+      `${businessData.businessName}__${checkLeadForm.count}__${internalCampaign}`.substring(
+        0,
+        60,
+      );
+    const apiUrl = `https://graph.facebook.com/v22.0/${businessData.pageId}/leadgen_forms`;
+    const formData = {
+      name: fromName,
+      locale: "en_US",
+      questions: [
+        { type: "FULL_NAME", key: "full_name" },
+        { type: "EMAIL", key: "email" },
+        { type: "PHONE", key: "phone_number" },
+      ],
+      privacy_policy: {
+        url: "https://marketingkart.ai/privacy",
+        link_text: "Our Privacy Policy",
+      },
+      follow_up_action_url: "https://marketingkart.ai",
+    };
+
+    let response = null;
+    try {
+      response = await axios.post(apiUrl, formData, {
+        params: { access_token: businessData.pageAccessToken || process.env.systemUserAccessToken },
         headers: { "Content-Type": "application/json" },
       });
-
-      const leadFormId = response.data.id;
-      await leadFormModel.create(
-        [
-          {
-            fromName: fromName,
-            formId: leadFormId,
-            adTypeId: addTypeId,
-            pageId: businessData.pageId,
-            businessId: businessData._id,
-            internalCampiagnId: internalCampaign,
-          },
-        ],
-        { session },
-      );
-      return { leadFormId, fromName };
+    } catch (createErr) {
+      // Retry with systemUserAccessToken
+      if (process.env.systemUserAccessToken && businessData.pageAccessToken !== process.env.systemUserAccessToken) {
+        response = await axios.post(apiUrl, formData, {
+          params: { access_token: process.env.systemUserAccessToken },
+          headers: { "Content-Type": "application/json" },
+        });
+      } else {
+        throw createErr;
+      }
     }
-    return {
-      leadFormId: checkLeadForm?.check?.formId || null,
-      fromName: checkLeadForm?.check?.fromName || "",
-    };
+
+    const leadFormId = response.data.id;
+    await leadFormModel.create(
+      [
+        {
+          fromName: fromName,
+          formId: leadFormId,
+          adTypeId: addTypeId,
+          pageId: businessData.pageId,
+          businessId: businessData._id,
+          internalCampiagnId: internalCampaign,
+        },
+      ],
+      { session },
+    );
+    return { leadFormId, fromName };
   } catch (error) {
     await logMetaError({
       businessId: businessData._id,
@@ -734,9 +788,6 @@ async function getFormId(businessData, addTypeId, session, internalCampaign) {
       error,
       internalCampaignId: internalCampaign,
     });
-    // Carry Meta's own wording up. Returning a bare null let the run continue
-    // and fail later on a missing creative link, which told the advertiser
-    // nothing about the permission that actually blocked them.
     return { leadFormId: null, fromName: "", error: formatMetaAxiosError(error) };
   }
 }
