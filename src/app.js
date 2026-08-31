@@ -187,6 +187,7 @@ app.use("/api/staff", staffRoute);
 
 app.use("/api", require("./routes/whatsappRoute"));
 app.use("/api/premium-plan", require("./routes/premiumPlanRoute"));
+app.use("/api", require("./routes/pageLinkOAuthRoute"));
 app.use("/api", require("./routes/whatsappWalletRoute"));
 app.use("/api", require("./routes/whatsappSupportRoute"));
 app.use("/api/whatsapp/chat", require("./routes/whatsappChatRoute"));
