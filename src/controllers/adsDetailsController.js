@@ -1597,6 +1597,11 @@ async function processAdCreation({
   const session = await mongoose.startSession();
   session.startTransaction();
   let trackedInternalCampaignId = null;
+  // The failure path deliberately commits, to keep the DELIVERY_ERROR row the
+  // advertiser needs to see. That would also commit the wallet debit, so a
+  // failed ad has to hand the money back explicitly.
+  let chargedAmount = 0;
+  let chargedUserId = null;
 
   try {
     // Input validation
@@ -1825,12 +1830,21 @@ async function processAdCreation({
     // debit always runs — matched to the exact amount that was credited, so
     // the two cancel to zero instead of drifting by the rounding difference
     // between the app's total and this recomputed one.
-    if (Number.isFinite(adCost) && adCost > 0) {
-      await userModel.findByIdAndUpdate(
-        fid?.userId,
+    if (Number.isFinite(adCost) && adCost > 0 && fid?.userId) {
+      // Conditional on the balance still being there. The earlier read-then-write
+      // check could be raced by a second ad and overdraw the wallet.
+      const debited = await userModel.updateOne(
+        { _id: fid.userId, wallet: { $gte: adCost } },
         { $inc: { wallet: -adCost } },
         { session },
       );
+      if (!debited.modifiedCount) {
+        throw new Error(
+          `Insufficient wallet balance for ₹${adCost.toLocaleString("en-IN")}. Top up your wallet or pay online.`,
+        );
+      }
+      chargedAmount = adCost;
+      chargedUserId = fid.userId;
     }
 
     const effectiveMobileNumber =
@@ -2267,6 +2281,34 @@ async function processAdCreation({
           },
           { session },
         );
+        // Give back anything already charged. Committing here is what keeps the
+        // DELIVERY_ERROR row visible, and it would otherwise also make the
+        // wallet debit for an ad that never ran permanent.
+        if (chargedAmount > 0 && chargedUserId) {
+          await userModel.findByIdAndUpdate(
+            chargedUserId,
+            { $inc: { wallet: chargedAmount } },
+            { session },
+          );
+          await Transaction.create(
+            [
+              {
+                type: "CREDIT",
+                walletType: "MAIN",
+                amount: chargedAmount,
+                userId: chargedUserId,
+                adsId: trackedInternalCampaignId,
+                transactionId: `refund_${trackedInternalCampaignId}`,
+                description: "Refund — ad could not be delivered",
+              },
+            ],
+            { session },
+          );
+          console.log(
+            `[processAdCreation] refunded ₹${chargedAmount} for failed campaign ${trackedInternalCampaignId}`,
+          );
+          chargedAmount = 0;
+        }
         await session.commitTransaction();
       } else if (session.inTransaction()) {
         await session.abortTransaction();
