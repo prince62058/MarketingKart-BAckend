@@ -25,8 +25,31 @@ const redirectUri = () =>
   process.env.PAGE_LINK_REDIRECT_URI ||
   "https://api.marketingkart.in/api/facebook/page/oauth/callback";
 
+/**
+ * The "MarketingKart Login" configuration on the Meta dashboard. Its permission
+ * list — not any scope this code sends — decides what the resulting token can
+ * do, so it is pinned here rather than left to an env var that has to be set
+ * on every environment before Page linking works at all.
+ */
+const DEFAULT_PAGE_LINK_CONFIG_ID = "1378037207117017";
+
+/** Public Meta app id — the same one already shipped inside the Android app. */
+const DEFAULT_META_APP_ID = "2996420554032786";
+
 const configId = () =>
-  process.env.PAGE_LINK_CONFIG_ID || process.env.META_LOGIN_CONFIG_ID;
+  process.env.PAGE_LINK_CONFIG_ID ||
+  process.env.META_LOGIN_CONFIG_ID ||
+  DEFAULT_PAGE_LINK_CONFIG_ID;
+
+const appId = () =>
+  process.env.clientId || process.env.facebook_app_id || DEFAULT_META_APP_ID;
+
+/**
+ * Deliberately env-only: the app secret is the one value here that must not sit
+ * in the repository. It is already configured on the server for the WhatsApp
+ * signup flow, so this reads the same variable.
+ */
+const appSecret = () => process.env.clientSecret || process.env.facebook_app_secret;
 
 /** Small HTML page shown in the browser once consent is done. */
 const closingPage = (title, detail, ok = true) => `<!doctype html>
@@ -50,20 +73,9 @@ const closingPage = (title, detail, ok = true) => `<!doctype html>
 exports.startPageLink = async (req, res) => {
   try {
     const { businessId } = req.body;
-    const clientId = process.env.clientId || process.env.facebook_app_id;
 
     if (!businessId) {
       return res.status(400).json({ success: false, message: "businessId is required" });
-    }
-    if (!clientId) {
-      return res.status(500).json({ success: false, message: "Meta app id is not configured on the server." });
-    }
-    if (!configId()) {
-      return res.status(500).json({
-        success: false,
-        message:
-          "Facebook login configuration id is not set. Add PAGE_LINK_CONFIG_ID to the server environment.",
-      });
     }
 
     const state = crypto.randomBytes(32).toString("hex");
@@ -74,7 +86,7 @@ exports.startPageLink = async (req, res) => {
     });
 
     const params = new URLSearchParams({
-      client_id: clientId,
+      client_id: appId(),
       redirect_uri: redirectUri(),
       response_type: "code",
       // The configuration carries the permissions; a scope list here is what
@@ -121,8 +133,8 @@ exports.handlePageLinkCallback = async (req, res) => {
 
     const { data: tokenRes } = await axios.get(`${GRAPH}/oauth/access_token`, {
       params: {
-        client_id: process.env.clientId || process.env.facebook_app_id,
-        client_secret: process.env.clientSecret || process.env.facebook_app_secret,
+        client_id: appId(),
+        client_secret: appSecret(),
         redirect_uri: redirectUri(),
         code,
       },
