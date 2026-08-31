@@ -2357,6 +2357,12 @@ async function processAdCreation({
         // token, an unknown ad type, no usable targeting. The request already
         // answered 201, so without a row here the advertiser is told the ad was
         // created and then finds nothing at all. Leave a visible, explained row.
+        // Carry everything the advertiser actually submitted, so the failed
+        // campaign still reads as the ad they built — creative included —
+        // rather than an empty black card with an error on it.
+        const failedMedia = normalizeMediaArray(
+          Array.isArray(fileLocation) ? fileLocation : [fileLocation],
+        );
         await internalCampaignModel.create({
           businessId,
           title: name || "Untitled Campaign",
@@ -2365,7 +2371,20 @@ async function processAdCreation({
           metaCreateError: formatMetaAxiosError(error),
           paymentStatus: transactionId ? "APPROVED" : "PENDING",
           totalBudget: Number(totalBudget) || 0,
-          startDate: new Date().toUTCString(),
+          facebookBudget: Number(facebookBudget) || 0,
+          instaBudget: Number(instaBudget) || 0,
+          dailyBudget: Number(clientDailyBudgetRupees) || 0,
+          image: failedMedia,
+          thambnail: ensurePublicMediaUrl(thambnail) || failedMedia[0] || null,
+          caption,
+          headline,
+          primaryText,
+          isFacebookAdEnabled: Boolean(isFacebookAdEnabled),
+          isInstaAdEnabled: Boolean(isInstaAdEnabled),
+          startDate: startDate
+            ? new Date(startDate * 1000).toUTCString()
+            : new Date().toUTCString(),
+          ...(endDate ? { endDate: new Date(endDate * 1000).toUTCString() } : {}),
         });
       }
     } catch (statusErr) {
