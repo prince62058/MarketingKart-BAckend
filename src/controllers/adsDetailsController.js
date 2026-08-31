@@ -288,6 +288,21 @@ const resolveMetaAdSetConfig = ({
   };
 };
 
+/**
+ * Our campaign lifecycle → the status Meta actually understands.
+ *
+ * Meta has no "completed": an ad is running or it is not. Finishing a campaign
+ * therefore means pausing every Meta object behind it while COMPLETED stays our
+ * own terminal state — which is why the Meta sync treats COMPLETED as terminal
+ * and never reads a PAUSED ad back over it. Before this, COMPLETED only touched
+ * Mongo and the ad kept delivering, and spending, on Meta.
+ */
+const META_STATUS_FOR_LIFECYCLE = {
+  ACTIVE: "ACTIVE",
+  PAUSED: "PAUSED",
+  COMPLETED: "PAUSED",
+};
+
 const setMetaObjectStatus = async (objectId, status) => {
   if (!objectId || !status) return { ok: false, skipped: true };
   const token = getMetaAccessToken();
@@ -4114,30 +4129,46 @@ exports.updateInternalCampaignStatus = async (req, res) => {
     const patch = { status };
     if (mainAdId) patch.mainAdId = mainAdId;
 
-    if (status === "ACTIVE" || status === "PAUSED") {
-      const metaResults = [];
-      if (existing.mainAdId) {
-        metaResults.push(await setMetaObjectStatus(existing.mainAdId, status));
-      }
-      if (existing.facebookAdSetId) {
-        metaResults.push(
-          await setMetaObjectStatus(existing.facebookAdSetId, status),
-        );
-      }
+    const metaStatus = META_STATUS_FOR_LIFECYCLE[status];
+    if (metaStatus) {
       const external = existing.externalCampiagnId
         ? await ExternalCampaignsModel.findById(existing.externalCampiagnId)
         : null;
-      if (external?.meta_CampaignId) {
-        metaResults.push(
-          await setMetaObjectStatus(external.meta_CampaignId, status),
-        );
+      const objectIds = [
+        mainAdId || existing.mainAdId,
+        existing.facebookAdSetId,
+        external?.meta_CampaignId,
+      ].filter(Boolean);
+
+      // Nothing was ever built on Meta — ad creation failed before the ad
+      // object existed. Writing ACTIVE here used to report a live campaign that
+      // does not exist anywhere, so the admin only learns the truth when no
+      // leads ever arrive.
+      if (!objectIds.length && status === "ACTIVE") {
+        return res.status(400).json({
+          success: false,
+          message: existing.metaCreateError
+            ? `This campaign was never created on Meta, so there is nothing to activate. Ad creation failed with: ${existing.metaCreateError}`
+            : "This campaign was never created on Meta, so there is nothing to activate. Recreate the ad once the Facebook Page is linked with full permissions.",
+        });
       }
+
+      const metaResults = [];
+      for (const objectId of objectIds) {
+        metaResults.push(await setMetaObjectStatus(objectId, metaStatus));
+      }
+
       const failed = metaResults.find((r) => r && r.ok === false && !r.skipped);
       if (failed) {
-        patch.metaCreateError = failed.error || "Meta status update failed";
-      } else if (status === "ACTIVE") {
-        patch.metaCreateError = null;
+        // Meta refused, so the ad is still in whatever state it was in.
+        // Recording the requested status anyway is what made the admin list
+        // disagree with Ads Manager.
+        return res.status(400).json({
+          success: false,
+          message: `Meta rejected the status change: ${failed.error || "unknown error"}`,
+        });
       }
+      if (status === "ACTIVE") patch.metaCreateError = null;
     }
 
     const updatedCampaign = await internalCampaignModel.findByIdAndUpdate(
