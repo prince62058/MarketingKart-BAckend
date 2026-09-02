@@ -3491,7 +3491,10 @@ exports.getAdEstimate = async (req, res) => {
     });
   }
 
-  let activeAdAccountId = adAccountId || "act_1309111200667696";
+  // No hardcoded stand-in: an unset `adAccountId` used to fall through to a
+  // leftover account id from another portfolio, so spend and estimates silently
+  // pointed at somebody else's account instead of failing where it happened.
+  let activeAdAccountId = adAccountId;
 
   if (businessId && mongoose.isValidObjectId(businessId)) {
     try {
@@ -3502,6 +3505,13 @@ exports.getAdEstimate = async (req, res) => {
     } catch (dbErr) {
       console.error("Failed to fetch business metaAdAccountId:", dbErr);
     }
+  }
+
+  if (!activeAdAccountId) {
+    return res.status(500).json({
+      error:
+        "No Meta ad account is configured. Set the adAccountId environment variable, or give this business a metaAdAccountId.",
+    });
   }
 
   const cpm = cpmByLocation[country] || cpmByLocation.default;
