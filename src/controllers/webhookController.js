@@ -1,8 +1,10 @@
 const axios = require("axios");
+const mongoose = require("mongoose");
 const webhookModel = require("../models/webhookModel");
 const VERIFY_TOKEN = process.env.META_LEAD_WEBHOOK_VERIFY_TOKEN || "da21e0d80f1d406e99ff7b518fd3936b";
 const businessModel = require("../models/businessModel");
 const leadModel = require("../models/leadModel");
+const leadFormModel = require("../models/leadFormsModel");
 const adsetModel = require("../models/internalCampiagnModel");
 const addDetailsModel = require("../models/adsDetailModel");
 const leadHistoryChangeStatusModel = require("../models/leadHistoryChangeStatusModel");
@@ -16,6 +18,7 @@ const Notification = require("../models/notificationModel");
 const User = require("../models/userModel");
 const { sendNotificationToMultipleToken } = require("./notificationController");
 const { sendLeadNotification } = require("../helpers/appNotificationHelper");
+const { syncLeadsForBusiness } = require("../services/leadSyncService");
 
 const getPhoneVariants = (rawPhone) => {
   const digits = String(rawPhone || "").replace(/\D/g, "");
@@ -37,7 +40,11 @@ const getPhoneVariants = (rawPhone) => {
   return Array.from(variants);
 };
 const fetchAndProcessLeadDetails = async (data, PAGE_ACCESS_TOKEN) => {
-  const url = `https://graph.facebook.com/v21.0/${data?.leadgenId}?access_token=${PAGE_ACCESS_TOKEN}`;
+  // A Page token that has since expired is the usual reason a lead lands in the
+  // app with no name and no number, so fall back to the system user token that
+  // every other Meta call here already uses.
+  const token = PAGE_ACCESS_TOKEN || process.env.systemUserAccessToken;
+  const url = `https://graph.facebook.com/v22.0/${data?.leadgenId}?access_token=${token}`;
   try {
     const response = await axios.get(url);
     const leadDetails = response?.data;
@@ -107,6 +114,7 @@ exports.postWebhook = async (req, res) => {
 
           let business = await businessModel.findOne({ pageId: pageId });
           const adsetIdFromWebhook = value.adset_id;
+          const formId = value.form_id;
           let campaign = await adsetModel.findOne({
             $or: [
               { mainAdId: adId },
@@ -117,11 +125,31 @@ exports.postWebhook = async (req, res) => {
             ],
           });
 
+          // Fall back to the form we created for the campaign. An ad rebuilt
+          // after a reset carries an ad id we have never stored, so matching on
+          // the ad alone threw those leads away — even though the advertiser
+          // paid for exactly that form.
+          let leadForm = null;
+          if (formId) {
+            leadForm = await leadFormModel
+              .findOne({ formId })
+              .select("internalCampiagnId businessId");
+          }
+          if (!campaign && leadForm?.internalCampiagnId) {
+            campaign = await adsetModel.findById(leadForm.internalCampiagnId);
+          }
+          if (!business && leadForm?.businessId) {
+            business = await businessModel.findById(leadForm.businessId);
+          }
+
           await webhookModel.create({ leadgenId: leadgenId });
 
           // Only create app leads for Meta ads that are linked in Leadkart.
           // Unlinked / historical Instant Form ads must not fill the Leads tab.
           if (!business || !campaign) {
+            console.warn(
+              `[Webhook] leadgen ${leadgenId} ignored — no linked ${!business ? "business" : "campaign"} for page ${pageId}, ad ${adId}, form ${formId}`,
+            );
             continue;
           }
 
@@ -173,6 +201,16 @@ exports.postWebhook = async (req, res) => {
            businessId: notifData.businessId,
            count,
          });
+         // Same event the hourly sync emits, so an open Leads tab updates the
+         // moment Meta delivers rather than on the next pull-to-refresh.
+         if (global.io) {
+           global.io.to(`business:${String(notifData.businessId)}`).emit("newLead", {
+             count,
+             businessId: String(notifData.businessId),
+             message: `${count} new lead(s) received`,
+             timestamp: new Date().toISOString(),
+           });
+         }
          console.log(`[Webhook] Lead notification (${count}) dispatched to user: ${userId}`);
        } catch (notifErr) {
          console.error("[Webhook] Error sending aggregated lead notification:", notifErr.message);
@@ -596,114 +634,193 @@ exports.getAllLeadsByPagination = async (req, res) => {
 };
 
 
+/**
+ * GET /getAllLeadsByPaginationForAdmin?userId=&businessId=&page=&limit=&search=
+ *
+ * The lead list behind both the app's Leads tab and the admin panel.
+ *
+ * It used to project four fields — name, email, `phone` and createdAt — and
+ * `phone` is not a field on leadModel at all, so every lead reached the app
+ * with no number to call, no status and no idea which ad produced it. It also
+ * demanded a `userId`, which is why the admin panel's own leads page answered
+ * 400. Both are fixed here: admins see everything, everyone else sees their own
+ * businesses' leads and nothing else.
+ */
 exports.getAllLeadsByPaginationForAdmin = async (req, res) => {
-  const { page = 1, limit = 20, search, userId } = req.query;
-  const skip = (page - 1) * limit;
+  const { page = 1, limit = 20, search, userId, businessId, stage } = req.query;
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const pageSize = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+  const skip = (pageNum - 1) * pageSize;
 
   try {
-    if (!userId) {
-      return res.status(400).json({
-        success: false,
-        message: "User ID missing in request",
-      });
+    const requester = req.user;
+    const isAdmin = requester?.userType === "ADMIN";
+    // A team member's leads are their owner's leads; anyone else asking about
+    // another account is quietly answered with their own.
+    const ownsRequestedAccount =
+      !userId ||
+      String(userId) === String(requester?._id) ||
+      String(userId) === String(requester?.userId || "");
+    const scopeUserId = isAdmin
+      ? userId || null
+      : ownsRequestedAccount
+        ? userId || requester?.userId || requester?._id
+        : requester?._id;
+
+    const filter = {};
+
+    if (scopeUserId) {
+      const userBusinesses = await businessModel
+        .find({ userId: scopeUserId }, { _id: 1 })
+        .lean();
+      filter.businessId = { $in: userBusinesses.map((b) => b._id) };
     }
 
-    // Step 1: Find all business IDs for this user
-    const userBusinesses = await businessModel.find({ userId }, { _id: 1 });
-    const businessIds = userBusinesses.map((b) => b._id);
+    if (businessId && mongoose.Types.ObjectId.isValid(businessId)) {
+      const allowed =
+        !filter.businessId ||
+        filter.businessId.$in.some((id) => String(id) === String(businessId));
+      if (!allowed) {
+        return res.status(200).json({
+          success: true,
+          message: "All Leads fetched successfully",
+          data: [],
+          page: pageNum,
+          limit: pageSize,
+          totalPages: 0,
+          totalLeads: 0,
+        });
+      }
+      filter.businessId = new mongoose.Types.ObjectId(businessId);
+    }
 
-    // Step 2: Build aggregation pipeline
-    const matchStage = {
-      $match: {
-        businessId: { $in: businessIds },
-      },
-    };
+    if (stage && stage !== "ALL") filter.leadStatus = stage;
 
-    const lookupStage = {
-      $lookup: {
-        from: "businesses",
-        localField: "businessId",
-        foreignField: "_id",
-        as: "business",
-      },
-    };
+    if (search) {
+      const rx = new RegExp(String(search).trim(), "i");
+      const or = [
+        { name: rx },
+        { email: rx },
+        { userContactNumber: rx },
+        { whatsappNumber: rx },
+      ];
+      // Searching by business name stays possible without an aggregation join.
+      const businessScope = filter.businessId
+        ? { _id: filter.businessId }
+        : {};
+      const matchedBusinesses = await businessModel
+        .find({ ...businessScope, businessName: rx }, { _id: 1 })
+        .lean();
+      if (matchedBusinesses.length) {
+        or.push({ businessId: { $in: matchedBusinesses.map((b) => b._id) } });
+      }
+      filter.$or = or;
+    }
 
-    const unwindStage = {
-      $unwind: "$business",
-    };
+    const [leads, totalLeads] = await Promise.all([
+      leadModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(pageSize)
+        .populate("businessId", "businessName")
+        .populate({
+          path: "internalCampiagnId",
+          select: "title image thambnail status addTypeId",
+          populate: { path: "addTypeId", select: "title advertisementType" },
+        })
+        .lean(),
+      leadModel.countDocuments(filter),
+    ]);
 
-    // Enhanced search stage
-    const searchStage = search
-      ? {
-          $match: {
-            $or: [
-              { "business.businessName": { $regex: search, $options: "i" } },
-              { name: { $regex: search, $options: "i" } },
-              { email: { $regex: search, $options: "i" } },
-              { userContactNumber: { $regex: search, $options: "i" } },
-              // If phone number is stored with country code or formatted differently
-              { 
-                $expr: {
-                  $regexMatch: {
-                    input: { $toString: "$phone" },
-                    regex: search,
-                    options: "i"
-                  }
-                }
-              }
-            ],
-          },
-        }
-      : null;
-
-    const facetStage = {
-      $facet: {
-        data: [
-          { $sort: { createdAt: -1 } },
-          { $skip: skip },
-          { $limit: parseInt(limit) },
-          {
-            $project: {
-              name: 1,
-              email: 1,
-              phone: 1,
-              createdAt: 1,
-              "business.businessName": 1,
-              // Include other fields you need
-            }
-          }
-        ],
-        totalCount: [{ $count: "count" }],
-      },
-    };
-
-    const pipeline = [matchStage, lookupStage, unwindStage];
-    if (searchStage) pipeline.push(searchStage);
-    pipeline.push(facetStage);
-
-    // Fixed typo: aggregrate -> aggregate
-    const results = await leadModel.aggregate(pipeline);
-
-    const leads = results[0]?.data || [];
-    const totalLeads = results[0]?.totalCount[0]?.count || 0;
-    const totalPages = Math.ceil(totalLeads / limit);
+    const data = leads.map((lead) => {
+      const ad = lead.internalCampiagnId;
+      const image = Array.isArray(ad?.image) ? ad.image[0] : ad?.image;
+      return {
+        ...lead,
+        // Kept under both names: the app reads `business`, the admin panel
+        // reads the populated `businessId`.
+        business: lead.businessId
+          ? { businessName: lead.businessId.businessName }
+          : null,
+        adName: ad?.title || null,
+        adTypeName: ad?.addTypeId?.title || null,
+        adImage: image || ad?.thambnail || null,
+        adStatus: ad?.status || null,
+      };
+    });
 
     res.status(200).json({
       success: true,
       message: "All Leads fetched successfully",
-      data: leads,
-      page: parseInt(page),
-      limit: parseInt(limit),
-      totalPages,
+      data,
+      page: pageNum,
+      limit: pageSize,
+      totalPages: Math.ceil(totalLeads / pageSize),
       totalLeads,
+      totalCount: totalLeads,
     });
   } catch (error) {
     console.error("Error fetching leads:", error);
     res.status(500).json({
       success: false,
       message: error.message,
-      error: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      error: process.env.NODE_ENV === "development" ? error.stack : undefined,
     });
+  }
+};
+
+/**
+ * GET /leads/syncNow?businessId=&internalCampaignId=
+ *
+ * Pull-to-refresh on the Leads tab. Asks Meta directly for the Instant Form
+ * leads of this business and stores anything the webhook never delivered, so a
+ * lead that Meta already has can never be sitting invisible for an hour until
+ * the cron runs.
+ */
+exports.syncLeadsNow = async (req, res) => {
+  try {
+    const { businessId, internalCampaignId } = req.query;
+    if (!businessId || !mongoose.Types.ObjectId.isValid(businessId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "A valid businessId is required" });
+    }
+
+    const requester = req.user;
+    const business = await businessModel
+      .findById(businessId)
+      .select("userId")
+      .lean();
+    if (!business) {
+      return res.status(404).json({ success: false, message: "Business not found" });
+    }
+
+    const isAdmin = requester?.userType === "ADMIN";
+    const ownsBusiness =
+      String(business.userId) === String(requester?._id) ||
+      String(business.userId) === String(requester?.userId || "");
+    if (!isAdmin && !ownsBusiness) {
+      return res
+        .status(403)
+        .json({ success: false, message: "This business is not yours" });
+    }
+
+    const result = await syncLeadsForBusiness(businessId, {
+      internalCampaignId:
+        internalCampaignId && mongoose.Types.ObjectId.isValid(internalCampaignId)
+          ? internalCampaignId
+          : null,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: result.reason || "Leads synced with Meta",
+      data: result,
+    });
+  } catch (error) {
+    console.error("syncLeadsNow error:", error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -740,6 +857,7 @@ exports.getLeadOfYourBussinessByMemberId = async (req, res) => {
     const {
       businessId,
       adId,
+      internalCampaignId,
       stage,
       name,
       sortByDate = -1,
@@ -754,6 +872,11 @@ exports.getLeadOfYourBussinessByMemberId = async (req, res) => {
     // Basic filters
     if (businessId) filter.businessId = businessId;
     if (adId) filter.adId = adId;
+    // Filtering by campaign rather than by ad id survives an ad being rebuilt:
+    // the new ad has a new Meta id, but every lead still points at the campaign.
+    if (internalCampaignId && mongoose.Types.ObjectId.isValid(internalCampaignId)) {
+      filter.internalCampiagnId = internalCampaignId;
+    }
     if (name) {
       const searchRegex = new RegExp(name, "i");
       filter.$or = [

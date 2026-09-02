@@ -51,6 +51,14 @@ router.get(
   asyncHandler(authUser),
   asyncHandler(controller.getAllLeadsByPaginationForAdmin)
 );
+
+// Pull-to-refresh on the Leads tab: ask Meta for this business's Instant Form
+// leads right now instead of waiting for the hourly catch-up.
+router.get(
+  "/leads/syncNow",
+  asyncHandler(authUser),
+  asyncHandler(controller.syncLeadsNow)
+);
 router.get(
   "/getLeadDetails",
   asyncHandler(authUser),

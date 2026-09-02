@@ -40,10 +40,119 @@ const {
   syncCampaignStatuses,
   applyStatusToDocs,
 } = require("../helpers/metaStatusHelper");
+const {
+  getCampaignInsights,
+  invalidateCampaignInsights,
+  mapWithConcurrency,
+} = require("../helpers/metaInsights");
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || "dummy-key",
 });
+
+/**
+ * How a lead is tied back to the campaign that produced it.
+ *
+ * Matching on pageId is deliberately not in here: every campaign of a page
+ * would then claim every lead of that page, and each ad would report the same
+ * inflated total. The webhook and the Meta lead sync both stamp
+ * internalCampiagnId and adId, so those are the honest keys.
+ */
+const campaignLeadMatch = (campaign, addDetails = null) => {
+  const match = [{ internalCampiagnId: campaign._id }];
+  // mainAdId and metaAdId hold the same value on ads we created, and only
+  // differ on ones an admin linked by hand.
+  const adIds = [
+    ...new Set(
+      [campaign.mainAdId, campaign.metaAdId, addDetails?.mainAdId]
+        .filter(Boolean)
+        .map(String),
+    ),
+  ];
+  if (adIds.length) match.push({ adId: { $in: adIds } });
+  return match;
+};
+
+/** YYYY-MM-DD for a lead, in the same shape Meta labels its daily rows. */
+const leadDayKey = (lead) => {
+  const raw = lead?.createdTime || lead?.createdAt;
+  if (!raw) return null;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+};
+
+/**
+ * Merges what Meta reports with what we have actually stored, into the exact
+ * shape the Ad Detail screen draws.
+ *
+ * Pure on purpose — every rule that decides which of two numbers the advertiser
+ * sees lives here and is covered by scripts/testMetaInsights.js, instead of
+ * being buried in a request handler that needs Meta and a database to run.
+ */
+const buildAdInsightsReport = ({ campaign, insights, leadDocs = [] }) => {
+  const dbLeadCount = leadDocs.length;
+  const leadsPerDay = new Map();
+  for (const lead of leadDocs) {
+    const day = leadDayKey(lead);
+    if (day) leadsPerDay.set(day, (leadsPerDay.get(day) || 0) + 1);
+  }
+
+  // Same rule the ads list uses, so a card and its detail screen can never
+  // show two different numbers for the same ad: a live Meta reading plus any
+  // manual addition, else the value we stored (which already includes it).
+  const addAmount = campaign.AddAmountInsights || {};
+  const merge = (live, stored, added) =>
+    live > 0 ? live + (added || 0) : Number(stored) || 0;
+
+  // Meta's own lead count can lag the webhook by minutes, and the webhook can
+  // lag Meta when a page subscription is broken — showing the higher of the
+  // two is the only number that is never an undercount.
+  const metaLeads = insights.results?.results || 0;
+  const totalLeads = Math.max(dbLeadCount, metaLeads, campaign.totalLeads || 0);
+
+  const dailyTrend = (insights.dailyTrend || []).map((day) => ({
+    ...day,
+    leads: Math.max(day.leads || 0, leadsPerDay.get(day.date) || 0),
+  }));
+
+  return {
+    // Fall back to the last values we stored whenever Meta gave us nothing
+    // this second, so a rate-limited request never blanks a running ad.
+    kpi: {
+      reach: merge(insights.kpi.reach, campaign.totalReach, addAmount.totalReach),
+      impressions: merge(
+        insights.kpi.impressions,
+        campaign.totalImpression,
+        addAmount.totalImpression,
+      ),
+      clicks: merge(insights.kpi.clicks, campaign.totalClicks, addAmount.totalClicks),
+      linkClicks: insights.kpi.linkClicks || 0,
+      spend: merge(
+        insights.kpi.spend,
+        campaign.spendAmount || campaign.totalSpendBudget,
+        addAmount.totalSpendBudget,
+      ),
+      ctr: insights.kpi.ctr || 0,
+      cpc: insights.kpi.cpc || 0,
+      cpm: insights.kpi.cpm || 0,
+      frequency: insights.kpi.frequency || 0,
+    },
+    ageBreakdown: insights.ageBreakdown || [],
+    genderBreakdown: insights.genderBreakdown || [],
+    platformBreakdown: insights.platformBreakdown || [],
+    dailyTrend,
+    engagement: insights.engagement,
+    results: insights.results,
+    totalLeads,
+    metaLeads,
+    dbLeads: dbLeadCount,
+    /** False means Meta has no delivery for this ad yet — show an empty state, not zeros. */
+    hasMetaData: insights.hasMetaData,
+    insightLevel: insights.target?.level || null,
+    syncedAt: insights.syncedAt,
+  };
+};
 
 /** Leadkart advertisement type ObjectIds */
 // Ad behaviour is keyed off advertisementModel.advertisementType (a schema
@@ -2765,26 +2874,18 @@ exports.imageVideoUpload = async (req, res) => {
 
 exports.getAllAdsList = async (req, res) => {
   try {
-    const { businessId, page = 1, addTypeId } = req.query;
-
-    console.log("getAllAdsList Request received:", { businessId, page, addTypeId });
+    const { businessId, page = 1, addTypeId, refresh } = req.query;
 
     const skip = (page - 1) * 20;
     let obj = {};
 
-    if (businessId && businessId !== 'undefined' && mongoose.Types.ObjectId.isValid(businessId)) {
+    if (businessId && businessId !== "undefined" && mongoose.Types.ObjectId.isValid(businessId)) {
       obj.businessId = businessId;
     } else {
       console.warn("getAllAdsList: businessId is missing or invalid in query params", businessId);
     }
-    
-    // Define pageId for lead counting fallback
-    let pageId = null;
-    if (obj.businessId) {
-      const business = await businessModel.findById(obj.businessId);
-      pageId = business?.pageId;
-    }
-    if (addTypeId && addTypeId !== 'undefined') {
+
+    if (addTypeId && addTypeId !== "undefined") {
       obj.addTypeId = addTypeId;
     }
 
@@ -2799,161 +2900,126 @@ exports.getAllAdsList = async (req, res) => {
     // in review, live, paused, finished or rejected — not what we last wrote.
     applyStatusToDocs(data, await syncCampaignStatuses(data));
 
-    for (let i = 0; i < data.length; i++) {
-      let totalReach = 0;
-      let totalSpendBudget = 0;
-      let totalImpression = 0;
-      let totalClicks = 0;
-      let totalBudget = 0;
-      let totalFirstReplies = 0;
+    const bypassCache = String(refresh) === "1" || String(refresh) === "true";
 
-      const insightsUrl = (adSetId) =>
-        `https://graph.facebook.com/v22.0/${adSetId}/insights?date_preset=maximum&access_token=${process.env.systemUserAccessToken}&fields=reach,impressions,clicks,spend,actions`;
+    // One campaign per round trip, several at a time. Done serially this loop
+    // took roughly a second per ad, which is what made the Ads tab feel like it
+    // was hanging for anyone with more than a handful of campaigns; done all at
+    // once it trips Meta's rate limit and every card comes back empty.
+    await mapWithConcurrency(
+      data,
+      async (campaign) => {
+        const [insights, leadCount] = await Promise.all([
+          getCampaignInsights(campaign, {
+            // The list only draws the four headline numbers; the age, gender
+            // and daily breakdowns are four extra Graph calls per card that
+            // nothing on this screen reads.
+            breakdowns: false,
+            maxAgeMs: bypassCache ? 0 : undefined,
+          }),
+          leadModel.countDocuments({ $or: campaignLeadMatch(campaign) }),
+        ]);
 
-      const fetchInsights = async (adSetId) => {
-        try {
-          const { data: response } = await axios.get(insightsUrl(adSetId));
-          const insight = response?.data?.[0];
-          if (insight) {
-            const reach = parseInt(insight.reach || 0, 10);
-            const spend = parseFloat(insight.spend || 0);
-            const impressions = parseInt(insight.impressions || 0, 10);
-            const clicks = parseInt(insight.clicks || 0, 10);
+        const addAmount = campaign?.AddAmountInsights || {};
+        const metaResults = insights.results?.results || 0;
 
-            totalReach += Number.isFinite(reach) ? reach : 0;
-            totalSpendBudget += Number.isFinite(spend)
-              ? Math.ceil(spend * 1.18)
-              : 0; // Adding 18% GST
-            totalImpression += Number.isFinite(impressions) ? impressions : 0;
-            totalClicks += Number.isFinite(clicks) ? clicks : 0;
+        /**
+         * A live Meta reading plus whatever an admin added by hand — or, when
+         * Meta had nothing to say this second, the value we stored last time.
+         *
+         * The stored value already includes the admin's addition, so adding it
+         * again on the fallback path is what made numbers creep upward on every
+         * pull-to-refresh of an ad Meta was rate-limiting.
+         */
+        const merge = (live, stored, added) =>
+          live > 0 ? live + (added || 0) : Number(stored) || 0;
 
-            const actions = insight.actions || [];
-            const firstReplyAction = actions.find(
-              (action) =>
-                action.action_type ===
-                  "onsite_conversion.messaging_first_reply" ||
-                action.action_type === "click_to_call_call_confirm",
-            );
-            const conversationStartedAction = actions.find(
-              (action) =>
-                action.action_type ===
-                "onsite_conversion.messaging_conversation_started_7d",
-            );
-            const leadGenerationAction = actions.find(
-              (action) =>
-                action.action_type === "leadgen" ||
-                action.action_type === "lead" ||
-                action.action_type === "onsite_conversion.lead" ||
-                action.action_type === "onsite_conversion.lead_grouped" ||
-                action.action_type === "lead_grouped" ||
-                action.action_type === "onsite_web_lead",
-            );
-            const firstReplies = parseInt(firstReplyAction?.value || 0, 10);
-            const conversationStarted = parseInt(
-              conversationStartedAction?.value || 0,
-              10,
-            );
-            const leadsFromMeta = parseInt(leadGenerationAction?.value || 0, 10);
+        // Meta's count and our stored leads can each be ahead of the other for
+        // a few minutes; the advertiser should never see the smaller one.
+        // Neither source includes the admin's addition, so that is added once.
+        const finalLeads =
+          Math.max(leadCount, metaResults) + (addAmount?.totalLeads || 0);
+        const finalFirstReplies =
+          Math.max(metaResults, leadCount) + (addAmount?.totalFirstReplies || 0);
+        const finalReach = merge(
+          insights.kpi.reach,
+          campaign?.totalReach,
+          addAmount?.totalReach,
+        );
+        const finalImpression = merge(
+          insights.kpi.impressions,
+          campaign?.totalImpression,
+          addAmount?.totalImpression,
+        );
+        const finalClicks = merge(
+          insights.kpi.clicks,
+          campaign?.totalClicks,
+          addAmount?.totalClicks,
+        );
+        // Never wipe stored spend when Meta returned no insights row.
+        const hasLiveSpend = insights.kpi.spend > 0;
+        const finalSpend = merge(
+          insights.kpi.spend,
+          campaign?.spendAmount || campaign?.totalSpendBudget,
+          addAmount?.totalSpendBudget,
+        );
 
-            let currentAdLeads = 0;
-            if (leadsFromMeta > 0) {
-              currentAdLeads = leadsFromMeta;
-            } else {
-              currentAdLeads = Math.max(firstReplies, conversationStarted);
-            }
-            totalFirstReplies += currentAdLeads;
-          }
-        } catch (error) {
-          console.warn(
-            `Failed to fetch insights for adSetId ${adSetId}:`,
-            error.message,
-          );
+        if (insights.hasMetaData) {
+          await internalCampaignModel.findByIdAndUpdate(campaign._id, {
+            $set: {
+              ...(hasLiveSpend
+                ? { spendAmount: finalSpend, totalSpendBudget: finalSpend }
+                : {}),
+              totalReach: finalReach,
+              totalImpression: finalImpression,
+              totalClicks: finalClicks,
+              totalFirstReplies: finalFirstReplies,
+              totalLeads: finalLeads,
+              updatedAt: new Date(),
+            },
+          });
         }
-      };
 
-      if (data[i].mainAdId) {
-        await fetchInsights(data[i].mainAdId);
-
-      }
-
-      totalBudget = data[i]?.totalBudget || 0;
-      const addAmount = data[i]?.AddAmountInsights || {};
-
-      // Count leads per-campaign only. Matching on pageId here would count
-      // ALL leads of the page across every campaign of that page, making each
-      // campaign show the same inflated total. Leads always carry
-      // internalCampiagnId + adId (set by the webhook), so those are accurate.
-      const leadMatch = [{ internalCampiagnId: data[i]._id }];
-      if (data[i].mainAdId) leadMatch.push({ adId: data[i].mainAdId });
-      let leadCount = await leadModel.countDocuments({ $or: leadMatch });
-      console.log(`Campaign ${data[i]._id} (mainAdId: ${data[i].mainAdId}, pageId: ${pageId}) -> Found ${leadCount} leads`);
-
-      // Update for old app compatibility: ensure totalFirstReplies reflects leadCount if it's a lead ad
-      const finalFirstReplies = Math.max(totalFirstReplies || 0, leadCount || 0) + (addAmount?.totalFirstReplies || 0);
-      const finalReach = ((totalReach || 0) + (addAmount?.totalReach || 0)) || data[i]?.totalReach || 0;
-      const finalImpression = ((totalImpression || 0) + (addAmount?.totalImpression || 0)) || data[i]?.totalImpression || 0;
-      const finalClicks = ((totalClicks || 0) + (addAmount?.totalClicks || 0)) || data[i]?.totalClicks || 0;
-      // Never wipe DB spend when Meta returned no insights row
-      const hasLiveSpend = Number.isFinite(totalSpendBudget) && totalSpendBudget > 0;
-      const dbSpend = Number(data[i]?.spendAmount || data[i]?.totalSpendBudget) || 0;
-      const finalSpend =
-        (hasLiveSpend ? totalSpendBudget : dbSpend) +
-        (addAmount?.totalSpendBudget || 0);
-      const finalLeads = Math.max(leadCount, totalFirstReplies || 0) + (addAmount?.totalLeads || 0);
-
-      // Persist live Meta metrics only when we have something meaningful
-      if (hasLiveSpend || finalReach || finalImpression || finalClicks) {
-        await internalCampaignModel.findByIdAndUpdate(data[i]._id, {
-          $set: {
-            ...(hasLiveSpend
-              ? { spendAmount: finalSpend, totalSpendBudget: finalSpend }
-              : {}),
-            totalReach: finalReach,
-            totalImpression: finalImpression,
-            totalClicks: finalClicks,
-            totalFirstReplies: finalFirstReplies,
-            totalLeads: finalLeads,
-            updatedAt: new Date(),
-          },
+        Object.assign(campaign._doc || campaign, {
+          totalReach: finalReach,
+          totalSpendBudget: finalSpend,
+          spendAmount: finalSpend,
+          totalImpression: finalImpression,
+          totalBudget: (addAmount?.totalBudget || 0) || campaign?.totalBudget || 0,
+          dailyBudget: campaign?.dailyBudget || 0,
+          metaCreateError: campaign?.metaCreateError || null,
+          // What Meta itself says, so the app can show the real reason a
+          // campaign is in review, paused or rejected rather than a bare badge.
+          metaEffectiveStatus: campaign?.metaEffectiveStatus || null,
+          metaStatusReason: campaign?.metaStatusReason || null,
+          metaStatusSyncedAt: campaign?.metaStatusSyncedAt || null,
+          totalClicks: finalClicks,
+          totalLeads: finalLeads,
+          totalFirstReplies: finalFirstReplies,
+          // Lets the app say "no delivery yet" instead of drawing four zeros
+          // that look like a broken ad.
+          hasMetaData: insights.hasMetaData,
+          metricsSyncedAt: insights.syncedAt,
         });
-      }
 
-      Object.assign(data[i]._doc || data[i], {
-        totalReach: finalReach,
-        totalSpendBudget: finalSpend,
-        spendAmount: finalSpend,
-        totalImpression: finalImpression,
-        totalBudget: (addAmount?.totalBudget || 0) || totalBudget,
-        dailyBudget: data[i]?.dailyBudget || 0,
-        metaCreateError: data[i]?.metaCreateError || null,
-        // What Meta itself says, so the app can show the real reason a
-        // campaign is in review, paused or rejected rather than a bare badge.
-        metaEffectiveStatus: data[i]?.metaEffectiveStatus || null,
-        metaStatusReason: data[i]?.metaStatusReason || null,
-        metaStatusSyncedAt: data[i]?.metaStatusSyncedAt || null,
-        totalClicks: finalClicks,
-        totalLeads: finalLeads,
-        totalFirstReplies: finalFirstReplies,
-      });
+        const normalizedImageList = normalizeMediaArray(campaign._doc.image || []);
+        const normalizedThumbnail = ensurePublicMediaUrl(campaign._doc.thambnail);
+        const campaignVideoUrl =
+          normalizedImageList.find((url) => isLikelyVideoUrl(url)) || null;
+        const campaignImageUrl =
+          normalizedImageList.find((url) => !isLikelyVideoUrl(url)) || null;
 
-      const normalizedImageList = normalizeMediaArray(data[i]._doc.image || []);
-      const normalizedThumbnail = ensurePublicMediaUrl(data[i]._doc.thambnail);
-      const campaignVideoUrl =
-        normalizedImageList.find((url) => isLikelyVideoUrl(url)) || null;
-      const campaignImageUrl =
-        normalizedImageList.find((url) => !isLikelyVideoUrl(url)) || null;
+        Object.assign(campaign._doc, {
+          image: normalizedImageList,
+          thambnail: normalizedThumbnail,
+          videoUrl: campaignVideoUrl,
+          mediaUrl:
+            campaignVideoUrl || campaignImageUrl || normalizedThumbnail || null,
+        });
+      },
+    );
 
-      Object.assign(data[i]._doc, {
-        image: normalizedImageList,
-        thambnail: normalizedThumbnail,
-        videoUrl: campaignVideoUrl,
-        mediaUrl: campaignVideoUrl || campaignImageUrl || normalizedThumbnail || null,
-      });
-    }
-
-    const totalCount = await internalCampaignModel.countDocuments({
-      businessId,
-    });
+    const totalCount = await internalCampaignModel.countDocuments(obj);
     const pageCount = Math.ceil(totalCount / 20);
 
     return res.status(statusCodes.OK).json({
@@ -3017,31 +3083,35 @@ exports.getInternalCampiagnById = async (req, res) => {
 };
 
 /**
- * GET /getAdInsightsReport?internalCampaignId=xxx
+ * GET /getAdInsightsReport?internalCampaignId=xxx&refresh=1
  *
- * Returns real-time Meta insights for the Ad Detail screen:
- *  - kpi: reach, impressions, clicks, spend
- *  - ageBreakdown: impressions per age group
- *  - genderBreakdown: impressions per gender with percentages
- *  - dailyTrend: daily impressions, clicks, leads
- *  - engagement: bookmarks, link_clicks, reactions from Meta actions
- *  - totalLeads: real lead count from DB
+ * Everything the Ad Detail screen draws, straight from Meta:
+ *  - kpi: reach, impressions, clicks, link clicks, spend (GST inc.), CTR/CPC/CPM
+ *  - ageBreakdown / genderBreakdown: real delivery per age bucket and gender
+ *  - platformBreakdown: Facebook vs Instagram delivery
+ *  - dailyTrend: per-day impressions, clicks, spend and leads
+ *  - totalLeads: the leads actually stored for this campaign, never an estimate
+ *
+ * `refresh=1` bypasses the 60s insights cache, which is what pull-to-refresh
+ * on the phone sends.
  */
 exports.getAdInsightsReport = async (req, res) => {
   try {
-    const { internalCampaignId } = req.query;
-    if (!internalCampaignId) {
-      return res.status(400).send({ success: false, message: "internalCampaignId is required" });
+    const { internalCampaignId, refresh } = req.query;
+    if (!internalCampaignId || !mongoose.Types.ObjectId.isValid(internalCampaignId)) {
+      return res
+        .status(400)
+        .send({ success: false, message: "A valid internalCampaignId is required" });
     }
 
     const campaign = await internalCampaignModel
       .findById(internalCampaignId)
-      .populate("businessId", "pageId pageAccessToken");
+      .populate("externalCampiagnId", "meta_CampaignId")
+      .populate("addTypeId", "title advertisementType");
     if (!campaign) {
       return res.status(404).send({ success: false, message: "Campaign not found" });
     }
 
-    const accessToken = process.env.systemUserAccessToken;
     const addDetails = await addDetailsModel.findOne({
       $or: [
         { internalCampiagnId: campaign._id },
@@ -3050,168 +3120,38 @@ exports.getAdInsightsReport = async (req, res) => {
       ],
     });
 
-    const targetMetaId =
-      campaign.metaAdId ||
-      addDetails?.mainAdId ||
-      campaign.facebookAdSetId ||
-      campaign.instaAdSetId;
-
-    // Default response initialized with real DB metrics
-    const report = {
-      kpi: {
-        reach: campaign.totalReach || 0,
-        impressions: campaign.totalImpression || 0,
-        clicks: campaign.totalClicks || 0,
-        spend: Number(campaign.spendAmount || campaign.totalSpendBudget) || 0,
-      },
-      ageBreakdown: [],
-      genderBreakdown: [],
-      dailyTrend: [],
-      engagement: { bookmarks: 0, clicks: campaign.totalClicks || 0, reactions: 0 },
-      totalLeads: campaign.totalLeads || 0,
+    // The ad id lives on the campaign for ads we created and on adsDetails for
+    // ads recreated later; feeding both in keeps insights working either way.
+    const insightSource = {
+      ...(campaign.toObject ? campaign.toObject() : campaign),
+      mainAdId: campaign.mainAdId || addDetails?.mainAdId || null,
     };
 
-    if (targetMetaId && accessToken) {
-      const baseUrl = `https://graph.facebook.com/v22.0/${targetMetaId}/insights`;
+    const [insights, leadDocs] = await Promise.all([
+      getCampaignInsights(insightSource, {
+        breakdowns: true,
+        maxAgeMs: String(refresh) === "1" || String(refresh) === "true" ? 0 : undefined,
+      }),
+      // Real leads, not Meta's estimate: these are the rows the Leads tab shows,
+      // so the two screens can never disagree about how many leads an ad got.
+      leadModel
+        .find({ $or: campaignLeadMatch(campaign, addDetails) })
+        .select("createdAt createdTime")
+        .lean(),
+    ]);
 
-      // 1. KPI metrics
-      try {
-        const { data: kpiRes } = await axios.get(baseUrl, {
-          params: {
-            date_preset: "maximum",
-            access_token: accessToken,
-            fields: "reach,impressions,clicks,spend,actions",
-          },
-        });
-        const insight = kpiRes?.data?.[0];
-        if (insight) {
-          const liveReach = parseInt(insight.reach || 0, 10);
-          const liveImp = parseInt(insight.impressions || 0, 10);
-          const liveClicks = parseInt(insight.clicks || 0, 10);
-          const liveSpend = Math.ceil(parseFloat(insight.spend || 0) * 1.18); // with 18% GST
+    const report = buildAdInsightsReport({ campaign, insights, leadDocs });
 
-          if (liveReach > 0) report.kpi.reach = liveReach;
-          if (liveImp > 0) report.kpi.impressions = liveImp;
-          if (liveClicks > 0) report.kpi.clicks = liveClicks;
-          if (liveSpend > 0) report.kpi.spend = liveSpend;
-
-          // Extract engagement from actions
-          const actions = insight.actions || [];
-          for (const action of actions) {
-            if (action.action_type === "post_save" || action.action_type === "onsite_conversion.post_save") {
-              report.engagement.bookmarks += parseInt(action.value || 0, 10);
-            }
-            if (action.action_type === "link_click") {
-              report.engagement.clicks += parseInt(action.value || 0, 10);
-            }
-            if (action.action_type === "post_reaction" || action.action_type === "like" || action.action_type === "post") {
-              report.engagement.reactions += parseInt(action.value || 0, 10);
-            }
-          }
-        }
-      } catch (e) {
-        console.warn("getAdInsightsReport: KPI fetch failed:", e.message);
-      }
-
-      // 2. Age breakdown
-      try {
-        const { data: ageRes } = await axios.get(baseUrl, {
-          params: {
-            date_preset: "maximum",
-            access_token: accessToken,
-            fields: "impressions",
-            breakdowns: "age",
-          },
-        });
-        const ageData = ageRes?.data || [];
-        report.ageBreakdown = ageData.map((item) => ({
-          label: item.age || "Unknown",
-          value: parseInt(item.impressions || 0, 10),
-        }));
-      } catch (e) {
-        console.warn("getAdInsightsReport: Age breakdown failed:", e.message);
-      }
-
-      // 3. Gender breakdown
-      try {
-        const { data: genderRes } = await axios.get(baseUrl, {
-          params: {
-            date_preset: "maximum",
-            access_token: accessToken,
-            fields: "impressions",
-            breakdowns: "gender",
-          },
-        });
-        const genderData = genderRes?.data || [];
-        const totalGenderImpressions = genderData.reduce(
-          (sum, item) => sum + parseInt(item.impressions || 0, 10),
-          0
-        );
-        report.genderBreakdown = genderData.map((item) => {
-          const val = parseInt(item.impressions || 0, 10);
-          return {
-            gender: item.gender || "unknown",
-            value: val,
-            percent: totalGenderImpressions > 0 ? parseFloat(((val / totalGenderImpressions) * 100).toFixed(2)) : 0,
-          };
-        });
-      } catch (e) {
-        console.warn("getAdInsightsReport: Gender breakdown failed:", e.message);
-      }
-
-      // 4. Daily trend (last 7 days or campaign lifetime)
-      try {
-        const { data: dailyRes } = await axios.get(baseUrl, {
-          params: {
-            date_preset: "maximum",
-            access_token: accessToken,
-            fields: "impressions,clicks,actions",
-            time_increment: 1,
-          },
-        });
-        const dailyData = dailyRes?.data || [];
-        report.dailyTrend = dailyData.map((day) => {
-          const actions = day.actions || [];
-          const leadAction = actions.find(
-            (a) =>
-              a.action_type === "leadgen" ||
-              a.action_type === "lead" ||
-              a.action_type === "onsite_conversion.lead" ||
-              a.action_type === "onsite_conversion.messaging_first_reply"
-          );
-          return {
-            date: day.date_start || "",
-            impressions: parseInt(day.impressions || 0, 10),
-            clicks: parseInt(day.clicks || 0, 10),
-            leads: parseInt(leadAction?.value || 0, 10),
-          };
-        });
-      } catch (e) {
-        console.warn("getAdInsightsReport: Daily trend failed:", e.message);
-      }
-    }
-
-    // 5. Real lead count from DB
-    try {
-      const leadMatch = [{ internalCampiagnId: campaign._id }];
-      if (campaign.mainAdId) leadMatch.push({ adId: campaign.mainAdId });
-      if (campaign.metaAdId) leadMatch.push({ adId: campaign.metaAdId });
-      if (addDetails?.mainAdId) leadMatch.push({ adId: addDetails.mainAdId });
-      const dbLeads = await leadModel.countDocuments({ $or: leadMatch });
-      report.totalLeads = Math.max(dbLeads, campaign.totalLeads || 0);
-    } catch (e) {
-      console.warn("getAdInsightsReport: Lead count failed:", e.message);
-    }
-
-    // 6. Sync back to DB if we got live data
-    if (report.kpi.reach || report.kpi.impressions || report.kpi.clicks || report.kpi.spend) {
+    // Keep the ads list, the wallet and the admin panel on the same numbers.
+    if (insights.hasMetaData) {
       await internalCampaignModel.findByIdAndUpdate(campaign._id, {
         $set: {
           totalReach: report.kpi.reach,
           totalImpression: report.kpi.impressions,
           totalClicks: report.kpi.clicks,
-          totalSpendBudget: report.kpi.spend,
-          spendAmount: report.kpi.spend,
+          ...(insights.kpi.spend
+            ? { totalSpendBudget: report.kpi.spend, spendAmount: report.kpi.spend }
+            : {}),
           totalLeads: report.totalLeads,
           updatedAt: new Date(),
         },
@@ -4862,6 +4802,10 @@ exports.pusedAd = async (req, res) => {
       $set: patch,
     });
 
+    // The app reloads its numbers straight after pausing or resuming; without
+    // this it would be served the cached report from before the change.
+    invalidateCampaignInsights({ ...existing, ...patch });
+
     res.status(200).json({
       success: true,
       message:
@@ -5732,6 +5676,9 @@ exports.__test__ = {
   normalizeMetaScheduleDays,
   timeToMinutes,
   convertLocationToMetaGeo,
+  buildAdInsightsReport,
+  campaignLeadMatch,
+  leadDayKey,
 };
 
 exports.__test__.computeAdChargeBreakdown = computeAdChargeBreakdown;
