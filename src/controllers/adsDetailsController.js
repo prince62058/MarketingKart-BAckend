@@ -632,14 +632,14 @@ async function createFacebookCampaign(
   }
 
   const apiUrl = `https://graph.facebook.com/v22.0/${metaAdAccountPath()}/campaigns`;
-  // Start PAUSED — admin approve flips Meta objects to ACTIVE (CC go-live policy).
+  // Create as ACTIVE so campaign, ad set, and ad are directly active and delivery runs without 'Ad set off'
   // Meta requires is_adset_budget_sharing_enabled when not using campaign budget (CBO).
   const payload = {
     name,
     objective:
       outcomeType === "APP_INSTALLS" ? "OUTCOME_APP_PROMOTION" : outcomeType,
     access_token: process.env.systemUserAccessToken,
-    status: "PAUSED",
+    status: "ACTIVE",
     special_ad_categories: [],
     is_adset_budget_sharing_enabled: false,
   };
@@ -655,7 +655,7 @@ async function createFacebookCampaign(
           meta_CampaignId: response.data.id,
           name,
           objective: outcomeType,
-          status: "PAUSED",
+          status: "ACTIVE",
           businessId: businessData._id,
           adTypeId,
           createdAt: new Date(),
@@ -1579,7 +1579,7 @@ async function createFacebookAdSet(
       daily_budget: dailyBudget,
       targeting,
       campaign_id: campaignId,
-      status: "PAUSED",
+      status: "ACTIVE",
       access_token: process.env.systemUserAccessToken,
     };
 
@@ -1640,7 +1640,7 @@ async function createAd(
       name,
       adset_id: adsetId,
       creative: { creative_id: creativeId },
-      status: "PAUSED",
+      status: "ACTIVE",
       access_token: accessToken,
     };
 
