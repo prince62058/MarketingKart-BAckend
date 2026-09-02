@@ -445,6 +445,19 @@ const normalizeMediaArray = (mediaList = []) => {
   return mediaList.map((media) => ensurePublicMediaUrl(media)).filter(Boolean);
 };
 
+const createSafeTempMediaFilePath = (rawUrl, defaultExt = ".jpg") => {
+  try {
+    const parsed = new URL(rawUrl);
+    let ext = path.extname(parsed.pathname).toLowerCase();
+    if (!ext || ext.length < 2 || ext.length > 5) ext = defaultExt;
+    const safeName = `meta_upload_${Date.now()}_${Math.random().toString(36).substring(2, 9)}${ext}`;
+    return path.resolve(__dirname, safeName);
+  } catch (_e) {
+    const safeName = `meta_upload_${Date.now()}_${Math.random().toString(36).substring(2, 9)}${defaultExt}`;
+    return path.resolve(__dirname, safeName);
+  }
+};
+
 const isLikelyVideoUrl = (url = "") =>
   /\.(mp4|mov|webm|ogg|m3u8)(\?|$)/i.test(url) || /\/video\//i.test(String(url));
 
@@ -809,8 +822,7 @@ async function addCreativeImg(
   let filePath;
   try {
     const fileUrl = imgLocation;
-    const fileName = path.basename(fileUrl);
-    filePath = path.resolve(__dirname, fileName);
+    filePath = createSafeTempMediaFilePath(fileUrl, ".jpg");
 
     const response = await axios({
       url: fileUrl,
@@ -1005,8 +1017,7 @@ async function addCreativeMultiImg(
     // Upload all images first
     const uploadPromises = imgLocation.map(async (imgLocation) => {
       const fileUrl = imgLocation;
-      const fileName = path.basename(fileUrl);
-      const filePath = path.resolve(__dirname, fileName);
+      const filePath = createSafeTempMediaFilePath(fileUrl, ".jpg");
       tempFiles.push(filePath);
 
       // Download the image
@@ -1299,8 +1310,7 @@ async function addCreativeVideo(
   try {
     if (thambnail) {
       const fileUrl = thambnail;
-      const fileName = path.basename(fileUrl);
-      filePath = path.resolve(__dirname, fileName);
+      filePath = createSafeTempMediaFilePath(fileUrl, ".jpg");
       tempFiles.push(filePath);
 
       const response = await axios({
@@ -1341,8 +1351,7 @@ async function addCreativeVideo(
       // // 1. Download the video
       console.log("videoLocation", videoLocation);
       const fileUrl = videoLocation;
-      const fileName = path.basename(fileUrl);
-      filePath = path.resolve(__dirname, fileName);
+      filePath = createSafeTempMediaFilePath(fileUrl, ".mp4");
       tempFiles.push(filePath);
 
       const response = await axios({
