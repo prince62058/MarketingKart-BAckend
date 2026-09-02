@@ -100,7 +100,7 @@ const main = async () => {
     wa.promoted_object?.whatsapp_phone_number,
   );
 
-  console.log("\n5. Lead Ads attach the lead form to the ad set");
+  console.log("\n5. Lead Ads attach the page_id to the ad set promoted_object");
   const lf = __test__.resolveMetaAdSetConfig({
     adKind: AD_KIND.LEAD_FORM,
     pageId: "PAGE123",
@@ -108,7 +108,7 @@ const main = async () => {
   });
   check("optimization_goal LEAD_GENERATION", lf.optimization_goal === "LEAD_GENERATION", lf.optimization_goal);
   check("destination_type ON_AD", lf.destination_type === "ON_AD", String(lf.destination_type));
-  check("lead_gen_form_id attached", lf.promoted_object?.lead_gen_form_id === "FORM456");
+  check("page_id attached in promoted_object", lf.promoted_object?.page_id === "PAGE123");
 
   console.log("\n6. The regression itself: a stale id must not produce a REACH ad");
   const stale = __test__.resolveMetaAdSetConfig({

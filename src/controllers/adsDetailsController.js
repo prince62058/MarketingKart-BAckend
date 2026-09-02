@@ -253,7 +253,6 @@ const resolveMetaAdSetConfig = ({
       destination_type: "ON_AD",
       promoted_object: {
         page_id: pageId,
-        ...(leadFormId ? { lead_gen_form_id: String(leadFormId) } : {}),
       },
     };
   }
