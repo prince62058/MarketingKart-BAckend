@@ -70,6 +70,11 @@ router.get(
   asyncHandler(authUser),
   controller.getInternalCampiagnById
 );
+router.get(
+  "/getAdInsightsReport",
+  asyncHandler(authUser),
+  controller.getAdInsightsReport
+);
 router.post("/scheduleDeliveryOfAdd", controller.scheduleDeliveryOfAdd);
 
 router.get("/searchTargetArea", controller.targetingLocation);

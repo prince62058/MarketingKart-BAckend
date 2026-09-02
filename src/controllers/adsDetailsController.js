@@ -3016,6 +3016,219 @@ exports.getInternalCampiagnById = async (req, res) => {
   }
 };
 
+/**
+ * GET /getAdInsightsReport?internalCampaignId=xxx
+ *
+ * Returns real-time Meta insights for the Ad Detail screen:
+ *  - kpi: reach, impressions, clicks, spend
+ *  - ageBreakdown: impressions per age group
+ *  - genderBreakdown: impressions per gender with percentages
+ *  - dailyTrend: daily impressions, clicks, leads
+ *  - engagement: bookmarks, link_clicks, reactions from Meta actions
+ *  - totalLeads: real lead count from DB
+ */
+exports.getAdInsightsReport = async (req, res) => {
+  try {
+    const { internalCampaignId } = req.query;
+    if (!internalCampaignId) {
+      return res.status(400).send({ success: false, message: "internalCampaignId is required" });
+    }
+
+    const campaign = await internalCampaignModel
+      .findById(internalCampaignId)
+      .populate("businessId", "pageId pageAccessToken");
+    if (!campaign) {
+      return res.status(404).send({ success: false, message: "Campaign not found" });
+    }
+
+    const accessToken = process.env.systemUserAccessToken;
+    const addDetails = await addDetailsModel.findOne({
+      $or: [
+        { internalCampiagnId: campaign._id },
+        ...(campaign.facebookAdSetId ? [{ metaAdsetId: campaign.facebookAdSetId }] : []),
+        ...(campaign.instaAdSetId ? [{ metaAdsetId: campaign.instaAdSetId }] : []),
+      ],
+    });
+
+    const targetMetaId =
+      campaign.metaAdId ||
+      addDetails?.mainAdId ||
+      campaign.facebookAdSetId ||
+      campaign.instaAdSetId;
+
+    // Default response initialized with real DB metrics
+    const report = {
+      kpi: {
+        reach: campaign.totalReach || 0,
+        impressions: campaign.totalImpression || 0,
+        clicks: campaign.totalClicks || 0,
+        spend: Number(campaign.spendAmount || campaign.totalSpendBudget) || 0,
+      },
+      ageBreakdown: [],
+      genderBreakdown: [],
+      dailyTrend: [],
+      engagement: { bookmarks: 0, clicks: campaign.totalClicks || 0, reactions: 0 },
+      totalLeads: campaign.totalLeads || 0,
+    };
+
+    if (targetMetaId && accessToken) {
+      const baseUrl = `https://graph.facebook.com/v22.0/${targetMetaId}/insights`;
+
+      // 1. KPI metrics
+      try {
+        const { data: kpiRes } = await axios.get(baseUrl, {
+          params: {
+            date_preset: "maximum",
+            access_token: accessToken,
+            fields: "reach,impressions,clicks,spend,actions",
+          },
+        });
+        const insight = kpiRes?.data?.[0];
+        if (insight) {
+          const liveReach = parseInt(insight.reach || 0, 10);
+          const liveImp = parseInt(insight.impressions || 0, 10);
+          const liveClicks = parseInt(insight.clicks || 0, 10);
+          const liveSpend = Math.ceil(parseFloat(insight.spend || 0) * 1.18); // with 18% GST
+
+          if (liveReach > 0) report.kpi.reach = liveReach;
+          if (liveImp > 0) report.kpi.impressions = liveImp;
+          if (liveClicks > 0) report.kpi.clicks = liveClicks;
+          if (liveSpend > 0) report.kpi.spend = liveSpend;
+
+          // Extract engagement from actions
+          const actions = insight.actions || [];
+          for (const action of actions) {
+            if (action.action_type === "post_save" || action.action_type === "onsite_conversion.post_save") {
+              report.engagement.bookmarks += parseInt(action.value || 0, 10);
+            }
+            if (action.action_type === "link_click") {
+              report.engagement.clicks += parseInt(action.value || 0, 10);
+            }
+            if (action.action_type === "post_reaction" || action.action_type === "like" || action.action_type === "post") {
+              report.engagement.reactions += parseInt(action.value || 0, 10);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("getAdInsightsReport: KPI fetch failed:", e.message);
+      }
+
+      // 2. Age breakdown
+      try {
+        const { data: ageRes } = await axios.get(baseUrl, {
+          params: {
+            date_preset: "maximum",
+            access_token: accessToken,
+            fields: "impressions",
+            breakdowns: "age",
+          },
+        });
+        const ageData = ageRes?.data || [];
+        report.ageBreakdown = ageData.map((item) => ({
+          label: item.age || "Unknown",
+          value: parseInt(item.impressions || 0, 10),
+        }));
+      } catch (e) {
+        console.warn("getAdInsightsReport: Age breakdown failed:", e.message);
+      }
+
+      // 3. Gender breakdown
+      try {
+        const { data: genderRes } = await axios.get(baseUrl, {
+          params: {
+            date_preset: "maximum",
+            access_token: accessToken,
+            fields: "impressions",
+            breakdowns: "gender",
+          },
+        });
+        const genderData = genderRes?.data || [];
+        const totalGenderImpressions = genderData.reduce(
+          (sum, item) => sum + parseInt(item.impressions || 0, 10),
+          0
+        );
+        report.genderBreakdown = genderData.map((item) => {
+          const val = parseInt(item.impressions || 0, 10);
+          return {
+            gender: item.gender || "unknown",
+            value: val,
+            percent: totalGenderImpressions > 0 ? parseFloat(((val / totalGenderImpressions) * 100).toFixed(2)) : 0,
+          };
+        });
+      } catch (e) {
+        console.warn("getAdInsightsReport: Gender breakdown failed:", e.message);
+      }
+
+      // 4. Daily trend (last 7 days or campaign lifetime)
+      try {
+        const { data: dailyRes } = await axios.get(baseUrl, {
+          params: {
+            date_preset: "maximum",
+            access_token: accessToken,
+            fields: "impressions,clicks,actions",
+            time_increment: 1,
+          },
+        });
+        const dailyData = dailyRes?.data || [];
+        report.dailyTrend = dailyData.map((day) => {
+          const actions = day.actions || [];
+          const leadAction = actions.find(
+            (a) =>
+              a.action_type === "leadgen" ||
+              a.action_type === "lead" ||
+              a.action_type === "onsite_conversion.lead" ||
+              a.action_type === "onsite_conversion.messaging_first_reply"
+          );
+          return {
+            date: day.date_start || "",
+            impressions: parseInt(day.impressions || 0, 10),
+            clicks: parseInt(day.clicks || 0, 10),
+            leads: parseInt(leadAction?.value || 0, 10),
+          };
+        });
+      } catch (e) {
+        console.warn("getAdInsightsReport: Daily trend failed:", e.message);
+      }
+    }
+
+    // 5. Real lead count from DB
+    try {
+      const leadMatch = [{ internalCampiagnId: campaign._id }];
+      if (campaign.mainAdId) leadMatch.push({ adId: campaign.mainAdId });
+      if (campaign.metaAdId) leadMatch.push({ adId: campaign.metaAdId });
+      if (addDetails?.mainAdId) leadMatch.push({ adId: addDetails.mainAdId });
+      const dbLeads = await leadModel.countDocuments({ $or: leadMatch });
+      report.totalLeads = Math.max(dbLeads, campaign.totalLeads || 0);
+    } catch (e) {
+      console.warn("getAdInsightsReport: Lead count failed:", e.message);
+    }
+
+    // 6. Sync back to DB if we got live data
+    if (report.kpi.reach || report.kpi.impressions || report.kpi.clicks || report.kpi.spend) {
+      await internalCampaignModel.findByIdAndUpdate(campaign._id, {
+        $set: {
+          totalReach: report.kpi.reach,
+          totalImpression: report.kpi.impressions,
+          totalClicks: report.kpi.clicks,
+          totalSpendBudget: report.kpi.spend,
+          spendAmount: report.kpi.spend,
+          totalLeads: report.totalLeads,
+          updatedAt: new Date(),
+        },
+      });
+    }
+
+    return res.status(200).send({
+      success: true,
+      message: "Ad insights report fetched",
+      data: report,
+    });
+  } catch (error) {
+    console.error("getAdInsightsReport error:", error);
+    return res.status(500).send({ success: false, message: error.message });
+  }
+};
+
 exports.getAdvertismentReport = async (req, res) => {
   try {
     let { metaAdsetId } = req.query;
