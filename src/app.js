@@ -168,6 +168,7 @@ app.use("/api", notificationRoute);
 app.use("/api", homePageRoute);
 app.use("/api", contactUsRoute);
 app.use("/api", callRequestRoute);
+app.use("/api", require("./routes/googleAdsInquiryRoute"));
 app.use("/api", transtionRoute);
 app.use("/api", packageRoute);
 app.use("/api", GstOfUserRoute);
