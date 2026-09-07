@@ -65,16 +65,18 @@ exports.addMoney = async (req, res) => {
   try {
     session.startTransaction();
     const { amount, transactionId, userId, orderId, paymentId, signature } = req.body;
-    const roundedAmount = parseFloat(parseFloat(amount).toFixed(2));
-    if (isNaN(roundedAmount) || roundedAmount <= 0) throw new Error("Invalid amount");
-
     const isAdminCredit = Boolean(userId);
 
     if (isAdminCredit && !isAdminUser(req.user)) {
       return res.status(403).json({ success: false, message: "Only admins can credit another user's wallet" });
     }
 
-    if (!isAdminCredit) {
+    let roundedAmount;
+
+    if (isAdminCredit) {
+      roundedAmount = parseFloat(parseFloat(amount).toFixed(2));
+      if (isNaN(roundedAmount) || roundedAmount <= 0) throw new Error("Invalid amount");
+    } else {
       if (!orderId || !paymentId || !signature) {
         throw new Error("Missing Razorpay payment verification details");
       }
@@ -91,6 +93,15 @@ exports.addMoney = async (req, res) => {
       if (existingPayment) {
         throw new Error("This Razorpay payment has already been processed");
       }
+
+      // Never trust the client-supplied amount — re-derive the credited amount
+      // from Razorpay's own order record so a client can't request a bigger
+      // credit than what was actually paid for this orderId/paymentId.
+      const verifiedOrder = await getRazorpayClient().orders.fetch(orderId);
+      if (verifiedOrder.status !== "paid" || !verifiedOrder.amount_paid) {
+        throw new Error("Payment not confirmed by Razorpay");
+      }
+      roundedAmount = parseFloat((verifiedOrder.amount_paid / 100).toFixed(2));
     }
 
     let targetId = userId || req.user._id;

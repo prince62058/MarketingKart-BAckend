@@ -42,7 +42,11 @@ const whatsappConversationSchema = new mongoose.Schema(
       type: String,
       enum: ["OPEN", "CLOSED"],
       default: "OPEN"
-    }
+    },
+    isBotActive: {
+      type: Boolean,
+      default: true,
+    },
   },
   { timestamps: true }
 );

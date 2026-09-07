@@ -57,7 +57,7 @@ const baseConnectionOptions = {
   serverSelectionTimeoutMS: SERVER_SELECTION_TIMEOUT,
   socketTimeoutMS: SOCKET_TIMEOUT,
   waitQueueTimeoutMS: WAIT_QUEUE_TIMEOUT,
-  appName: process.env.MONGO_APP_NAME || "leadkart-api",
+  appName: process.env.MONGO_APP_NAME || "marketingkart-api",
 };
 
 const readAdditionalDatabaseConfig = () => {
@@ -110,9 +110,11 @@ const connectAdditionalDatabases = async () => {
 };
 
 const connect = async () => {
-  const primaryUri =
-    process.env.MONGO_URI ||
-    "mongodb+srv://leadkartai:JFahjNo8JikXZeQL@leadkart.d7ppzbt.mongodb.net/marketingkart?retryWrites=true&w=majority";
+  const primaryUri = process.env.MONGO_URI;
+  if (!primaryUri) {
+    log.error?.("MONGO_URI is not set — refusing to start without an explicit database connection string.");
+    process.exit(1);
+  }
 
   try {
     await mongoose.connect(primaryUri, baseConnectionOptions);
@@ -149,7 +151,7 @@ async function initializeAdmin() {
       const cyperOtp = CryptoJS.AES.encrypt("12345678", "CRYPTOKEY").toString();
       await adminModel.create({
         _id: "64ddafdb7f21b2c8878e0001",
-        email: "admin@leadkart.ai",
+        email: "admin@marketingkart.ai",
         userType: "ADMIN",
         password: cyperOtp,
         role: 2,
@@ -232,18 +234,18 @@ async function initializeAdmin() {
     const companyCount = await companyModel.estimatedDocumentCount();
     if (companyCount === 0) {
       await companyModel.create({
-        name: "LeadKart Pvt Ltd",
-        address: "1234 LeadKart Street, Lead City, LK 56789",
+        name: "MarketingKart Pvt Ltd",
+        address: "1234 MarketingKart Street, Lead City, LK 56789",
         phone: "123-456-7890",
-        email: "info@leadkart.ai",
-        website: "https://www.leadkart.ai",
+        email: "info@marketingkart.ai",
+        website: "https://www.marketingkart.ai",
         favicon:
           "https://leadkart.in-maa-1.linodeobjects.com/LEADKART/IMAGE/favicon.ico",
         logo: "https://leadkart.in-maa-1.linodeobjects.com/LEADKART/IMAGE/logo.png",
-        returnPolicy: "This is the return policy of LeadKart Pvt Ltd.",
+        returnPolicy: "This is the return policy of MarketingKart Pvt Ltd.",
         termsAndConditions:
-          "These are the terms and conditions of LeadKart Pvt Ltd.",
-        privacyPolicy: "This is the privacy policy of LeadKart Pvt Ltd.",
+          "These are the terms and conditions of MarketingKart Pvt Ltd.",
+        privacyPolicy: "This is the privacy policy of MarketingKart Pvt Ltd.",
       });
       console.log("Company data created successfully.");
     }

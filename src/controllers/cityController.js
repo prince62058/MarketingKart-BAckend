@@ -161,12 +161,18 @@ exports.callback = async (req, res) => {
     return res.status(400).send("Authorization code not found.");
   }
 
+  const legacyClientId = process.env.LEGACY_META_CLIENT_ID;
+  const legacyClientSecret = process.env.LEGACY_META_CLIENT_SECRET;
+  if (!legacyClientId || !legacyClientSecret) {
+    return res.status(501).send("This legacy OAuth callback is not configured.");
+  }
+
   try {
     // Exchange the code for an access token
     const tokenResponse = await axios.get(`https://graph.facebook.com/v21.0/oauth/access_token?
-      client_id=667170882523356
-      &redirect_uri=https://api.leadkart.in/api/callback
-      &client_secret=ec35924844fa37b897673105614b8bad
+      client_id=${legacyClientId}
+      &redirect_uri=https://api.marketingkart.in/api/callback
+      &client_secret=${legacyClientSecret}
       &code=${code}`);
 
     const accessToken = tokenResponse.data.access_token;

@@ -154,7 +154,7 @@ const buildAdInsightsReport = ({ campaign, insights, leadDocs = [] }) => {
   };
 };
 
-/** Leadkart advertisement type ObjectIds */
+/** MarketingKart advertisement type ObjectIds */
 // Ad behaviour is keyed off advertisementModel.advertisementType (a schema
 // enum, stable across databases) via helpers/adTypeHelper. It used to be keyed
 // off hardcoded _ids, which stopped matching the moment the ad types were
@@ -192,7 +192,7 @@ const buildWhatsAppCtaLink = (rawPhone) => {
 };
 
 /**
- * Map LeadKart advertisementType / ad-type id → Meta campaign objective.
+ * Map MarketingKart advertisementType / ad-type id → Meta campaign objective.
  * DB stores LEADS / WHATSAPP_MESSAGES; Meta needs OUTCOME_* values.
  */
 const mapAdvertisementTypeToMetaOutcome = (advertisementType) => {
@@ -3261,7 +3261,7 @@ exports.getAdvertismentReport = async (req, res) => {
           if (creative.video_id) {
             // Re-host Meta's temporary signed URL to permanent storage — Meta's own URL expires within hours
             const hostedThumbnail =
-              (await uploadUrlToBucket(creative.thumbnail_url, "LEADKART/IMAGE/META/")) || creative.thumbnail_url;
+              (await uploadUrlToBucket(creative.thumbnail_url, "MARKETINGKART/IMAGE/META/")) || creative.thumbnail_url;
             finalData.recoveredVideoId = creative.video_id;
             finalData.recoveredThumbnail = hostedThumbnail;
             // Persist to DB for future
@@ -3270,7 +3270,7 @@ exports.getAdvertismentReport = async (req, res) => {
             });
           } else if (creative.image_url) {
             const hostedImage =
-              (await uploadUrlToBucket(creative.image_url, "LEADKART/IMAGE/META/")) || creative.image_url;
+              (await uploadUrlToBucket(creative.image_url, "MARKETINGKART/IMAGE/META/")) || creative.image_url;
             finalData.recoveredImageUrl = hostedImage;
              // Persist to DB for future
              await internalCampaignModel.findByIdAndUpdate(data.internalCampiagnId._id, {
@@ -5330,7 +5330,7 @@ exports.adsDetail = async (req, res) => {
             if (creative.video_id) {
               // Re-host Meta's temporary signed URL to permanent storage — Meta's own URL expires within hours
               const hostedThumbnail =
-                (await uploadUrlToBucket(creative.thumbnail_url, "LEADKART/IMAGE/META/")) ||
+                (await uploadUrlToBucket(creative.thumbnail_url, "MARKETINGKART/IMAGE/META/")) ||
                 ensurePublicMediaUrl(creative.thumbnail_url);
 
               insights.recoveredVideoId = creative.video_id;
@@ -5344,7 +5344,7 @@ exports.adsDetail = async (req, res) => {
               });
             } else if (creative.image_url) {
               const hostedImage =
-                (await uploadUrlToBucket(creative.image_url, "LEADKART/IMAGE/META/")) ||
+                (await uploadUrlToBucket(creative.image_url, "MARKETINGKART/IMAGE/META/")) ||
                 ensurePublicMediaUrl(creative.image_url);
 
               insights.recoveredImageUrl = hostedImage;
@@ -5578,10 +5578,10 @@ exports.getMetaAdAccountCampaigns = async (req, res) => {
     const allCampaigns = campaignsResponse.data?.data || [];
 
     // Filter out campaigns that are already managed as internal campaigns (avoid duplicates)
-    // Also filter out campaigns created by LeadKart (their names typically follow a pattern)
+    // Also filter out campaigns created by MarketingKart (their names typically follow a pattern)
     const campaigns = allCampaigns.filter(campaign => {
       // Check if any internal campaign has an ad under this Meta campaign
-      // We skip this campaign if it was created by LeadKart internally
+      // We skip this campaign if it was created by MarketingKart internally
       return !internalAdIds.has(campaign.id);
     });
 

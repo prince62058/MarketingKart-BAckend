@@ -57,7 +57,14 @@ const app = express();
 app.use(cors()); // Allows requests from all origins by default. You can configure specific origins if needed.
 
 // Middleware for parsing JSON bodies
-app.use(express.json());
+// `verify` stashes the raw request bytes on req.rawBody so webhook handlers
+// (e.g. the WhatsApp webhook) can check Meta's X-Hub-Signature-256 HMAC,
+// which has to be computed over the exact bytes Meta sent, not the re-serialized object.
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  },
+}));
 app.use((req, res, next) => {
   console.log(`${req.method} ${req.path}`, {
     query: req.query,

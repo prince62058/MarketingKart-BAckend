@@ -7,7 +7,7 @@ const fs = require("fs");
 /**
  * Downloads an image from a URL and uploads it to the configured S3/Linode bucket.
  * @param {string} url - The source image URL.
- * @param {string} folderPath - The folder path in the bucket (e.g., "LEADKART/IMAGE/META/").
+ * @param {string} folderPath - The folder path in the bucket (e.g., "MARKETINGKART/IMAGE/META/").
  * @returns {Promise<string|null>} - The public URL of the uploaded image, or null on failure.
  */
 async function uploadUrlToBucket(url, folderPath) {

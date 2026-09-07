@@ -57,7 +57,7 @@ const companySchema = new mongoose.Schema({
   latestAppVersion: { type: String, default: "1.0.0" },
   latestVersionCode: { type: Number, default: 1 },
   forceUpdateEnabled: { type: Boolean, default: false },
-  playStoreUrl: { type: String, default: "https://play.google.com/store/apps/details?id=com.leadkart.ai" },
+  playStoreUrl: { type: String, default: "https://play.google.com/store/apps/details?id=com.marketingkart.app" },
   homeBannerImages: { type: [String], default: [] },
   homeBannerUrl: { type: String, trim: true, default: null },
 });

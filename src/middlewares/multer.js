@@ -64,10 +64,10 @@ class CloudinaryMulterStorage {
 }
 
 function folderForMimetype(mimetype = "") {
-  if (mimetype.startsWith("image")) return "LEADKART/IMAGE";
-  if (mimetype.startsWith("video")) return "LEADKART/VIDEO";
-  if (mimetype.startsWith("application/pdf")) return "LEADKART/PDF";
-  return "LEADKART/OTHERS";
+  if (mimetype.startsWith("image")) return "MARKETINGKART/IMAGE";
+  if (mimetype.startsWith("video")) return "MARKETINGKART/VIDEO";
+  if (mimetype.startsWith("application/pdf")) return "MARKETINGKART/PDF";
+  return "MARKETINGKART/OTHERS";
 }
 
 // Multer Storage Configuration
@@ -80,7 +80,7 @@ exports.upload = upload;
 
 // Excel/CSV Upload for WhatsApp Contact Import
 const uploadExcel = multer({
-  storage: new CloudinaryMulterStorage({ folder: "LEADKART/EXCEL" }),
+  storage: new CloudinaryMulterStorage({ folder: "MARKETINGKART/EXCEL" }),
   fileFilter: (_req, file, cb) => {
     const allowed = [
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -104,7 +104,7 @@ exports.uploadExcel = uploadExcel;
 const uploadWhatsAppMedia = multer({
   storage: new CloudinaryMulterStorage({
     folder: (req, file) => {
-      let folderPath = "LEADKART/WHATSAPP_MEDIA";
+      let folderPath = "MARKETINGKART/WHATSAPP_MEDIA";
       if (file.mimetype.startsWith("image")) {
         folderPath += "/IMAGE";
       } else if (file.mimetype.startsWith("video")) {

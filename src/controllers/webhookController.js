@@ -1,4 +1,5 @@
 const axios = require("axios");
+const crypto = require("crypto");
 const mongoose = require("mongoose");
 const webhookModel = require("../models/webhookModel");
 const VERIFY_TOKEN = process.env.META_LEAD_WEBHOOK_VERIFY_TOKEN || "da21e0d80f1d406e99ff7b518fd3936b";
@@ -14,6 +15,7 @@ const whatsappConversationModel = require("../models/whatsappConversationModel")
 const whatsappAccountModel = require("../models/whatsappAccountModel");
 const whatsappMessageModel = require("../models/whatsappMessageModel");
 const whatsappCampaignModel = require("../models/whatsappCampaignModel");
+const whatsappTemplateModel = require("../models/whatsappTemplateModel");
 const Notification = require("../models/notificationModel");
 const User = require("../models/userModel");
 const { sendNotificationToMultipleToken } = require("./notificationController");
@@ -144,7 +146,7 @@ exports.postWebhook = async (req, res) => {
 
           await webhookModel.create({ leadgenId: leadgenId });
 
-          // Only create app leads for Meta ads that are linked in Leadkart.
+          // Only create app leads for Meta ads that are linked in MarketingKart.
           // Unlinked / historical Instant Form ads must not fill the Leads tab.
           if (!business || !campaign) {
             console.warn(
@@ -232,6 +234,15 @@ const WA_STATUS_MAP = {
   failed: "FAILED",
 };
 
+const WA_TEMPLATE_STATUS_MAP = {
+  APPROVED: "APPROVED",
+  REJECTED: "REJECTED",
+  PENDING: "PENDING",
+  IN_APPEAL: "IN_APPEAL",
+  PAUSED: "PAUSED",
+  DISABLED: "DISABLED",
+};
+
 const WA_STATUS_RANK = {
   QUEUED: 0,
   SENT: 1,
@@ -265,9 +276,34 @@ exports.getWhatsAppWebhook = (req, res) => {
   return res.sendStatus(403);
 };
 
+// Meta signs the raw webhook body with the app secret (HMAC-SHA256) and sends
+// it as X-Hub-Signature-256. Verifying it stops anyone else from posting a
+// forged payload (fake delivery statuses, fake inbound messages) to this route,
+// which has no other auth since Meta calls it directly.
+function isValidMetaSignature(req) {
+  const signature = req.headers["x-hub-signature-256"];
+  const secret = process.env.clientSecret;
+  if (!signature || !secret || !req.rawBody) return false;
+
+  const expected =
+    "sha256=" + crypto.createHmac("sha256", secret).update(req.rawBody).digest("hex");
+
+  try {
+    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+  } catch {
+    return false;
+  }
+}
+
 // POST /api/whatsapp/webhook — Meta status updates (sent/delivered/read/failed)
 exports.postWhatsAppWebhook = async (req, res) => {
   res.status(200).send("OK");
+
+  if (!isValidMetaSignature(req)) {
+    console.warn("[WhatsApp Webhook] Rejected payload with missing/invalid X-Hub-Signature-256");
+    return;
+  }
+
   const payload = req.body;
 
   // Log payload for debugging
@@ -334,6 +370,27 @@ exports.postWhatsAppWebhook = async (req, res) => {
                   wamid,
                   status: newStatus,
                 });
+            }
+          }
+        }
+
+        // --- 1b. TEMPLATE STATUS UPDATES (Meta approves/rejects/pauses a template) ---
+        // Without this, a template's local status only changes when a user
+        // manually hits "sync" — this makes it update live as Meta reviews it.
+        if (change?.field === "message_template_status_update" && change?.value) {
+          const { message_template_id: metaTemplateId, event, reason } = change.value;
+          const newStatus = WA_TEMPLATE_STATUS_MAP[event];
+          if (metaTemplateId && newStatus) {
+            const template = await whatsappTemplateModel.findOneAndUpdate(
+              { metaTemplateId: String(metaTemplateId) },
+              { $set: { status: newStatus, rejectedReason: reason || undefined } },
+              { new: true }
+            );
+            if (template && global.io) {
+              global.io.to(`business:${template.businessId}`).emit("templateStatusUpdate", {
+                templateId: String(template._id),
+                status: newStatus,
+              });
             }
           }
         }
@@ -1271,13 +1328,13 @@ exports.getLeadOfYourBusinessByMemberIdExcel = async (req, res) => {
 
     // Upload Excel and CSV to Cloudinary
     const excelUpload = uploadBuffer(excelBuffer, {
-      folder: "LEADKART/EXPORTS",
+      folder: "MARKETINGKART/EXPORTS",
       resourceType: "raw",
       publicId: `leads_${timestamp}_excel`,
     });
 
     const csvUpload = uploadBuffer(Buffer.from(csvData), {
-      folder: "LEADKART/EXPORTS",
+      folder: "MARKETINGKART/EXPORTS",
       resourceType: "raw",
       publicId: `leads_${timestamp}_csv`,
     });

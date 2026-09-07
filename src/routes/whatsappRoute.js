@@ -5,13 +5,13 @@ const campaignController = require("../controllers/whatsappCampaignController");
 const webhookController = require("../controllers/webhookController");
 const accountController = require("../controllers/whatsappAccountController");
 const metaOAuthController = require("../controllers/metaOAuthController");
-const { authUser } = require("../middlewares/authMidd");
+const { authUser, isAdmin } = require("../middlewares/authMidd");
 const { uploadExcel, uploadWhatsAppMedia } = require("../middlewares/multer");
 
 // ─── Webhook (no auth — Meta calls this directly) ──────────────────────────
 router.get("/whatsapp/webhook", webhookController.getWhatsAppWebhook);
 router.post("/whatsapp/webhook", webhookController.postWhatsAppWebhook);
-router.get("/whatsapp/debug-logs", webhookController.getDebugLogs);
+router.get("/whatsapp/debug-logs", authUser, isAdmin, webhookController.getDebugLogs);
 
 // ─── Stats & Account (mobile dashboard) ─────────────────────────────────────
 router.get("/whatsapp/stats", authUser, campaignController.getWhatsAppStats);

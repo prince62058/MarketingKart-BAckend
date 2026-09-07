@@ -237,6 +237,8 @@ const getAllCampaigns = async ({ page = 1, status = "", businessId, createdBy, s
     whatsappCampaignModel
       .find(query)
       .populate("templateId", "name status language")
+      .populate("createdBy", "name mobile email")
+      .populate("businessId", "businessName")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit),

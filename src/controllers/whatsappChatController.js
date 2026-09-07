@@ -64,6 +64,12 @@ exports.getConversations = async (req, res) => {
   }
 };
 
+const userOwnsConversation = async (userId, conversation) => {
+  if (!conversation) return false;
+  const business = await businessModel.findOne({ _id: conversation.businessId, userId });
+  return Boolean(business);
+};
+
 exports.getMessages = async (req, res) => {
   try {
     const { conversationId } = req.params;
@@ -73,6 +79,9 @@ exports.getMessages = async (req, res) => {
     const conversation = await whatsappConversationModel.findById(conversationId);
     if (!conversation) {
       return res.status(404).json({ success: false, message: "Conversation not found" });
+    }
+    if (!(await userOwnsConversation(req.user._id, conversation))) {
+      return res.status(403).json({ success: false, message: "You do not have access to this conversation" });
     }
 
     // Reset unread counts when fetched
@@ -101,6 +110,31 @@ exports.getMessages = async (req, res) => {
   }
 };
 
+exports.setBotMode = async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const { isBotActive } = req.body;
+    if (typeof isBotActive !== "boolean") {
+      return res.status(400).json({ success: false, message: "isBotActive (boolean) is required" });
+    }
+
+    const conversation = await whatsappConversationModel.findById(conversationId);
+    if (!conversation) {
+      return res.status(404).json({ success: false, message: "Conversation not found" });
+    }
+    if (!(await userOwnsConversation(req.user._id, conversation))) {
+      return res.status(403).json({ success: false, message: "You do not have access to this conversation" });
+    }
+
+    conversation.isBotActive = isBotActive;
+    await conversation.save();
+
+    return res.status(200).json({ success: true, data: conversation });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.sendChatMessage = async (req, res) => {
   try {
     const { conversationId } = req.params;
@@ -113,6 +147,9 @@ exports.sendChatMessage = async (req, res) => {
     const conversation = await whatsappConversationModel.findById(conversationId);
     if (!conversation) {
       return res.status(404).json({ success: false, message: "Conversation not found" });
+    }
+    if (!(await userOwnsConversation(req.user._id, conversation))) {
+      return res.status(403).json({ success: false, message: "You do not have access to this conversation" });
     }
 
     const account = await whatsappAccountModel.findOne({

@@ -530,7 +530,7 @@ async function handleBusinessManagerAccess(business, pageId, pageAccessToken) {
     console.log("Client User ID:", clientUserId);
     const clientUserName = await fetchClientUserName(pageAccessToken);
     console.log("Client User Name:", clientUserName);
-    const clientEmail = (await fetchClientEmail(business.metaAccessToken)) || business.businessEmail || "noemail@leadkart.in";
+    const clientEmail = (await fetchClientEmail(business.metaAccessToken)) || business.businessEmail || "noemail@marketingkart.in";
     console.log("Client Email:", clientEmail);
 
     metaManagerId = await ensureBusinessManagerExists(
@@ -644,7 +644,7 @@ async function ensureBusinessManagerExists(clientUserId, accessToken, email) {
   );
   if (data.data.length > 0) return data.data[0].id;
   const createPayload = {
-    name: "Leadkart Partnered BM",
+    name: "MarketingKart Partnered BM",
     vertical: "ADVERTISING",
     timezone_id: 1,
     access_token: accessToken,
@@ -659,12 +659,12 @@ async function ensureBusinessManagerExists(clientUserId, accessToken, email) {
   return createResponse.id;
 }
 
-// Check karta hai ki page LeadKart ke apne BM (process.env.businessId) me
+// Check karta hai ki page MarketingKart ke apne BM (process.env.businessId) me
 // as a client page assigned hai ya nahi. Yahi wo list hai jo "Meta pe show"
 // hone ka asli source of truth hai. Handles pagination.
-async function isPageInLeadKartBM(pageId) {
-  const leadKartBmId = process.env.businessId;
-  let url = `https://graph.facebook.com/v21.0/${leadKartBmId}/client_pages`;
+async function isPageInMarketingKartBM(pageId) {
+  const marketingKartBmId = process.env.businessId;
+  let url = `https://graph.facebook.com/v21.0/${marketingKartBmId}/client_pages`;
   let params = { access_token: process.env.systemUserAccessToken, limit: 200 };
   // 3 page tak paginate karo (600 pages) — safety cap
   for (let i = 0; i < 3; i++) {
@@ -686,19 +686,19 @@ async function assignPageToBusinessManager(
   pageAccessToken
 ) {
   try {
-    // Idempotency: LeadKart ke BM me pehle se hai to skip karo (correct BM check).
-    if (await isPageInLeadKartBM(pageId)) {
-      console.log("✅ Page already in LeadKart Business Manager.");
+    // Idempotency: MarketingKart ke BM me pehle se hai to skip karo (correct BM check).
+    if (await isPageInMarketingKartBM(pageId)) {
+      console.log("✅ Page already in MarketingKart Business Manager.");
       return;
     }
 
-    console.log("Assigning page to LeadKart Business Manager agency...", { pageId, metaManagerId });
+    console.log("Assigning page to MarketingKart Business Manager agency...", { pageId, metaManagerId });
     await axios.post(`https://graph.facebook.com/v21.0/${pageId}/agencies`, {
       business: process.env.businessId,
       permitted_tasks: ["MANAGE", "ADVERTISE", "ANALYZE"],
       access_token: pageAccessToken,
     });
-    console.log("✅ Page /agencies request sent to LeadKart BM.");
+    console.log("✅ Page /agencies request sent to MarketingKart BM.");
   } catch (error) {
     const errorData = error.response?.data?.error;
     // "Partner Already Has Access" (code 3989 / subcode 1690131) = effectively success
@@ -706,12 +706,12 @@ async function assignPageToBusinessManager(
       console.log("✅ Page already assigned (Meta 3989). Treating as success.");
       return;
     }
-    // Duplicate / already-pending request — LeadKart BM me pehle se pending hai
+    // Duplicate / already-pending request — MarketingKart BM me pehle se pending hai
     if (errorData && (errorData.error_subcode === 1752041 || errorData.code === 200)) {
       try {
-        const leadKartBmId = process.env.businessId;
+        const marketingKartBmId = process.env.businessId;
         const { data: pending } = await axios.get(
-          `https://graph.facebook.com/v21.0/${leadKartBmId}/pending_client_pages`,
+          `https://graph.facebook.com/v21.0/${marketingKartBmId}/pending_client_pages`,
           {
             params: {
               access_token: process.env.systemUserAccessToken,
@@ -720,7 +720,7 @@ async function assignPageToBusinessManager(
           },
         );
         if ((pending.data || []).some((p) => String(p.id) === String(pageId))) {
-          console.log("✅ Page already in LeadKart pending_client_pages — treating agency step as done.");
+          console.log("✅ Page already in MarketingKart pending_client_pages — treating agency step as done.");
           return;
         }
       } catch (pendingErr) {
@@ -731,17 +731,17 @@ async function assignPageToBusinessManager(
     throw error;
   }
 
-  // VERIFY: assignment ke baad confirm karo ki page sach me LeadKart BM me aaya.
+  // VERIFY: assignment ke baad confirm karo ki page sach me MarketingKart BM me aaya.
   // Meta thoda async hota hai — chhota retry loop.
   for (let attempt = 1; attempt <= 3; attempt++) {
-    if (await isPageInLeadKartBM(pageId)) {
-      console.log(`✅ Verified: page LeadKart BM me show ho raha hai (attempt ${attempt}).`);
+    if (await isPageInMarketingKartBM(pageId)) {
+      console.log(`✅ Verified: page MarketingKart BM me show ho raha hai (attempt ${attempt}).`);
       return;
     }
     await new Promise((r) => setTimeout(r, 1500));
   }
   throw new Error(
-    "Page /agencies me bheja gaya lekin LeadKart Business Manager ki client_pages me abhi tak show nahi ho raha (verification fail). Page owner ne request accept nahi ki ya permission missing hai."
+    "Page /agencies me bheja gaya lekin MarketingKart Business Manager ki client_pages me abhi tak show nahi ho raha (verification fail). Page owner ne request accept nahi ki ya permission missing hai."
   );
 }
 
@@ -1462,7 +1462,7 @@ exports.linkMetaAd = async (req, res) => {
 
     // Re-host Meta's temporary signed URL to permanent storage — Meta's own URL expires within hours
     if (fullImageUrl) {
-      const hostedImageUrl = await uploadUrlToBucket(fullImageUrl, "LEADKART/IMAGE/META/");
+      const hostedImageUrl = await uploadUrlToBucket(fullImageUrl, "MARKETINGKART/IMAGE/META/");
       if (hostedImageUrl) fullImageUrl = hostedImageUrl;
     }
 

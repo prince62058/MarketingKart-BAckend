@@ -11,16 +11,12 @@ exports.authUser = async (req, res, next) => {
   const SECRET_KEYS = [
     process.env.JWT_SECRET,
     process.env.TOKEN_KEY,
-    "SECRETEKEY",
-    "leadkartSecretTokenKey",
   ].filter(Boolean);
 
   const authHeader = req.headers["authorization"];
-  const paramUserId = req.query?.userId || req.params?.userId || req.body?.userId;
-
-  let decoded = null;
   const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : authHeader?.trim();
 
+  let decoded = null;
   if (token) {
     for (const key of SECRET_KEYS) {
       try {
@@ -28,23 +24,17 @@ exports.authUser = async (req, res, next) => {
         if (decoded) break;
       } catch (_) {}
     }
-    if (!decoded) {
-      try {
-        decoded = jwt.decode(token);
-      } catch (_) {}
-    }
   }
 
   const tokenUserId = decoded?.User || decoded?.userId || decoded?.id || decoded?._id;
-  const check = tokenUserId || paramUserId;
-  if (!check) {
+  if (!tokenUserId) {
     return res
       .status(statusCodes?.["Unauthorized"])
       .json(responseBuilder(apiResponseStatusCode[401], "Invalid or expired token"));
   }
 
   try {
-    const user = await userModel.findById(check);
+    const user = await userModel.findById(tokenUserId);
     if (!user) {
       return res
         .status(statusCodes?.["Not Found"])
@@ -64,4 +54,14 @@ exports.authUser = async (req, res, next) => {
         responseBuilder(apiResponseStatusCode[400], "Something went wrong"),
       );
   }
+};
+
+// Use after authUser on routes that must be restricted to admin accounts.
+exports.isAdmin = (req, res, next) => {
+  if (req.user?.userType !== "ADMIN") {
+    return res
+      .status(statusCodes?.["Unauthorized"] || 403)
+      .json(responseBuilder(apiResponseStatusCode[401], "Admin access required"));
+  }
+  next();
 };

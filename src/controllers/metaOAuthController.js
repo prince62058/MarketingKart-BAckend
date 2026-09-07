@@ -203,7 +203,7 @@ exports.handleCallback = async (req, res) => {
   const userId = stateDoc.userId;
   const clientId = process.env.clientId;
   const clientSecret = process.env.clientSecret;
-  const redirectUri = process.env.META_OAUTH_REDIRECT_URI || "https://api.leadkart.in/api/whatsapp/meta/callback";
+  const redirectUri = process.env.META_OAUTH_REDIRECT_URI || "https://api.marketingkart.in/api/whatsapp/meta/callback";
 
   console.log(`[Meta OAuth] Processing callback for user ${userId}`);
 
@@ -271,7 +271,7 @@ exports.handleCallback = async (req, res) => {
             });
             for (const waba of sysRes.data?.data || []) {
               if (waba?.id) {
-                wabaList.push({ businessId: systemBusinessId, businessName: "LeadKart Business", wabaId: waba.id, wabaName: waba.name });
+                wabaList.push({ businessId: systemBusinessId, businessName: "MarketingKart Business", wabaId: waba.id, wabaName: waba.name });
               }
             }
           } catch (e) { /* skip */ }

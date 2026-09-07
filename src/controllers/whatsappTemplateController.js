@@ -27,7 +27,7 @@ const generateExampleValues = (text) => {
     "12345",         // {{2}} - typically an order/ID
     "50%",           // {{3}} - typically an offer/discount
     "tomorrow",      // {{4}} - typically a date
-    "LeadKart",      // {{5}} - typically a brand
+    "MarketingKart", // {{5}} - typically a brand
     "www.example.com", // {{6}} - typically a link
     "10:00 AM",      // {{7}} - typically a time
     "New Delhi",     // {{8}} - typically a location

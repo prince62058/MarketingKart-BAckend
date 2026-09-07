@@ -291,7 +291,7 @@ exports.connectViaFacebook = async (req, res) => {
               if (!selectedPhone) continue;
 
               discoveredAccounts.push({
-                businessName: "LeadKart Business",
+                businessName: "MarketingKart Business",
                 wabaId: waba.id,
                 wabaName: waba.name || null,
                 phoneNumberId: selectedPhone.id,
