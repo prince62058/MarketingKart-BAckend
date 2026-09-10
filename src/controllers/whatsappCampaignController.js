@@ -5,11 +5,37 @@ const whatsappAccountModel = require("../models/whatsappAccountModel");
 
 exports.createCampaign = async (req, res) => {
   try {
-    const { name, templateId, businessId, variableMapping } = req.body;
+    const {
+      name,
+      templateId,
+      businessId,
+      variableMapping,
+      scheduledAt,
+      sendRatePerMinute,
+    } = req.body;
 
     if (!name || !templateId) {
       return res.status(400).json({ success: false, message: "name and templateId are required" });
     }
+
+    // "Send later" is only honoured if it is a real future time — a past or
+    // unparseable value sends now rather than silently never sending.
+    let startAt = null;
+    if (scheduledAt) {
+      const parsedDate = new Date(scheduledAt);
+      if (Number.isNaN(parsedDate.getTime())) {
+        return res.status(400).json({
+          success: false,
+          message: "scheduledAt is not a valid date",
+        });
+      }
+      if (parsedDate.getTime() > Date.now()) startAt = parsedDate;
+    }
+
+    const ratePerMinute = Math.min(
+      Math.max(parseInt(sendRatePerMinute, 10) || 60, 1),
+      600,
+    );
 
     let contacts = [];
     let errors = [];
@@ -138,7 +164,9 @@ exports.createCampaign = async (req, res) => {
       createdBy: req.user._id,
       variableMapping: parsedVariableMapping,
       totalContacts: contacts.length,
-      status: "QUEUED",
+      status: startAt ? "SCHEDULED" : "QUEUED",
+      scheduledAt: startAt,
+      sendRatePerMinute: ratePerMinute,
       "stats.queued": contacts.length,
     });
 
@@ -146,12 +174,15 @@ exports.createCampaign = async (req, res) => {
     const enqueuedCount = await whatsappCampaignService.enqueueCampaignMessages(
       campaign,
       contacts,
-      template
+      template,
+      { startAt, ratePerMinute }
     );
 
     return res.status(201).json({
       success: true,
-      message: `Campaign created — ${enqueuedCount} messages queued`,
+      message: startAt
+        ? `Campaign scheduled — ${enqueuedCount} messages will start sending at ${startAt.toLocaleString("en-IN")}`
+        : `Campaign created — ${enqueuedCount} messages queued`,
       data: campaign,
       totalContacts: enqueuedCount,
       skipped: contacts.length - enqueuedCount,

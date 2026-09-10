@@ -167,10 +167,22 @@ const buildComponents = (variables, templateComponents = []) => {
   return finalComponents;
 };
 
+/** Messages per minute we fall back to when a campaign does not ask for one. */
+const DEFAULT_SEND_RATE_PER_MINUTE = 60;
+
 /**
  * Create message documents in DB and add jobs to BullMQ queue.
+ *
+ * @param {object} options
+ * @param {Date|null} options.startAt send nothing before this moment
+ * @param {number} options.ratePerMinute spread the sends at this pace
+ *
+ * Both are enforced with BullMQ's per-job `delay`: the campaign's start time
+ * shifts every job, and the rate spaces them apart. Before this, "schedule for
+ * later" and the send-rate picker were collected in the app and then dropped on
+ * the floor — every campaign went out immediately, all at once.
  */
-const enqueueCampaignMessages = async (campaign, contacts, template) => {
+const enqueueCampaignMessages = async (campaign, contacts, template, options = {}) => {
   // Build readable text from template for display in chat
   const templateDisplayText = template.bodyText || `Template: ${template.name}`;
 
@@ -201,8 +213,17 @@ const enqueueCampaignMessages = async (campaign, contacts, template) => {
   // Bulk insert all message records
   const inserted = await whatsappMessageModel.insertMany(messages);
 
+  const startAt = options.startAt ? new Date(options.startAt) : null;
+  const ratePerMinute = Number(options.ratePerMinute) > 0
+    ? Number(options.ratePerMinute)
+    : DEFAULT_SEND_RATE_PER_MINUTE;
+
+  // A past or missing start time means "now"; never a negative delay.
+  const startDelayMs = startAt ? Math.max(0, startAt.getTime() - Date.now()) : 0;
+  const spacingMs = 60000 / ratePerMinute;
+
   // Add one BullMQ job per message
-  const jobs = inserted.map((msg) => ({
+  const jobs = inserted.map((msg, index) => ({
     name: "send-whatsapp",
     data: {
       messageId: String(msg._id),
@@ -211,6 +232,9 @@ const enqueueCampaignMessages = async (campaign, contacts, template) => {
       templateName: template.name,
       languageCode: template.language || "en_US",
       components: buildComponents(msg.variables, template.components || []),
+    },
+    opts: {
+      delay: Math.round(startDelayMs + index * spacingMs),
     },
   }));
 

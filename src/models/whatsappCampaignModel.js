@@ -22,12 +22,18 @@ const whatsappCampaignSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["DRAFT", "QUEUED", "RUNNING", "COMPLETED", "FAILED", "PAUSED"],
+      enum: ["DRAFT", "SCHEDULED", "QUEUED", "RUNNING", "COMPLETED", "FAILED", "PAUSED"],
       default: "DRAFT",
     },
     scheduledAt: {
       type: Date,
       default: null,
+    },
+    // How fast this campaign is allowed to go out. The queue spaces its jobs
+    // by 60s / this, which is what actually enforces it.
+    sendRatePerMinute: {
+      type: Number,
+      default: 60,
     },
     totalContacts: {
       type: Number,
