@@ -37,5 +37,11 @@ router.put(
   asyncHandler(planMid),
   asyncHandler(controller.disablePlan)
 );
+router.delete(
+  "/plan/deletePlan/:planId",
+  asyncHandler(authUser),
+  asyncHandler(planMid),
+  asyncHandler(controller.deletePlan)
+);
 
 module.exports = router;

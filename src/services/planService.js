@@ -28,3 +28,7 @@ exports.disablePlan = async (getPlanById) => {
     )
     .exec();
 };
+
+exports.deletePlan = async (id) => {
+  return await planModel.findByIdAndDelete(id).exec();
+};

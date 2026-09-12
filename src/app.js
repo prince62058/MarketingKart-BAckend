@@ -190,7 +190,6 @@ app.use("/api", videoYoutubeRoute);
 app.use("/api", recentAdsDesignRoute);
 app.use("/api", teamMemberRoute);
 app.use("/api", subscriptionRoute);
-app.use("/api", staffRoute);
 app.use("/api/staff", staffRoute);
 
 app.use("/api", require("./routes/whatsappRoute"));

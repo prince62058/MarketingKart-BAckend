@@ -16,19 +16,22 @@ const addStaff = async (req, res) => {
 
     
     // Check if user exists, if not create one
-    let user = await User.findById(userId).session(session);
+    let user = null;
+    if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+      user = await User.findById(userId).session(session);
+    }
     
     if (!user) {
       // Create new user if not exists
-
+      const rawPassword = (userData.password || "Staff@123").toString();
       // Encrypt password before saving
       const encryptedPassword = CryptoJS.AES.encrypt(
-        userData.password.toString(),
+        rawPassword,
         'CRYPTOKEY'
       ).toString();
       
       user = new User({
-        _id: userId || new mongoose.Types.ObjectId(),
+        _id: (userId && mongoose.Types.ObjectId.isValid(userId)) ? userId : new mongoose.Types.ObjectId(),
         ...userData,
         password: encryptedPassword,
         role: 1, // Staff role
@@ -96,6 +99,12 @@ const updateStaff = async (req, res) => {
   
   try {
     const { staffId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(staffId)) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ status: false, message: 'Invalid staff ID' });
+    }
+
     const { password, ...updates } = req.body;
     
     // Find staff
@@ -143,7 +152,7 @@ const updateStaff = async (req, res) => {
       staffId,
       { $set: updates },
       { new: true, session }
-    ).populate('userId', 'name email');
+    ).populate('userId', 'name email mobile');
     
     // If staff was deactivated, re-balance all assignments among remaining active staff
     if (updates.isActive === false) {
@@ -174,15 +183,15 @@ const updateStaff = async (req, res) => {
 const getStaff = async (req, res) => {
   try {
     const { staffId } = req.params;
-    
-    // Simple query
-    const query = { _id: staffId };
+    if (!mongoose.Types.ObjectId.isValid(staffId)) {
+      return res.status(400).json({ status: false, message: 'Invalid staff ID' });
+    }
     
     const staff = await Staff.findOne({
       _id: staffId,
       isActive: true
     })
-    .populate('userId', 'name email phone password')
+    .populate('userId', 'name email mobile password')
     .populate('businesses', 'name description')
     .populate('updatedBy', 'name');
 
@@ -210,7 +219,7 @@ const getAllStaff = async (req, res) => {
   try {
     const { 
       page = 1, 
-      limit = 10,
+      limit = 50,
       isActive,
       search
     } = req.query;
@@ -236,22 +245,26 @@ const getAllStaff = async (req, res) => {
       .limit(parseInt(limit))
       .skip((parseInt(page) - 1) * parseInt(limit))
       .sort({ createdAt: -1 })
-      .populate('userId', 'name email password')
+      .populate('userId', 'name email mobile password')
       .populate('businesses', 'name');
 
     const count = await Staff.countDocuments(query);
 
     // ✅ Decrypt password for each staff user
     staff = staff.map(s => {
-      if (s.userId && s.userId.password) {
+      const staffObj = s.toObject ? s.toObject() : { ...s };
+      if (staffObj.userId && staffObj.userId.password) {
         try {
-          let bytes = CryptoJS.AES.decrypt(s.userId.password.toString(), "CRYPTOKEY");
-          s.userId.password = bytes.toString(CryptoJS.enc.Utf8); // ✅ Real password result
+          let bytes = CryptoJS.AES.decrypt(staffObj.userId.password.toString(), "CRYPTOKEY");
+          const decrypted = bytes.toString(CryptoJS.enc.Utf8);
+          if (decrypted) {
+            staffObj.userId.password = decrypted;
+          }
         } catch (e) {
           console.log("Decrypt error:", e);
         }
       }
-      return s;
+      return staffObj;
     });
 
     res.json({
@@ -279,6 +292,11 @@ const deleteStaff = async (req, res) => {
   
   try { 
     const { staffId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(staffId)) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ status: false, message: 'Invalid staff ID' });
+    }
 
     // Hard delete staff
     const staff = await Staff.findByIdAndDelete(staffId, { session });
@@ -325,6 +343,9 @@ const deleteStaff = async (req, res) => {
 const getStaffBusinesses = async (req, res) => {
   try {
     const { staffId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(staffId)) {
+      return res.status(400).json({ status: false, message: 'Invalid staff ID' });
+    }
     
     // Get staff with businesses
     const staff = await Staff.findById(staffId)

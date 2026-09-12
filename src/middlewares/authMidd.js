@@ -37,11 +37,11 @@ exports.authUser = async (req, res, next) => {
     const user = await userModel.findById(tokenUserId);
     if (!user) {
       return res
-        .status(statusCodes?.["Not Found"])
+        .status(statusCodes?.["Unauthorized"])
         .json(
           responseBuilder(
-            apiResponseStatusCode[404],
-            defaultResponseMessage?.NOT_FOUND,
+            apiResponseStatusCode[401],
+            "User not found or token expired",
           ),
         );
     }

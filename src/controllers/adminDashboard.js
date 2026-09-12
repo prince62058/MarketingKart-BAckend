@@ -422,10 +422,14 @@ exports.adListForAdmin = async (req, res) => {
         // metaCreateError carries Meta's own words for why an ad never got
         // built. It was written on every failure and then selected nowhere, so
         // DELIVERY_ERROR reached the admin as a bare red badge.
-        "status addTypeId businessId title pageName image thambnail createdAt instaBudget facebookBudget totalBudget mainAdId spendAmount totalLeads totalFirstReplies totalReach totalImpression totalClicks metaCreateError metaStatusReason",
+        "status addTypeId businessId title pageName fromName caption destinationUrl targetArea image thambnail createdAt instaBudget facebookBudget totalBudget dailyBudget mainAdId spendAmount totalLeads totalFirstReplies totalReach totalImpression totalClicks metaCreateError metaStatusReason",
       )
       .populate("addTypeId", "title")
-      .populate("businessId", "businessName userId")
+      .populate({
+        path: "businessId",
+        select: "businessName userId",
+        populate: { path: "userId", select: "name email mobile phone" },
+      })
       .sort({ 
         status: 1,  // ACTIVE comes first alphabetically
         createdAt: -1 
@@ -483,7 +487,198 @@ exports.adListForAdmin = async (req, res) => {
   }
 };
 
+/**
+ * Fetch all Meta campaigns for the system ad account that are NOT yet
+ * linked to any internal campaign. Used by the "Link Meta Ad" admin modal.
+ */
+exports.getUnlinkedMetaCampaigns = async (req, res) => {
+  try {
+    const token = process.env.systemUserAccessToken;
+    const adAccountId = process.env.adAccountId || "1066150309285362";
 
+    // 1. Find all mainAdIds / campaignIds already tracked in our DB
+    const linked = await internalCampiagnModel.find({}).select("mainAdId campaignId").lean();
+    const linkedIds = new Set(
+      linked.flatMap(c => [c.mainAdId, c.campaignId]).filter(Boolean).map(String),
+    );
+
+    // 2. Fetch all campaigns from Meta
+    const cRes = await axios.get(`https://graph.facebook.com/v21.0/act_${adAccountId}/campaigns`, {
+      params: {
+        access_token: token,
+        fields: "id,name,status,effective_status,objective,created_time,daily_budget,lifetime_budget",
+        limit: 50,
+      },
+    });
+
+    // 3. Fetch all ads (to get images)
+    const adsRes = await axios.get(`https://graph.facebook.com/v21.0/act_${adAccountId}/ads`, {
+      params: {
+        access_token: token,
+        fields: "id,name,campaign_id,status,effective_status,creative{image_url,thumbnail_url,title,body}",
+        limit: 50,
+      },
+    });
+    const adsByCampaign = {};
+    (adsRes.data?.data || []).forEach(ad => {
+      if (!adsByCampaign[ad.campaign_id]) adsByCampaign[ad.campaign_id] = [];
+      adsByCampaign[ad.campaign_id].push(ad);
+    });
+
+    // 4. Filter out already-linked campaigns and attach ads
+    const unlinked = (cRes.data?.data || [])
+      .filter(c => !linkedIds.has(c.id))
+      .map(c => {
+        const ads = adsByCampaign[c.id] || [];
+        const primaryAd = ads[0];
+        const budget = c.lifetime_budget
+          ? parseInt(c.lifetime_budget) / 100
+          : c.daily_budget ? parseInt(c.daily_budget) / 100 : 0;
+        return {
+          metaCampaignId: c.id,
+          metaAdId: primaryAd?.id || null,
+          name: c.name,
+          status: c.effective_status || c.status,
+          objective: c.objective,
+          budget,
+          createdAt: c.created_time,
+          image: primaryAd?.creative?.image_url || primaryAd?.creative?.thumbnail_url || null,
+          title: primaryAd?.creative?.title || c.name,
+          body: primaryAd?.creative?.body || "",
+        };
+      });
+
+    return res.status(200).json({ success: true, data: unlinked });
+  } catch (err) {
+    console.error("getUnlinkedMetaCampaigns error:", err.response?.data || err.message);
+    return res.status(500).json({ success: false, message: err.response?.data?.error?.message || err.message });
+  }
+};
+
+/**
+ * Link a Meta Campaign / Ad ID to an internal campaign record.
+ * Body: { metaCampaignId, metaAdId, businessPhone?, businessName?, pageName? }
+ */
+exports.linkMetaAdToCampaign = async (req, res) => {
+  try {
+    const { metaCampaignId, metaAdId, businessPhone, businessName, pageName } = req.body;
+
+    if (!metaCampaignId && !metaAdId) {
+      return res.status(400).json({ success: false, message: "metaCampaignId or metaAdId is required" });
+    }
+
+    const token = process.env.systemUserAccessToken;
+
+    // 1. Resolve business (optional)
+    let bizDoc = null;
+    if (businessPhone) {
+      const mobile = businessPhone.replace(/\D/g, "");
+      bizDoc = await businessModel.findOne({ mobile: { $regex: mobile.slice(-10) } }).lean();
+    }
+    if (!bizDoc && businessName) {
+      bizDoc = await businessModel.findOne({ businessName: { $regex: businessName, $options: "i" } }).lean();
+    }
+
+    // 2. Fetch campaign info from Meta
+    let campaignInfo = { name: businessName || "Linked Campaign", status: "PAUSED", daily_budget: "0", lifetime_budget: "0" };
+    try {
+      if (metaCampaignId) {
+        const cRes = await axios.get(`https://graph.facebook.com/v21.0/${metaCampaignId}`, {
+          params: { access_token: token, fields: "name,status,effective_status,daily_budget,lifetime_budget,created_time,objective" },
+        });
+        campaignInfo = { ...campaignInfo, ...cRes.data };
+      }
+    } catch (e) { /* keep default */ }
+
+    // 3. Fetch ad info
+    let adInfo = {};
+    try {
+      if (metaAdId) {
+        const aRes = await axios.get(`https://graph.facebook.com/v21.0/${metaAdId}`, {
+          params: { access_token: token, fields: "name,status,effective_status,campaign_id,creative{image_url,thumbnail_url,title,body}" },
+        });
+        adInfo = aRes.data;
+      }
+    } catch (e) { /* keep default */ }
+
+    // 4. Fetch insights
+    let insights = {};
+    try {
+      const insRes = await axios.get(
+        `https://graph.facebook.com/v21.0/${metaCampaignId || metaAdId}/insights`,
+        { params: { access_token: token, date_preset: "maximum", fields: "spend,impressions,reach,clicks,actions" } },
+      );
+      const row = insRes.data?.data?.[0];
+      if (row) {
+        const actions = row.actions || [];
+        const leadAction = actions.find(a =>
+          ["lead","leadgen","onsite_conversion.lead","lead_grouped","onsite_web_lead"].includes(a.action_type));
+        insights = {
+          spendAmount: Math.ceil(parseFloat(row.spend || 0) * 1.18),
+          totalReach: parseInt(row.reach || 0, 10),
+          totalImpression: parseInt(row.impressions || 0, 10),
+          totalClicks: parseInt(row.clicks || 0, 10),
+          totalLeads: parseInt(leadAction?.value || 0, 10),
+          totalFirstReplies: parseInt(leadAction?.value || 0, 10),
+        };
+      }
+    } catch (e) { /* keep default */ }
+
+    // 5. Map status
+    const META_STATUS_MAP = {
+      ACTIVE: "ACTIVE", PAUSED: "PAUSED", ADSET_PAUSED: "PAUSED",
+      CAMPAIGN_PAUSED: "PAUSED", IN_PROCESS: "IN_REVIEW", PENDING_REVIEW: "IN_REVIEW",
+      DISAPPROVED: "REJECTED", WITH_ISSUES: "DELIVERY_ERROR",
+    };
+    const metaStatus = campaignInfo.effective_status || campaignInfo.status || "PAUSED";
+    const status = META_STATUS_MAP[metaStatus] || "PAUSED";
+
+    const budget = campaignInfo.lifetime_budget
+      ? parseInt(campaignInfo.lifetime_budget) / 100
+      : campaignInfo.daily_budget ? parseInt(campaignInfo.daily_budget) / 100 : 0;
+
+    const imageUrl = adInfo?.creative?.image_url || adInfo?.creative?.thumbnail_url || null;
+
+    const doc = {
+      title: campaignInfo.name || businessName || "Linked Campaign",
+      fromName: pageName || businessName || campaignInfo.name || "Advertiser",
+      pageName: pageName || null,
+      totalBudget: budget,
+      dailyBudget: budget,
+      status,
+      mainAdId: metaAdId || null,
+      campaignId: metaCampaignId || null,
+      image: imageUrl ? [imageUrl] : [],
+      thambnail: imageUrl,
+      caption: adInfo?.creative?.body || "",
+      destinationUrl: "https://marketingkart.ai",
+      targetArea: "Pan India",
+      metaEffectiveStatus: metaStatus,
+      metaStatusSyncedAt: new Date(),
+      businessId: bizDoc?._id || null,
+      createdAt: campaignInfo.created_time ? new Date(campaignInfo.created_time) : new Date(),
+      ...insights,
+    };
+
+    // Prevent duplicate linking
+    const orConditions = [];
+    if (metaAdId) orConditions.push({ mainAdId: metaAdId });
+    if (metaCampaignId) orConditions.push({ campaignId: metaCampaignId });
+
+    const existing = await internalCampiagnModel.findOne({ $or: orConditions });
+    if (existing) {
+      Object.assign(existing, doc);
+      await existing.save();
+      return res.status(200).json({ success: true, message: "Campaign already linked – data refreshed", data: existing });
+    }
+
+    const newCampaign = await internalCampiagnModel.create(doc);
+    return res.status(201).json({ success: true, message: "Meta campaign linked successfully", data: newCampaign });
+  } catch (err) {
+    console.error("linkMetaAdToCampaign error:", err.response?.data || err.message);
+    return res.status(500).json({ success: false, message: err.response?.data?.error?.message || err.message });
+  }
+};
 
 
 

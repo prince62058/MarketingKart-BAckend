@@ -634,8 +634,7 @@ const sendNotificationToAllUsersWithCondition = async (req, res) => {
 // Function to get notifications by userId and businessId (optional)
 const getNotificationsByUserIdBusinessId = async (req, res) => {
   try {
-    const { userId, businessId } = req.query;
-    console.log("Fetching notifications for:", { userId, businessId });
+    const { userId, businessId, markRead } = req.query;
     const query = {};
 
     if (userId) {
@@ -646,12 +645,14 @@ const getNotificationsByUserIdBusinessId = async (req, res) => {
       query.$or = [{ businessId: businessId }, { businessId: { $exists: false } }, { businessId: null }];
     }
 
-    const notifications = await Notification.find(query).sort({
-      createdAt: -1,
-    });
+    const notifications = await Notification.find(query)
+      .sort({ createdAt: -1 })
+      .limit(50);
 
-    // Mark notifications as read
-    await Notification.updateMany(query, { $set: { read: true } });
+    // Only mark as read if explicitly requested
+    if (markRead === "true") {
+      await Notification.updateMany(query, { $set: { read: true } });
+    }
 
     res.status(200).json({ success: true, notifications });
   } catch (error) {
@@ -680,11 +681,44 @@ const getUnreadNotificationsCount = async (req, res) => {
   }
 };
 
+// Function to mark notification(s) as read
+const markNotificationAsRead = async (req, res) => {
+  try {
+    const { notificationId, all, userId } = req.body;
+    if (all) {
+      const query = userId ? { userId } : {};
+      await Notification.updateMany(query, { $set: { read: true } });
+      return res.status(200).json({ success: true, message: "All notifications marked as read" });
+    }
+    if (notificationId) {
+      await Notification.findByIdAndUpdate(notificationId, { $set: { read: true } });
+      return res.status(200).json({ success: true, message: "Notification marked as read" });
+    }
+    return res.status(400).json({ success: false, message: "notificationId or all flag required" });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// Function to clear notifications
+const clearNotifications = async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const query = userId ? { userId } : {};
+    await Notification.deleteMany(query);
+    res.status(200).json({ success: true, message: "Notifications cleared successfully" });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 module.exports = {
   sendNotificationToAllUsersBusiness,
   sendNotificationToBusinessUsers,
   getNotificationsByUserIdBusinessId,
   getUnreadNotificationsCount,
+  markNotificationAsRead,
+  clearNotifications,
   sendNotificationToAllUsersWithCondition,
   sendNotificationToMultipleTokens,
   sendNotificationToMultipleToken,

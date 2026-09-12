@@ -202,17 +202,18 @@ exports.verifyOtp = async (req, res) => {
 };
 
 exports.updateProfile = async (req, res) => {
-  const { name, email } = req.body;
-  let image = req.file ? req.file.location : req.user?.image;
-  // console.log(req.file)
+  const { name, email, mobile } = req.body;
+  let image = req.file ? req.file.location : (req.body.image !== undefined ? req.body.image : req.user?.image);
   if (req.file && req.user?.image != null) {
     deleteFileFromObjectStorage(req.user.image);
   }
-  let userFind = await userService.updateUser(req.user?._id, {
-    name: name,
-    email: email,
-    image: image,
-  });
+  const updateData = {};
+  if (name !== undefined) updateData.name = name;
+  if (email !== undefined) updateData.email = email;
+  if (mobile !== undefined) updateData.mobile = mobile;
+  if (image !== undefined) updateData.image = image;
+
+  let userFind = await userService.updateUser(req.user?._id, updateData);
   return res
     .status(statusCodes.OK)
     .json(

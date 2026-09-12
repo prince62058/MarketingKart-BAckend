@@ -123,8 +123,8 @@ exports.getCategoryById = async (req, res) => {
 
 exports.updateCategory = async (req, res) => {
   const getCategoryById = req.category;
-  const { title, categoryId, orderNumber } = req.body;
-  let icon = req.file ? req.file.location : getCategoryById.icon;
+  const { title, categoryId, orderNumber, icon: bodyIcon } = req.body;
+  let icon = req.file ? req.file.location : (bodyIcon !== undefined ? bodyIcon : getCategoryById.icon);
   if (req.file && getCategoryById?.icon != null) {
     deleteFileFromObjectStorage(getCategoryById?.icon);
   }

@@ -15,4 +15,6 @@ router.post('/refreshMetaToken',controller.refreshMetaToken)
 router.post('/updateMetaToken',controller.updateMetaToken)
 router.get('/checkMetaTokenStatus',controller.checkMetaTokenStatus)
 router.get('/liveAdsStatus',controller.liveAdsStatus)
+router.get('/getUnlinkedMetaCampaigns', controller.getUnlinkedMetaCampaigns)
+router.post('/linkMetaAdToCampaign', controller.linkMetaAdToCampaign)
 module.exports = router;

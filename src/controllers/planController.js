@@ -99,19 +99,26 @@ exports.createPlan = async (req, res) => {
     reach,
     leads,
   } = req.body;
+
+  const numPrice = Number(price) || 0;
+  const numDuration = Number(duretion) || 1;
+  const computedDaily = dailySpendBudget || Math.round(numPrice / numDuration);
+  const computedInsta = instaBudget !== undefined && instaBudget !== null ? Number(instaBudget) : Math.round(computedDaily / 2);
+  const computedFb = facebookBudget !== undefined && facebookBudget !== null ? Number(facebookBudget) : Math.round(computedDaily / 2);
+
   const createData = await planService.createPlan({
     advertisementTypeId,
     title,
-    price,
-    duretion,
-    dailySpendBudget,
-    aiImageCount,
-    instaBudget,
-    googleBudget,
-    facebookBudget,
-    views,
-    reach,
-    leads,
+    price: numPrice,
+    duretion: numDuration,
+    dailySpendBudget: computedDaily,
+    aiImageCount: aiImageCount !== undefined ? Number(aiImageCount) : 5,
+    instaBudget: computedInsta,
+    googleBudget: googleBudget || null,
+    facebookBudget: computedFb,
+    views: views ? String(views) : "N/A",
+    reach: reach ? String(reach) : "N/A",
+    leads: leads ? String(leads) : "N/A",
   });
   res
     .status(statusCodes.Created)
@@ -243,6 +250,20 @@ exports.disablePlan = async (req, res) => {
           ? defaultResponseMessage.DISABLED
           : defaultResponseMessage.ENABLED,
         updateDisable
+      )
+    );
+};
+
+exports.deletePlan = async (req, res) => {
+  const planId = req.plan?._id || req.params.planId;
+  const deleted = await planService.deletePlan(planId);
+  res
+    .status(statusCodes.OK)
+    .json(
+      responseBuilder(
+        apiResponseStatusCode[200],
+        defaultResponseMessage.DELETED,
+        deleted
       )
     );
 };

@@ -5565,14 +5565,23 @@ exports.getMetaAdAccountCampaigns = async (req, res) => {
     const adAccountId = business.metaAdAccountId;
     const accessToken = process.env.systemUserAccessToken;
     const limit = 20;
-    const offset = (page - 1) * limit;
+    // Meta's campaigns endpoint does not support offset — use cursor pagination instead.
+    // For page 1 there is no after-cursor; higher pages are fetched via the
+    // after-cursor returned in the previous page's paging object.
+    const after = req.query.after || null;
 
     // Get all internal campaign mainAdIds for this business to filter out duplicates
     const internalCampaigns = await internalCampaignModel.find({ businessId: targetBusinessId }).select('mainAdId').lean();
     const internalAdIds = new Set(internalCampaigns.map(c => c.mainAdId).filter(Boolean));
 
     // Fetch campaigns from Meta
-    const campaignsUrl = `https://graph.facebook.com/v22.0/act_${adAccountId}/campaigns?access_token=${accessToken}&fields=name,status,objective,daily_budget,lifetime_budget,start_time,stop_time,created_time,updated_time&limit=${limit}&offset=${offset}`;
+    const params = new URLSearchParams({
+      access_token: accessToken,
+      fields: 'name,status,objective,daily_budget,lifetime_budget,start_time,stop_time,created_time,updated_time',
+      limit,
+    });
+    if (after) params.set('after', after);
+    const campaignsUrl = `https://graph.facebook.com/v22.0/act_${adAccountId}/campaigns?${params}`;
 
     const campaignsResponse = await axios.get(campaignsUrl);
     const allCampaigns = campaignsResponse.data?.data || [];
@@ -5641,15 +5650,17 @@ exports.getMetaAdAccountCampaigns = async (req, res) => {
       });
     }
 
-    // Check if there are more pages
-    const hasNext = campaignsResponse.data?.paging?.next ? true : false;
-    const totalPages = hasNext ? Number(page) + 1 : Number(page);
+    // Check if there are more pages using cursor-based pagination
+    const nextCursor = campaignsResponse.data?.paging?.cursors?.after || null;
+    const hasNext = Boolean(campaignsResponse.data?.paging?.next);
 
     return res.status(200).json({
       success: true,
       message: "Meta ad account campaigns fetched",
       data,
-      page: totalPages,
+      hasNext,
+      nextCursor,
+      page: Number(page),
       curentPage: Number(page),
     });
   } catch (error) {

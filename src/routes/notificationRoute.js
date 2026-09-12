@@ -6,6 +6,8 @@ const {
     sendNotificationToBusinessUsers,
     getNotificationsByUserIdBusinessId,
     getUnreadNotificationsCount,
+    markNotificationAsRead,
+    clearNotifications,
     sendNotificationToAllUsersWithCondition,
     sendNotificationToSingleUserAndBusiness
 } = require('../controllers/notificationController');
@@ -22,6 +24,12 @@ router.get('/get-notifications', getNotificationsByUserIdBusinessId);
 
 // Route to get unread notifications count by businessId and userId (optional)
 router.get('/unread-count', getUnreadNotificationsCount);
+
+// Route to mark notifications as read
+router.put('/mark-as-read', markNotificationAsRead);
+
+// Route to clear notifications
+router.delete('/clear-notifications', clearNotifications);
 
 // Route to send notification to all users with condition
 router.post('/send-to-all-users-with-condition',upload.single("image") , sendNotificationToAllUsersWithCondition);
