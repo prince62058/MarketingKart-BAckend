@@ -32,6 +32,7 @@ router.post("/whatsapp/templates", authUser, templateController.createTemplate);
 router.get("/whatsapp/templates", authUser, templateController.getAllTemplates);
 router.get("/whatsapp/templates/:templateId", authUser, templateController.getTemplateById);
 router.put("/whatsapp/templates/:templateId", authUser, templateController.updateTemplate);
+router.delete("/whatsapp/templates/:templateId", authUser, templateController.deleteTemplate);
 router.post("/whatsapp/templates/upload-media", authUser, uploadWhatsAppMedia.single("media"), templateController.uploadMedia);
 
 // ─── Campaigns ──────────────────────────────────────────────────────────────

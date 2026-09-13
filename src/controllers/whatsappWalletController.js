@@ -7,7 +7,7 @@ const WhatsAppTransaction = require("../models/whatsappTransactionModel");
 const WhatsAppSubscription = require("../models/whatsappSubscriptionModel");
 const { sendWalletNotification } = require("../helpers/walletNotificationHelper");
 
-const isAdminUser = (user) => user?.userType === "ADMIN";
+const isAdminUser = (user) => user?.userType === "ADMIN" || user?.role === "ADMIN" || user?.userType === "STAFF";
 
 const getRazorpayClient = () => {
   const keyId = process.env.RAZORPAY_KEY_ID;
@@ -107,14 +107,25 @@ exports.addMoney = async (req, res) => {
     let targetId = userId || req.user._id;
     let user;
 
-    // Check if the provided userId is a 10-digit mobile number
-    if (typeof targetId === 'string' && /^[0-9]{10}$/.test(targetId)) {
-      user = await User.findOne({ mobile: parseInt(targetId) }).session(session);
+    // Clean mobile if formatted (e.g. "+91 6205872519" or "6205872519")
+    const cleanMobile = typeof targetId === 'string'
+      ? targetId.replace(/^\+91/, '').replace(/\D/g, '')
+      : (typeof targetId === 'number' ? String(targetId) : '');
+
+    if (cleanMobile && cleanMobile.length === 10) {
+      user = await User.findOne({ mobile: parseInt(cleanMobile) }).session(session);
     } else if (mongoose.Types.ObjectId.isValid(targetId)) {
       user = await User.findById(targetId).session(session);
+    } else if (typeof targetId === 'string') {
+      user = await User.findOne({
+        $or: [
+          { email: targetId.trim().toLowerCase() },
+          { name: { $regex: new RegExp(`^${targetId.trim()}$`, "i") } }
+        ]
+      }).session(session);
     }
 
-    if (!user) throw new Error("User not found");
+    if (!user) throw new Error(`User not found with mobile or ID "${targetId}". Please verify the mobile number.`);
     const targetUserId = user._id;
 
     const prevBal = parseFloat(user.whatsappWallet || 0);
@@ -244,12 +255,25 @@ exports.getAllTransactions = async (req, res) => {
     const query = {};
 
     if (userId) query.userId = userId;
-    if (type) query.type = type;
-    if (mode) query.mode = mode;
-    if (search) {
+    if (type && type !== "ALL") query.type = type;
+    if (mode && mode !== "ALL") query.mode = mode;
+
+    if (search && search.trim()) {
+      const s = search.trim();
+      // Search matching users by mobile or name
+      const isNum = /^[0-9]+$/.test(s);
+      const matchingUsers = await User.find({
+        $or: [
+          { name: { $regex: s, $options: "i" } },
+          ...(isNum ? [{ mobile: parseInt(s) }] : []),
+        ],
+      }).select("_id");
+      const userIds = matchingUsers.map((u) => u._id);
+
       query.$or = [
-        { transactionId: { $regex: search, $options: "i" } },
-        { description: { $regex: search, $options: "i" } },
+        { transactionId: { $regex: s, $options: "i" } },
+        { description: { $regex: s, $options: "i" } },
+        ...(userIds.length > 0 ? [{ userId: { $in: userIds } }] : []),
       ];
     }
 

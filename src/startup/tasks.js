@@ -7,6 +7,9 @@ const { seedAdminIfEmpty } = require("./seedAdmin");
 const { seedAdTypesAndPlans } = require("./seedAdTypesAndPlans");
 const { ensureUserIndexes } = require("./ensureUserIndexes");
 const { seedCompanySettingsIfMissing } = require("./seedCompanySettings");
+const { seedFaqsIfEmpty } = require("./seedFaqs");
+const { seedContactUsIfEmpty } = require("./seedContactUs");
+const { seedWhatsAppPlansIfEmpty } = require("./seedWhatsAppPlans");
 
 async function initializeBackgroundTasks() {
     console.log("🚀 Initializing background tasks...");
@@ -27,6 +30,9 @@ async function initializeBackgroundTasks() {
         await seedCategoriesIfEmpty();
         await seedAdminIfEmpty();
         await seedAdTypesAndPlans();
+        await seedFaqsIfEmpty();
+        await seedContactUsIfEmpty();
+        await seedWhatsAppPlansIfEmpty();
 
         // Start the manual campaign manager (starts its own 5s loop)
         manageCampaigns();

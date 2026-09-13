@@ -16,8 +16,8 @@ const staffSchema = new mongoose.Schema(
     }],
     role: {
       type: String,
-      enum: ["STAFF"],
-      default: "STAFF",
+      enum: ["STAFF", "BDE", "MANAGER", "ADMIN"],
+      default: "BDE",
       required: true
     },
     isActive: {

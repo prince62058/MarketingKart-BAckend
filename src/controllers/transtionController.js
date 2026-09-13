@@ -285,7 +285,7 @@ function getTransactionMessage(type, paymentId, isAdminAction, walletType) {
 
       // Validate and sanitize inputs
       page = Math.max(1, parseInt(page)) || 1;
-      limit = Math.min(20, Math.max(1, parseInt(limit))) || 10; // Enforce max 20 per page
+      limit = Math.min(100, Math.max(1, parseInt(limit) || 50)); // Allow up to 100 per page, default 50
 
       // Build filter object
       const filter = {};

@@ -780,7 +780,19 @@ exports.getAllLeadsByPaginationForAdmin = async (req, res) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(pageSize)
-        .populate("businessId", "businessName")
+        .populate({
+          path: "businessId",
+          select: "businessName businessContact whatsappNumber userId",
+          populate: { path: "userId", select: "name mobile email" },
+        })
+        .populate({
+          path: "userId",
+          select: "name mobile email",
+        })
+        .populate({
+          path: "statusUpdatedBy",
+          select: "name mobile email",
+        })
         .populate({
           path: "internalCampiagnId",
           select: "title image thambnail status addTypeId",

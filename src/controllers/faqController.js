@@ -28,23 +28,25 @@ const {
   
   exports.getAllFaqs = async (req, res) => {
     const { disable, type, search } = req.query;
-    const { page = 1 } = req.query;
-    const skip = (page - 1) * 20;
+    const { page = 1, limit = 100 } = req.query;
+    const parsedLimit = parseInt(limit) || 100;
+    const skip = (Math.max(1, parseInt(page)) - 1) * parsedLimit;
     let obj = {};
-    if (disable) {
-      obj.disable = disable;
+    if (disable !== undefined) {
+      obj.disable = disable === "true" || disable === true;
     }
-    if (type) {
+    if (type && type !== "ALL") {
       obj.type = type;
     }
-    if (search) {
-      obj.question = { $regex: search, $options: "i" };
-      obj.answer = { $regex: search, $options: "i" };
+    if (search && search.trim()) {
+      obj.$or = [
+        { question: { $regex: search.trim(), $options: "i" } },
+        { answer: { $regex: search.trim(), $options: "i" } }
+      ];
     }
-    const data = await faqService.getAllFaq(obj, skip);
-    // Fetch the total count
-    const totalCount = (await faqService.getAllFaq(obj)).length;
-    const pageCount = Math.ceil(totalCount / 20);
+    const data = await faqService.getAllFaq(obj, skip, parsedLimit);
+    const totalCount = await faqService.countFaqs(obj);
+    const pageCount = Math.ceil(totalCount / parsedLimit) || 1;
     res
       .status(statusCodes.OK)
       .json(
@@ -58,12 +60,15 @@ const {
   };
   
   exports.updateFaqs = async (req, res) => {
-    const FaqData = req.faq
+    const FaqData = req.faq;
     const data = {
-        question:req.body.question,
-        answer:req.body.answer,
-        type:req.body.type
-        };
+      question: req.body.question !== undefined ? req.body.question : FaqData.question,
+      answer: req.body.answer !== undefined ? req.body.answer : FaqData.answer,
+      type: req.body.type !== undefined ? req.body.type : FaqData.type
+    };
+    if (req.body.disable !== undefined) {
+      data.disable = req.body.disable === true || req.body.disable === "true";
+    }
        
     const Faq = await faqService.updateFaq(FaqData?._id, data);
     res
@@ -78,7 +83,7 @@ const {
   };
   
   exports.disableFaqs = async (req, res) => {
-    const FaqData = req.faq
+    const FaqData = req.faq;
     const Faq = await faqService.disableFaq(FaqData);
     res
       .status(statusCodes.OK)
@@ -89,6 +94,20 @@ const {
             ? defaultResponseMessage.DISABLED
             : defaultResponseMessage.ENABLED,
           Faq
+        )
+      );
+  };
+
+  exports.deleteFaq = async (req, res) => {
+    const FaqData = req.faq;
+    await faqService.deleteOneFaq(FaqData?._id);
+    res
+      .status(statusCodes.OK)
+      .json(
+        responseBuilder(
+          apiResponseStatusCode[200],
+          defaultResponseMessage.DELETED,
+          null
         )
       );
   };

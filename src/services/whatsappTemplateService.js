@@ -69,6 +69,14 @@ const updateTemplate = async (id, data, access = {}) => {
   return await whatsappTemplateModel.findOneAndUpdate(query, data, { new: true });
 };
 
+const deleteTemplate = async (id, access = {}) => {
+  const query = {
+    _id: id,
+    ...buildAccessQuery(access),
+  };
+  return await whatsappTemplateModel.findOneAndDelete(query);
+};
+
 /**
  * Sync template approval status from Meta WABA into local DB.
  * Returns count of updated records.
@@ -141,6 +149,7 @@ module.exports = {
   getAllTemplates,
   getTemplateById,
   updateTemplate,
+  deleteTemplate,
   syncFromMeta,
   extractVariables,
 };

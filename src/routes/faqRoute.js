@@ -33,4 +33,10 @@ router.put(
   asyncHandler(faqMid),
   asyncHandler(controller.updateFaqs)
 );
+router.delete(
+  "/faq/deleteFaq/:faqId",
+  asyncHandler(authUser),
+  asyncHandler(faqMid),
+  asyncHandler(controller.deleteFaq)
+);
 module.exports = router;

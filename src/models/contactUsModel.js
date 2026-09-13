@@ -13,6 +13,19 @@ const contactUsSchema = new mongoose.Schema({
     type: String,
     trim: true,
   },
+  phone: {
+    type: String,
+    trim: true,
+  },
+  status: {
+    type: String,
+    enum: ["PENDING", "IN_PROGRESS", "RESOLVED"],
+    default: "PENDING",
+  },
+  notes: {
+    type: String,
+    trim: true,
+  },
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "userModel",

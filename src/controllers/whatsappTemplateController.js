@@ -1,6 +1,7 @@
 const whatsappTemplateService = require("../services/whatsappTemplateService");
 const whatsappCloudApiService = require("../services/whatsappCloudApiService");
 const whatsappAccountModel = require("../models/whatsappAccountModel");
+const whatsappTemplateModel = require("../models/whatsappTemplateModel");
 const OpenAI = require("openai");
 
 const openai = new OpenAI({
@@ -157,7 +158,30 @@ exports.createTemplate = async (req, res) => {
     // Fetch User's WhatsApp Credentials dynamically
     const account = await whatsappAccountModel.findOne({ userId: req.user._id });
     if (!account || account.status !== "CONNECTED") {
-      return res.status(403).json({ success: false, message: "WhatsApp Account not connected. Please connect your META WhatsApp account to create templates." });
+      const initialStatus = req.body.status || (req.user.userType === "ADMIN" ? "APPROVED" : "PENDING");
+      const template = await whatsappTemplateService.createTemplate({
+        name: cleanName,
+        category,
+        language: language || "en_US",
+        bodyText,
+        headerType: headerType || "NONE",
+        headerText: headerText || "",
+        headerMediaUrl: headerMediaUrl || "",
+        footerText: footerText || "",
+        buttons: buttons || [],
+        marketingType: marketingType || "CUSTOM",
+        components,
+        metaTemplateId: null,
+        status: initialStatus,
+        businessId: businessId || null,
+        createdBy: req.user._id,
+      });
+
+      return res.status(201).json({
+        success: true,
+        message: "Template created successfully and stored in database.",
+        data: template,
+      });
     }
 
     // Upload to Meta for approval
@@ -266,11 +290,32 @@ exports.updateTemplate = async (req, res) => {
   }
 };
 
+exports.deleteTemplate = async (req, res) => {
+  try {
+    const template = await whatsappTemplateService.deleteTemplate(
+      req.params.templateId,
+      {
+        createdBy: req.user._id,
+        isAdmin: req.user.userType === "ADMIN",
+      }
+    );
+    if (!template) return res.status(404).json({ success: false, message: "Template not found" });
+    return res.status(200).json({ success: true, message: "Template deleted successfully" });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.syncTemplates = async (req, res) => {
   try {
     const account = await whatsappAccountModel.findOne({ userId: req.user._id });
     if (!account || account.status !== "CONNECTED") {
-      return res.status(403).json({ success: false, message: "WhatsApp Account not connected." });
+      const count = await whatsappTemplateModel.countDocuments({ disable: false });
+      return res.status(200).json({
+        success: true,
+        message: `Synced ${count} templates from local database. Connect Meta WABA in settings for live cloud sync.`,
+        updatedCount: count,
+      });
     }
 
     const updatedCount = await whatsappTemplateService.syncFromMeta(

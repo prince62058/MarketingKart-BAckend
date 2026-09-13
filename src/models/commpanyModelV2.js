@@ -59,7 +59,24 @@ const companySchema = new mongoose.Schema({
   forceUpdateEnabled: { type: Boolean, default: false },
   playStoreUrl: { type: String, default: "https://play.google.com/store/apps/details?id=com.marketingkart.app" },
   homeBannerImages: { type: [String], default: [] },
-  homeBannerUrl: { type: String, trim: true, default: null },
+  // Dynamic Invoice Template Customization
+  invoicePrefix: { type: String, trim: true, default: "MKAI" },
+  invoiceTagline: { type: String, trim: true, default: "Smart Marketing Stronger Business with AI" },
+  invoiceThankYouText: { type: String, trim: true, default: "Thank You! for choosing MarketingKart.ai" },
+  invoiceBankName: { type: String, trim: true, default: "HDFC Bank" },
+  invoiceAccountName: { type: String, trim: true, default: "Ayotrix Infotech Pvt Ltd" },
+  invoiceAccountNumber: { type: String, trim: true, default: "502000XXXXXXXX" },
+  invoiceIfscCode: { type: String, trim: true, default: "HDFC0001234" },
+  invoiceUpiId: { type: String, trim: true, default: "ayotrix@hdfcbank" },
+  invoiceNotes: { 
+    type: String, 
+    trim: true, 
+    default: "Please make the payment within the due date.\nThis is a computer generated invoice and does not require a physical signature.\nFor any queries, feel free to contact us." 
+  },
+  invoiceAuthorizedSignatory: { type: String, trim: true, default: "Ayotrix Infotech Pvt Ltd" },
+  invoiceBrandParent: { type: String, trim: true, default: "Ayotrix Infotech Pvt Ltd" },
+  invoiceBrandSubtext: { type: String, trim: true, default: "IDEAS | TECHNOLOGY | GROWTH" },
+  invoiceBrandCity: { type: String, trim: true, default: "Indore, Madhya Pradesh, India" },
 });
 
 const Company = mongoose.model("Company", companySchema);

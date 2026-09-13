@@ -122,9 +122,14 @@ exports.updateOrderHistory = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid order ID" });
     }
 
+    const updateFields = {};
+    if (req.body.orderdDetail !== undefined) updateFields.orderdDetail = req.body.orderdDetail;
+    if (req.body.status !== undefined) updateFields.status = req.body.status;
+    if (req.body.type !== undefined) updateFields.type = req.body.type;
+
     const updatedHistory = await OrderHistory.findByIdAndUpdate(
-      {_id:orderId},
-      { $set: {orderdDetail: req.body.orderdDetail} },
+      { _id: orderId },
+      { $set: updateFields },
       { new: true, runValidators: true }
     );
 

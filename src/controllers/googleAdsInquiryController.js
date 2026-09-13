@@ -308,16 +308,36 @@ exports.getAllGoogleAdsInquiries = async (req, res) => {
   }
 };
 
-// 3. Update Google Ads inquiry status
+// 3. Update Google Ads inquiry status and details
 exports.updateGoogleAdsInquiryStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, notes, assignedStaff } = req.body;
+    const {
+      status,
+      notes,
+      assignedStaff,
+      businessName,
+      contactPerson,
+      phone,
+      email,
+      websiteUrl,
+      campaignGoal,
+      monthlyBudget,
+      targetLocation,
+    } = req.body;
 
     const updateData = {};
-    if (status) updateData.status = status;
+    if (status !== undefined) updateData.status = status;
     if (notes !== undefined) updateData.notes = notes;
     if (assignedStaff !== undefined) updateData.assignedStaff = assignedStaff;
+    if (businessName !== undefined) updateData.businessName = businessName.trim();
+    if (contactPerson !== undefined) updateData.contactPerson = contactPerson.trim();
+    if (phone !== undefined) updateData.phone = phone.trim();
+    if (email !== undefined) updateData.email = email.trim();
+    if (websiteUrl !== undefined) updateData.websiteUrl = websiteUrl.trim();
+    if (campaignGoal !== undefined) updateData.campaignGoal = campaignGoal.trim();
+    if (monthlyBudget !== undefined) updateData.monthlyBudget = monthlyBudget.trim();
+    if (targetLocation !== undefined) updateData.targetLocation = targetLocation.trim();
 
     const updated = await GoogleAdsInquiry.findByIdAndUpdate(id, updateData, { new: true });
 
