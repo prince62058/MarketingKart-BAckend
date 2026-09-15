@@ -254,6 +254,7 @@ exports.updateBusiness = async (req, res) => {
       if (businessManagerResponse.error) {
         // BM assign fail (pending request / #200) — page tokens + leadgen phir bhi kaam karte hain.
         // App pe "Something went wrong" mat dikhao; linked mark karo, BM baad me repair ho sakta hai.
+        // Lekin pehle app ko bata do ki ads-side kya baaki hai — silently mat swallow karo.
         console.warn("⚠️ BM access failed (non-blocking):", businessManagerResponse.error.message);
         updatedBusiness = await businessService.updateBusiness(
           { _id: updatedBusiness._id },
@@ -263,15 +264,17 @@ exports.updateBusiness = async (req, res) => {
             pageName: req.body.pageName || clientUserName || updatedBusiness.pageName,
           },
         );
-        return res
-          .status(statusCodes.OK)
-          .json(
-            responseBuilder(
-              apiResponseStatusCode[200],
-              defaultResponseMessage.UPDATED,
-              updatedBusiness,
-            ),
-          );
+        return res.status(statusCodes.OK).json({
+          ...responseBuilder(
+            apiResponseStatusCode[200],
+            defaultResponseMessage.UPDATED,
+            updatedBusiness,
+          ),
+          pageLinkWarning:
+            "Page linked, but it could not be connected for ads yet: " +
+            businessManagerResponse.error.message +
+            " Try re-linking the page, or contact support if this keeps happening.",
+        });
       }
 
       updatedBusiness = await businessService.updateBusiness(
@@ -281,6 +284,20 @@ exports.updateBusiness = async (req, res) => {
           pageName: req.body.pageName || clientUserName || businessManagerResponse.updatedBusiness.pageName,
         }
       );
+
+      // Meta ne page ko MarketingKart BM me daalne ki request accept kar li,
+      // lekin auto-approve nahi hui — Page ka admin khud Facebook pe jaake
+      // approve kare tab tak ye page ads ke liye usable nahi hai.
+      if (businessManagerResponse.pending) {
+        return res.status(statusCodes.OK).json({
+          ...responseBuilder(
+            apiResponseStatusCode[200],
+            defaultResponseMessage.UPDATED,
+            updatedBusiness,
+          ),
+          pageLinkWarning: businessManagerResponse.pendingMessage,
+        });
+      }
 
       if (missingScopes.length) {
         console.warn(
@@ -541,10 +558,11 @@ async function handleBusinessManagerAccess(business, pageId, pageAccessToken) {
     console.log("Meta Business Manager ID:", metaManagerId);
 
     // Step 1: Assign Page to Business Manager (Core requirement for Agency)
+    let bmClaimStatus = "failed";
     try {
-      await assignPageToBusinessManager(metaManagerId, pageId, pageAccessToken);
-      console.log("✅ Page assigned to Business Manager.");
-      isCoreLinked = true;
+      bmClaimStatus = await assignPageToBusinessManager(metaManagerId, pageId, pageAccessToken);
+      console.log(`✅ Page assign step done: status=${bmClaimStatus}`);
+      isCoreLinked = bmClaimStatus === "linked";
     } catch (coreError) {
       console.error("❌ Core Link Error:", coreError.message);
       throw coreError; // Core step failed
@@ -597,6 +615,27 @@ async function handleBusinessManagerAccess(business, pageId, pageAccessToken) {
         }
       );
       return { updatedBusiness };
+    }
+
+    // Meta ne request accept kar li but abhi client_pages me nahi aaya — Page
+    // admin ko khud Facebook Business Settings me approve karna hoga. Ye fatal
+    // nahi hai: page link successful hai, sirf ek manual approval step baaki hai.
+    if (bmClaimStatus === "pending") {
+      const updatedBusiness = await businessService.updateBusiness(
+        { _id: business._id },
+        {
+          isBmAccessProvidedToAdminBm: false,
+          metaMangerId: metaManagerId,
+          isFacebookPageLinked: true,
+          pageName: clientUserName,
+        }
+      );
+      return {
+        updatedBusiness,
+        pending: true,
+        pendingMessage:
+          "Page linked, but Facebook is holding it for manual approval before ads can run on it. Ask whoever manages this Page to open Facebook, go to the Page's settings (or Business Settings > Requests) and approve MarketingKart's access request.",
+      };
     }
 
     throw new Error(`Integration partially failed: CoreLinked=${isCoreLinked}, SystemUserAssigned=${isSystemUserAssigned}`);
@@ -680,6 +719,34 @@ async function isPageInMarketingKartBM(pageId) {
   return false;
 }
 
+// Marketing Kart BM ke pending_client_pages me page dhoondta hai — jab /agencies
+// request Meta ne auto-approve nahi ki, page owner ko Business Settings me
+// khud accept karna padta hai tab tak page yahi "pending" state me rehta hai.
+async function isPageInMarketingKartPendingBM(pageId) {
+  const marketingKartBmId = process.env.businessId;
+  try {
+    const { data } = await axios.get(
+      `https://graph.facebook.com/v21.0/${marketingKartBmId}/pending_client_pages`,
+      { params: { access_token: process.env.systemUserAccessToken, limit: 200 } },
+    );
+    return (data.data || []).some((p) => String(p.id) === String(pageId));
+  } catch (pendingErr) {
+    console.warn("pending_client_pages check failed:", pendingErr.message);
+    return false;
+  }
+}
+
+/**
+ * Asks Meta to add the page to MarketingKart's BM as a client page.
+ *
+ * Meta auto-approves this when we already hold admin permission on the page;
+ * otherwise it lands in pending_client_pages and the page owner has to accept
+ * it manually in Business Settings before ads can actually run. This never
+ * throws for that case — it returns "pending" so the caller can tell the user
+ * exactly what is left to do, instead of the page silently not working later.
+ *
+ * @returns {Promise<"linked"|"pending">} — throws only for a genuine, unresolved failure.
+ */
 async function assignPageToBusinessManager(
   metaManagerId,
   pageId,
@@ -689,7 +756,7 @@ async function assignPageToBusinessManager(
     // Idempotency: MarketingKart ke BM me pehle se hai to skip karo (correct BM check).
     if (await isPageInMarketingKartBM(pageId)) {
       console.log("✅ Page already in MarketingKart Business Manager.");
-      return;
+      return "linked";
     }
 
     console.log("Assigning page to MarketingKart Business Manager agency...", { pageId, metaManagerId });
@@ -704,27 +771,13 @@ async function assignPageToBusinessManager(
     // "Partner Already Has Access" (code 3989 / subcode 1690131) = effectively success
     if (errorData && (errorData.code === 3989 || errorData.error_subcode === 1690131)) {
       console.log("✅ Page already assigned (Meta 3989). Treating as success.");
-      return;
+      return "linked";
     }
     // Duplicate / already-pending request — MarketingKart BM me pehle se pending hai
     if (errorData && (errorData.error_subcode === 1752041 || errorData.code === 200)) {
-      try {
-        const marketingKartBmId = process.env.businessId;
-        const { data: pending } = await axios.get(
-          `https://graph.facebook.com/v21.0/${marketingKartBmId}/pending_client_pages`,
-          {
-            params: {
-              access_token: process.env.systemUserAccessToken,
-              limit: 100,
-            },
-          },
-        );
-        if ((pending.data || []).some((p) => String(p.id) === String(pageId))) {
-          console.log("✅ Page already in MarketingKart pending_client_pages — treating agency step as done.");
-          return;
-        }
-      } catch (pendingErr) {
-        console.warn("pending_client_pages check failed:", pendingErr.message);
+      if (await isPageInMarketingKartPendingBM(pageId)) {
+        console.log("✅ Page already in MarketingKart pending_client_pages — treating agency step as done.");
+        return "pending";
       }
     }
     console.error("Error in assignPageToBusinessManager:", JSON.stringify(error.response?.data || error.message));
@@ -736,10 +789,18 @@ async function assignPageToBusinessManager(
   for (let attempt = 1; attempt <= 3; attempt++) {
     if (await isPageInMarketingKartBM(pageId)) {
       console.log(`✅ Verified: page MarketingKart BM me show ho raha hai (attempt ${attempt}).`);
-      return;
+      return "linked";
     }
     await new Promise((r) => setTimeout(r, 1500));
   }
+
+  // client_pages me abhi tak nahi aaya — check karo ki pending_client_pages me
+  // hai (page owner ka approval baaki hai) ya request Meta ne bilkul drop ki.
+  if (await isPageInMarketingKartPendingBM(pageId)) {
+    console.warn(`⚠️ Page ${pageId} pending_client_pages me hai — page owner ko Business Settings > Requests me approve karna hoga.`);
+    return "pending";
+  }
+
   throw new Error(
     "Page /agencies me bheja gaya lekin MarketingKart Business Manager ki client_pages me abhi tak show nahi ho raha (verification fail). Page owner ne request accept nahi ki ya permission missing hai."
   );
@@ -1601,6 +1662,14 @@ exports.repairFacebookPageLink = async (req, res) => {
         success: false,
         message: "BM assignment dubara fail hua",
         error: bmResult.error.message,
+      });
+    }
+
+    if (bmResult.pending) {
+      return res.status(200).json({
+        success: true,
+        message: bmResult.pendingMessage,
+        data: bmResult.updatedBusiness,
       });
     }
 
