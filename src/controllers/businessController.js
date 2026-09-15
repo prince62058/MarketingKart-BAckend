@@ -550,12 +550,27 @@ async function handleBusinessManagerAccess(business, pageId, pageAccessToken) {
     const clientEmail = (await fetchClientEmail(business.metaAccessToken)) || business.businessEmail || "noemail@marketingkart.in";
     console.log("Client Email:", clientEmail);
 
-    metaManagerId = await ensureBusinessManagerExists(
-      clientUserId,
-      business.metaAccessToken,
-      clientEmail
-    );
-    console.log("Meta Business Manager ID:", metaManagerId);
+    // Creating the client's OWN Business Manager is only a "nice to have": it is
+    // used later to grant the app-owner BM cross-access. The page still runs ads
+    // in-app through MarketingKart's own agency BM (process.env.businessId), which
+    // Step 1 below assigns independently and does NOT need metaManagerId. Many
+    // accounts simply cannot create a BM through the API — Meta returns a generic
+    // code-1 "unknown error", or they are already at their Business Manager limit
+    // — so this must never block the actual page link.
+    try {
+      metaManagerId = await ensureBusinessManagerExists(
+        clientUserId,
+        business.metaAccessToken,
+        clientEmail
+      );
+      console.log("Meta Business Manager ID:", metaManagerId);
+    } catch (bmCreateError) {
+      console.warn(
+        "⚠️ Could not create/fetch client Business Manager (non-blocking):",
+        bmCreateError.response?.data?.error?.message || bmCreateError.message,
+      );
+      metaManagerId = business.metaManagerId || null;
+    }
 
     // Step 1: Assign Page to Business Manager (Core requirement for Agency)
     let bmClaimStatus = "failed";
