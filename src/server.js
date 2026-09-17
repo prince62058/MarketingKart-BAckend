@@ -78,6 +78,17 @@ const PORT = process.env.PORT || 9898;
                 socket.leave(`conversation:${conversationId}`);
             });
 
+            // Chat relay event for client-to-client or simulator
+            socket.on("sendMessage", (data) => {
+                if (!data) return;
+                if (data.conversationId) {
+                    io.to(`conversation:${data.conversationId}`).emit("newWhatsAppMessage", data);
+                }
+                if (data.businessId) {
+                    io.to(`business:${data.businessId}`).emit("newWhatsAppMessage", data);
+                }
+            });
+
             socket.on("disconnect", () => {
                 console.log("User disconnected:", socket.id);
             });
