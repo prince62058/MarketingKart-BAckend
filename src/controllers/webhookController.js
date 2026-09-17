@@ -548,7 +548,7 @@ exports.postWhatsAppWebhook = async (req, res) => {
           const existingInbound = await whatsappMessageModel.findOne({ metaMessageId: wamid });
           if (!existingInbound) {
             // Create message
-            await whatsappMessageModel.create({
+            const createdMsg = await whatsappMessageModel.create({
               conversationId: conversation._id,
               businessId: businessId, // Fixed: use local businessId instead of outer effectiveBusinessId
               phoneNumberId,
@@ -562,15 +562,57 @@ exports.postWhatsAppWebhook = async (req, res) => {
               sentAt: new Date(parseInt(msg.timestamp) * 1000),
             });
 
-            // Emit real-time update to all businesses of this user
-            if (global.io && businessIds.length > 0) {
-              businessIds.forEach(bId => {
-                global.io.to(`business:${bId}`).emit("newWhatsAppMessage", {
-                  conversationId: conversation._id,
-                  customerPhone,
-                  textBody
+            // Prepare unified payload for inbox & chat
+            const convObj = {
+              _id: String(conversation._id),
+              businessId: businessId,
+              customerPhone: customerPhone,
+              customerName: conversation.customerName || customerName,
+              contactPhone: customerPhone,
+              contactName: conversation.customerName || customerName,
+              lastMessage: textBody.substring(0, 50),
+              lastMessageAt: conversation.lastMessageAt,
+              unreadCount: conversation.unreadCount || 1,
+              status: conversation.status || "OPEN",
+              isBotActive: conversation.isBotActive ?? true,
+            };
+
+            const messagePayload = {
+              conversationId: String(conversation._id),
+              customerPhone,
+              customerName: convObj.customerName,
+              textBody,
+              content: textBody,
+              direction: "INBOUND",
+              type: msgType,
+              messageType: msgType,
+              status: "DELIVERED",
+              createdAt: createdMsg.createdAt || new Date(),
+              sentAt: createdMsg.sentAt || new Date(),
+              _id: String(createdMsg._id),
+              message: createdMsg,
+              conversation: convObj,
+            };
+
+            // Emit real-time update
+            if (global.io) {
+              if (businessIds.length > 0) {
+                businessIds.forEach(bId => {
+                  global.io.to(`business:${bId}`).emit("newWhatsAppMessage", messagePayload);
+                  global.io.to(`business:${bId}`).emit("conversationUpdated", convObj);
                 });
-              });
+              }
+
+              // Also emit to the user's room if account is found
+              const ownerUserId = account?.userId;
+              if (ownerUserId) {
+                global.io.to(`user:${ownerUserId}`).emit("newWhatsAppMessage", messagePayload);
+                global.io.to(`user:${ownerUserId}`).emit("conversationUpdated", convObj);
+              }
+
+              // Emit to conversation room (for live chat screen)
+              global.io.to(`conversation:${conversation._id}`).emit("newWhatsAppMessage", messagePayload);
+              global.io.to(`conversation:${conversation._id}`).emit("chatMessage", messagePayload);
             }
           }
         }

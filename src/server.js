@@ -68,6 +68,16 @@ const PORT = process.env.PORT || 9898;
                 socket.leave(`user:${userId}`);
             });
 
+            // WhatsApp Conversation real-time room (for active chat view)
+            socket.on("joinConversationRoom", (conversationId) => {
+                socket.join(`conversation:${conversationId}`);
+                console.log(`Socket ${socket.id} joined conversation:${conversationId}`);
+            });
+
+            socket.on("leaveConversationRoom", (conversationId) => {
+                socket.leave(`conversation:${conversationId}`);
+            });
+
             socket.on("disconnect", () => {
                 console.log("User disconnected:", socket.id);
             });

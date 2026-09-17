@@ -58,10 +58,11 @@ const processJob = async (job) => {
       customerPhone: to
     });
 
-    // Get the stored message textBody (contains actual template content)
-    const queuedMsg = await whatsappMessageModel.findById(messageId, "textBody");
+    // Get the stored message textBody and contactName
+    const queuedMsg = await whatsappMessageModel.findById(messageId, "textBody contactName");
     const displayText = queuedMsg?.textBody || `Template: ${templateName}`;
     const previewText = displayText.substring(0, 50);
+    const resolvedContactName = queuedMsg?.contactName && queuedMsg.contactName !== "Unknown" ? queuedMsg.contactName : null;
 
     if (!conversation) {
       conversation = await whatsappConversationModel.create({
@@ -69,7 +70,7 @@ const processJob = async (job) => {
         wabaId: account.wabaId,
         phoneNumberId: account.phoneNumberId,
         customerPhone: to,
-        customerName: "Unknown",
+        customerName: resolvedContactName || "Customer",
         lastMessage: previewText,
         lastMessageAt: new Date(),
         unreadCount: 0,
@@ -79,6 +80,9 @@ const processJob = async (job) => {
       conversation.businessId = resolvedBusinessId; // Transfer to current sender
       conversation.lastMessage = previewText;
       conversation.lastMessageAt = new Date();
+      if (resolvedContactName && (!conversation.customerName || conversation.customerName === "Unknown")) {
+        conversation.customerName = resolvedContactName;
+      }
       await conversation.save();
     }
 
@@ -113,16 +117,53 @@ const processJob = async (job) => {
       global.io
         .to(`campaign:${campaignId}`)
         .emit("campaignStatsUpdate", { campaignId });
-        
+
+      const convObj = {
+        _id: String(conversation._id),
+        businessId: resolvedBusinessId,
+        customerPhone: to,
+        customerName: conversation.customerName || resolvedContactName || "Customer",
+        contactPhone: to,
+        contactName: conversation.customerName || resolvedContactName || "Customer",
+        lastMessage: previewText,
+        lastMessageAt: conversation.lastMessageAt,
+        unreadCount: conversation.unreadCount || 0,
+        status: conversation.status || "OPEN",
+        isBotActive: conversation.isBotActive ?? true,
+      };
+
+      const messagePayload = {
+        conversationId: String(conversation._id),
+        customerPhone: to,
+        customerName: convObj.customerName,
+        textBody: displayText,
+        content: displayText,
+        direction: "OUTBOUND",
+        type: updatedMessage.type || "TEMPLATE",
+        messageType: updatedMessage.type || "TEMPLATE",
+        status: updatedMessage.status || "SENT",
+        createdAt: updatedMessage.createdAt || new Date(),
+        sentAt: updatedMessage.sentAt || new Date(),
+        _id: String(updatedMessage._id),
+        message: updatedMessage,
+        conversation: convObj,
+      };
+
+      // 1. Emit to business room
       if (resolvedBusinessId) {
-        global.io
-          .to(`business:${resolvedBusinessId}`)
-          .emit("newWhatsAppMessage", {
-            conversationId: conversation._id,
-            customerPhone: to,
-            textBody: previewText
-          });
+        global.io.to(`business:${resolvedBusinessId}`).emit("newWhatsAppMessage", messagePayload);
+        global.io.to(`business:${resolvedBusinessId}`).emit("conversationUpdated", convObj);
       }
+
+      // 2. Emit to user room (so user receives it even if connected only with userId)
+      if (campaign.createdBy) {
+        global.io.to(`user:${campaign.createdBy}`).emit("newWhatsAppMessage", messagePayload);
+        global.io.to(`user:${campaign.createdBy}`).emit("conversationUpdated", convObj);
+      }
+
+      // 3. Emit to conversation room (so active chat updates instantly)
+      global.io.to(`conversation:${conversation._id}`).emit("newWhatsAppMessage", messagePayload);
+      global.io.to(`conversation:${conversation._id}`).emit("chatMessage", messagePayload);
     }
   } catch (error) {
     const errData = error?.response?.data?.error || {};

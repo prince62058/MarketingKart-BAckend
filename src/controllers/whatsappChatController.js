@@ -51,9 +51,16 @@ exports.getConversations = async (req, res) => {
 
     const total = await whatsappConversationModel.countDocuments(query);
 
+    const mappedConversations = conversations.map((c) => {
+      const obj = c.toObject ? c.toObject() : { ...c };
+      obj.contactPhone = obj.customerPhone;
+      obj.contactName = obj.customerName && obj.customerName !== "Unknown" ? obj.customerName : obj.customerPhone;
+      return obj;
+    });
+
     return res.status(200).json({
       success: true,
-      data: conversations,
+      data: mappedConversations,
       currentPage: parseInt(page),
       totalPages: Math.ceil(total / limit),
       total
@@ -97,13 +104,21 @@ exports.getMessages = async (req, res) => {
 
     let messages = await whatsappMessageModel
       .find(messageQuery)
-      .sort({ sentAt: -1, createdAt: -1 }) // NEWEST first, frontend should invert
+      .sort({ sentAt: 1, createdAt: 1 }) // Chronological order: oldest first, newest at bottom
       .skip(skip)
       .limit(parseInt(limit));
 
+    const mappedMessages = messages.map((m) => {
+      const obj = m.toObject ? m.toObject() : { ...m };
+      obj.content = obj.textBody || "";
+      obj.messageType = obj.type || "TEXT";
+      obj.senderType = obj.direction === "OUTBOUND" ? "USER" : "CONTACT";
+      return obj;
+    });
+
     return res.status(200).json({
       success: true,
-      data: messages
+      data: mappedMessages
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
@@ -192,24 +207,63 @@ exports.sendChatMessage = async (req, res) => {
     });
 
     // Update conversation lastMessage
-    await whatsappConversationModel.findByIdAndUpdate(conversationId, {
+    const updatedConv = await whatsappConversationModel.findByIdAndUpdate(conversationId, {
       lastMessage: text.substring(0, 50),
       lastMessageAt: new Date()
-    });
+    }, { new: true });
 
-    if (global.io && conversation.businessId) {
-      global.io.to(`business:${conversation.businessId}`).emit("newWhatsAppMessage", {
-        conversationId: conversation._id,
-        customerPhone: conversation.customerPhone,
-        textBody: text,
-        direction: "OUTBOUND",
-      });
+    const convObj = {
+      _id: String(conversation._id),
+      businessId: conversation.businessId,
+      customerPhone: conversation.customerPhone,
+      customerName: conversation.customerName && conversation.customerName !== "Unknown" ? conversation.customerName : conversation.customerPhone,
+      contactPhone: conversation.customerPhone,
+      contactName: conversation.customerName && conversation.customerName !== "Unknown" ? conversation.customerName : conversation.customerPhone,
+      lastMessage: text.substring(0, 50),
+      lastMessageAt: updatedConv?.lastMessageAt || new Date(),
+      unreadCount: conversation.unreadCount || 0,
+      status: conversation.status || "OPEN",
+      isBotActive: conversation.isBotActive ?? true,
+    };
+
+    const messagePayload = {
+      _id: String(message._id),
+      conversationId: String(conversation._id),
+      customerPhone: conversation.customerPhone,
+      customerName: convObj.customerName,
+      textBody: text,
+      content: text,
+      direction: "OUTBOUND",
+      senderType: "USER",
+      type: "TEXT",
+      messageType: "TEXT",
+      status: "SENT",
+      createdAt: message.createdAt || new Date(),
+      sentAt: message.sentAt || new Date(),
+      message,
+      conversation: convObj,
+    };
+
+    if (global.io) {
+      if (conversation.businessId) {
+        global.io.to(`business:${conversation.businessId}`).emit("newWhatsAppMessage", messagePayload);
+        global.io.to(`business:${conversation.businessId}`).emit("conversationUpdated", convObj);
+      }
+
+      if (req.user?._id) {
+        global.io.to(`user:${req.user._id}`).emit("newWhatsAppMessage", messagePayload);
+        global.io.to(`user:${req.user._id}`).emit("conversationUpdated", convObj);
+      }
+
+      // Emit to conversation room (for live chat screen)
+      global.io.to(`conversation:${conversation._id}`).emit("newWhatsAppMessage", messagePayload);
+      global.io.to(`conversation:${conversation._id}`).emit("chatMessage", messagePayload);
     }
 
     return res.status(201).json({
       success: true,
       message: "Message dispatched successfully",
-      data: message
+      data: messagePayload
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message || "Failed to send chat message" });
