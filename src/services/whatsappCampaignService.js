@@ -101,13 +101,61 @@ const parsePhoneNumbers = (phoneNumbers) => {
 
 /**
  * Resolve template variable values for a single contact.
- * variableMapping: { "1": "name", "2": "phone" } maps {{1}} → contact.name
+ * Handles both:
+ * 1. Array format from mobile: [ { variable: "{{1}}", value: "Rahul" }, { variable: "{{2}}", value: "11243" } ]
+ * 2. Object format: { "1": "name", "2": "order_id" } or { "{{1}}": "Rahul" }
  */
 const resolveVariables = (contact, variableMapping) => {
   const resolved = {};
-  for (const [position, fieldName] of Object.entries(variableMapping || {})) {
-    resolved[position] = String(contact[fieldName] || contact.phone || "");
+
+  if (Array.isArray(variableMapping)) {
+    for (const item of variableMapping) {
+      if (!item) continue;
+      const pos = String(item.variable || "").replace(/\D/g, "");
+      if (!pos) continue;
+
+      const rawVal = item.value !== undefined && item.value !== null ? String(item.value).trim() : "";
+      if (rawVal && contact[rawVal] !== undefined && contact[rawVal] !== "") {
+        resolved[pos] = String(contact[rawVal]);
+      } else if (rawVal) {
+        resolved[pos] = rawVal;
+      } else if (pos === "1" && contact.name) {
+        resolved[pos] = String(contact.name);
+      } else if (contact.phone) {
+        resolved[pos] = String(contact.phone);
+      } else {
+        resolved[pos] = "Customer";
+      }
+    }
+  } else if (variableMapping && typeof variableMapping === "object") {
+    for (const [key, fieldName] of Object.entries(variableMapping)) {
+      const pos = String(key).replace(/\D/g, "");
+      if (!pos) continue;
+
+      if (typeof fieldName === "object" && fieldName !== null) {
+        const val = fieldName.value || fieldName.val || "";
+        if (val && contact[val]) resolved[pos] = String(contact[val]);
+        else if (val) resolved[pos] = String(val);
+        else resolved[pos] = String(contact.name || contact.phone || "Customer");
+      } else {
+        const field = String(fieldName || "").trim();
+        if (field && contact[field] !== undefined && contact[field] !== "") {
+          resolved[pos] = String(contact[field]);
+        } else if (field) {
+          resolved[pos] = field;
+        } else if (pos === "1" && contact.name) {
+          resolved[pos] = String(contact.name);
+        } else {
+          resolved[pos] = String(contact.phone || "Customer");
+        }
+      }
+    }
   }
+
+  // Safety fallbacks if any expected numeric positions are still undefined
+  if (!resolved["1"]) resolved["1"] = String(contact.name || contact.phone || "Customer");
+  if (!resolved["2"]) resolved["2"] = String(contact.phone || "12345");
+
   return resolved;
 };
 
@@ -126,6 +174,14 @@ const buildComponents = (variables, templateComponents = []) => {
     return matches ? matches.map(v => v.replace(/\{\{|\}\}/g, "")) : [];
   };
 
+  const getParamText = (idx) => {
+    const val = variables[idx] ?? variables[String(idx)] ?? variables[Number(idx) - 1];
+    if (val !== undefined && val !== null && String(val).trim() !== "") {
+      return String(val).trim();
+    }
+    return "Customer";
+  };
+
   // 1. Process HEADER
   const headerComp = templateComponents.find(c => c.type === "HEADER");
   if (headerComp) {
@@ -135,7 +191,7 @@ const buildComponents = (variables, templateComponents = []) => {
         type: "header",
         parameters: headerIndices.map(idx => ({
           type: "text",
-          text: String(variables[idx] || ""),
+          text: getParamText(idx),
         })),
       });
     }
@@ -150,7 +206,7 @@ const buildComponents = (variables, templateComponents = []) => {
         type: "body",
         parameters: bodyIndices.map(idx => ({
           type: "text",
-          text: String(variables[idx] || ""),
+          text: getParamText(idx),
         })),
       });
     }
@@ -160,7 +216,7 @@ const buildComponents = (variables, templateComponents = []) => {
   if (finalComponents.length === 0 && Object.keys(variables).length > 0) {
     const params = Object.keys(variables)
       .sort((a, b) => Number(a) - Number(b))
-      .map((key) => ({ type: "text", text: String(variables[key]) }));
+      .map((key) => ({ type: "text", text: String(variables[key] || "Customer") }));
     finalComponents.push({ type: "body", parameters: params });
   }
 
@@ -269,7 +325,19 @@ const getAllCampaigns = async ({ page = 1, status = "", businessId, createdBy, s
     whatsappCampaignModel.countDocuments(query),
   ]);
 
-  return { data, total, totalPages: Math.ceil(total / limit) || 1, currentPage: page };
+  const formattedData = data.map((c) => {
+    const obj = c.toObject();
+    return {
+      ...obj,
+      templateName: obj.templateName || obj.templateId?.name || "",
+      totalTargeted: obj.totalContacts || 0,
+      totalSent: obj.stats?.sent || 0,
+      totalDelivered: obj.stats?.delivered || 0,
+      totalRead: obj.stats?.read || 0,
+    };
+  });
+
+  return { data: formattedData, total, totalPages: Math.ceil(total / limit) || 1, currentPage: page };
 };
 
 const getCampaignById = async (id, access = {}) => {
