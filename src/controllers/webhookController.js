@@ -362,14 +362,31 @@ exports.postWhatsAppWebhook = async (req, res) => {
             }
 
             // Emit real-time update via Socket.IO
-            if (global.io && message.campaignId) {
-              global.io
-                .to(`campaign:${message.campaignId}`)
-                .emit("messageStatusUpdate", {
-                  campaignId: String(message.campaignId),
-                  wamid,
-                  status: newStatus,
-                });
+            if (global.io) {
+              const statusData = {
+                messageId: String(message._id),
+                conversationId: String(message.conversationId || ""),
+                metaMessageId: wamid,
+                wamid,
+                status: newStatus,
+                errorCode: message.errorCode,
+                errorMessage: message.errorMessage,
+              };
+
+              if (message.campaignId) {
+                global.io
+                  .to(`campaign:${message.campaignId}`)
+                  .emit("messageStatusUpdate", {
+                    campaignId: String(message.campaignId),
+                    ...statusData,
+                  });
+              }
+
+              if (message.conversationId) {
+                global.io
+                  .to(`conversation:${message.conversationId}`)
+                  .emit("messageStatusUpdate", statusData);
+              }
             }
           }
         }
