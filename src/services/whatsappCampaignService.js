@@ -336,13 +336,23 @@ const getAllCampaigns = async ({ page = 1, status = "", businessId, createdBy, s
 
   const formattedData = data.map((c) => {
     const obj = c.toObject();
+    const sent = obj.stats?.sent || 0;
+    const delivered = Math.max(obj.stats?.delivered || 0, obj.stats?.read || 0);
+    const read = obj.stats?.read || 0;
+    const failed = obj.stats?.failed || 0;
+    const targeted = obj.totalContacts || Math.max(sent, delivered + failed);
+    const deliveryRate = sent > 0 ? ((delivered / sent) * 100).toFixed(1) + "%" : "0%";
+    const readRate = delivered > 0 ? ((read / delivered) * 100).toFixed(1) + "%" : "0%";
     return {
       ...obj,
       templateName: obj.templateName || obj.templateId?.name || "",
-      totalTargeted: obj.totalContacts || 0,
-      totalSent: obj.stats?.sent || 0,
-      totalDelivered: obj.stats?.delivered || 0,
-      totalRead: obj.stats?.read || 0,
+      totalTargeted: targeted,
+      totalSent: sent,
+      totalDelivered: delivered,
+      totalRead: read,
+      totalFailed: failed,
+      deliveryRate,
+      readRate,
     };
   });
 
@@ -386,14 +396,56 @@ const getCampaignReport = async (campaignId, page = 1, access = {}) => {
   if (!campaign) return null;
 
   const { stats, totalContacts } = campaign;
+
+  // Cross-check actual message records from whatsappMessageModel
+  const msgCounts = await whatsappMessageModel.aggregate([
+    { $match: { campaignId: new mongoose.Types.ObjectId(campaignId) } },
+    { $group: { _id: "$status", count: { $sum: 1 } } },
+  ]);
+  let msgSent = 0,
+    msgDelivered = 0,
+    msgRead = 0,
+    msgFailed = 0;
+  msgCounts.forEach((item) => {
+    if (item._id === "SENT") msgSent += item.count;
+    if (item._id === "DELIVERED") msgDelivered += item.count;
+    if (item._id === "READ") msgRead += item.count;
+    if (item._id === "FAILED") msgFailed += item.count;
+  });
+
+  const actualDelivered = Math.max(
+    stats?.delivered || 0,
+    msgDelivered + msgRead,
+    stats?.read || 0
+  );
+  const actualRead = Math.max(stats?.read || 0, msgRead);
+  const actualFailed = Math.max(stats?.failed || 0, msgFailed);
+  const actualSent = Math.max(
+    stats?.sent || 0,
+    msgSent + actualDelivered + actualFailed
+  );
+
   const deliveryRate =
-    stats.sent > 0 ? ((stats.delivered / stats.sent) * 100).toFixed(1) + "%" : "0%";
+    actualSent > 0
+      ? ((actualDelivered / actualSent) * 100).toFixed(1) + "%"
+      : "0%";
   const readRate =
-    stats.delivered > 0 ? ((stats.read / stats.delivered) * 100).toFixed(1) + "%" : "0%";
+    actualDelivered > 0
+      ? ((actualRead / actualDelivered) * 100).toFixed(1) + "%"
+      : "0%";
 
   return {
     campaign,
-    stats: { ...stats.toObject(), deliveryRate, readRate, total: totalContacts },
+    stats: {
+      ...(stats?.toObject ? stats.toObject() : stats),
+      sent: actualSent,
+      delivered: actualDelivered,
+      read: actualRead,
+      failed: actualFailed,
+      deliveryRate,
+      readRate,
+      total: Math.max(totalContacts || 0, actualSent),
+    },
     messages,
     totalPages: Math.ceil(totalMessages / limit) || 1,
     currentPage: page,

@@ -342,6 +342,13 @@ exports.postWhatsAppWebhook = async (req, res) => {
             [dateField]: new Date(parseInt(timestamp) * 1000),
           };
 
+          // If message was read directly without a delivered webhook, ensure deliveredAt is recorded
+          if (newStatus === "READ" && (!existingMessage.status || existingMessage.status === "SENT" || existingMessage.status === "QUEUED")) {
+            if (!updatePayload.deliveredAt) {
+              updatePayload.deliveredAt = updatePayload.readAt;
+            }
+          }
+
           if (status === "failed" && errors?.[0]) {
             updatePayload.errorCode = String(errors[0].code || "");
             updatePayload.errorMessage = errors[0].message || "";
@@ -356,8 +363,12 @@ exports.postWhatsAppWebhook = async (req, res) => {
           if (message) {
             // Increment campaign aggregate stat for this status
             if (message.campaignId) {
+              const incPayload = { [`stats.${newStatus.toLowerCase()}`]: 1 };
+              if (newStatus === "READ" && (!existingMessage.status || existingMessage.status === "SENT" || existingMessage.status === "QUEUED")) {
+                incPayload["stats.delivered"] = 1;
+              }
               await whatsappCampaignModel.findByIdAndUpdate(message.campaignId, {
-                $inc: { [`stats.${newStatus.toLowerCase()}`]: 1 },
+                $inc: incPayload,
               });
             }
 
