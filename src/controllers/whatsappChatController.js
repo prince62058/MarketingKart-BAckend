@@ -111,7 +111,9 @@ exports.getMessages = async (req, res) => {
     const mappedMessages = messages.map((m) => {
       const obj = m.toObject ? m.toObject() : { ...m };
       obj.content = obj.textBody || "";
-      obj.messageType = obj.type || "TEXT";
+      obj.messageType = obj.type === "MEDIA" ? (obj.mediaType || "IMAGE").toUpperCase() : (obj.type || "TEXT");
+      obj.mediaUrl = obj.mediaUrl || null;
+      obj.mediaType = obj.mediaType || null;
       obj.senderType = obj.direction === "OUTBOUND" ? "USER" : "CONTACT";
       return obj;
     });
@@ -153,10 +155,10 @@ exports.setBotMode = async (req, res) => {
 exports.sendChatMessage = async (req, res) => {
   try {
     const { conversationId } = req.params;
-    const { text } = req.body;
+    const { text, mediaUrl, mediaType = "image", filename } = req.body;
 
-    if (!text) {
-      return res.status(400).json({ success: false, message: "Text content is required" });
+    if (!text && !mediaUrl) {
+      return res.status(400).json({ success: false, message: "Text content or mediaUrl is required" });
     }
 
     const conversation = await whatsappConversationModel.findById(conversationId);
@@ -182,14 +184,29 @@ exports.sendChatMessage = async (req, res) => {
       phoneNumberId: account.phoneNumberId
     };
 
-    // Send the message natively
-    const metaResponse = await whatsappCloudApiService.sendTextMessage(
-      conversation.customerPhone,
-      text,
-      credentials
-    );
+    let metaResponse;
+    const isMedia = Boolean(mediaUrl);
+
+    if (isMedia) {
+      metaResponse = await whatsappCloudApiService.sendMediaMessage(
+        conversation.customerPhone,
+        mediaType,
+        mediaUrl,
+        text,
+        credentials,
+        filename
+      );
+    } else {
+      metaResponse = await whatsappCloudApiService.sendTextMessage(
+        conversation.customerPhone,
+        text,
+        credentials
+      );
+    }
 
     const wamid = metaResponse.messages?.[0]?.id;
+    const msgType = isMedia ? "MEDIA" : "TEXT";
+    const previewText = text || (isMedia ? `[${String(mediaType).toUpperCase()}]` : "");
 
     // Save to DB
     const message = await whatsappMessageModel.create({
@@ -199,8 +216,10 @@ exports.sendChatMessage = async (req, res) => {
       to: conversation.customerPhone,
       contactName: conversation.customerName,
       direction: "OUTBOUND",
-      type: "TEXT",
-      textBody: text,
+      type: msgType,
+      mediaType: isMedia ? mediaType : undefined,
+      mediaUrl: isMedia ? mediaUrl : undefined,
+      textBody: previewText,
       metaMessageId: wamid,
       status: "SENT",
       sentAt: new Date()
@@ -208,7 +227,7 @@ exports.sendChatMessage = async (req, res) => {
 
     // Update conversation lastMessage
     const updatedConv = await whatsappConversationModel.findByIdAndUpdate(conversationId, {
-      lastMessage: text.substring(0, 50),
+      lastMessage: previewText.substring(0, 50),
       lastMessageAt: new Date()
     }, { new: true });
 
@@ -219,7 +238,7 @@ exports.sendChatMessage = async (req, res) => {
       customerName: conversation.customerName && conversation.customerName !== "Unknown" ? conversation.customerName : conversation.customerPhone,
       contactPhone: conversation.customerPhone,
       contactName: conversation.customerName && conversation.customerName !== "Unknown" ? conversation.customerName : conversation.customerPhone,
-      lastMessage: text.substring(0, 50),
+      lastMessage: previewText.substring(0, 50),
       lastMessageAt: updatedConv?.lastMessageAt || new Date(),
       unreadCount: conversation.unreadCount || 0,
       status: conversation.status || "OPEN",
@@ -231,12 +250,14 @@ exports.sendChatMessage = async (req, res) => {
       conversationId: String(conversation._id),
       customerPhone: conversation.customerPhone,
       customerName: convObj.customerName,
-      textBody: text,
-      content: text,
+      textBody: previewText,
+      content: previewText,
+      mediaUrl: message.mediaUrl,
+      mediaType: message.mediaType,
       direction: "OUTBOUND",
       senderType: "USER",
-      type: "TEXT",
-      messageType: "TEXT",
+      type: msgType,
+      messageType: isMedia ? (mediaType || "IMAGE").toUpperCase() : "TEXT",
       status: "SENT",
       createdAt: message.createdAt || new Date(),
       sentAt: message.sentAt || new Date(),
@@ -257,7 +278,6 @@ exports.sendChatMessage = async (req, res) => {
 
       // Emit to conversation room (for live chat screen)
       global.io.to(`conversation:${conversation._id}`).emit("newWhatsAppMessage", messagePayload);
-      global.io.to(`conversation:${conversation._id}`).emit("chatMessage", messagePayload);
     }
 
     return res.status(201).json({

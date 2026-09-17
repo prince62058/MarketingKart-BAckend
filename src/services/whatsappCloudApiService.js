@@ -94,6 +94,63 @@ const sendTextMessage = async (to, body, credentials) => {
 };
 
 /**
+ * Send a WhatsApp media message (image, video, document, audio).
+ * @param {string} to - Recipient phone number in E.164 format
+ * @param {string} mediaType - 'image' | 'video' | 'document' | 'audio'
+ * @param {string} mediaUrl - Public URL of the media
+ * @param {string} [caption] - Optional text caption
+ * @param {Object} credentials - { accessToken, phoneNumberId }
+ * @param {string} [filename] - Optional filename for documents
+ * @returns {Object} Meta response
+ */
+const sendMediaMessage = async (to, mediaType, mediaUrl, caption, credentials, filename) => {
+  const { accessToken, phoneNumberId } = credentials || {};
+
+  if (!accessToken || !phoneNumberId) {
+    throw new Error("Missing WhatsApp credentials (accessToken, phoneNumberId)");
+  }
+
+  const rawType = String(mediaType || "image").toLowerCase();
+  const validTypes = ["image", "video", "document", "audio"];
+  const type = validTypes.includes(rawType) ? rawType : "image";
+
+  const url = `${BASE_URL}/${phoneNumberId}/messages`;
+
+  const mediaPayload = { link: mediaUrl };
+  if (caption && (type === "image" || type === "video" || type === "document")) {
+    mediaPayload.caption = caption;
+  }
+  if (type === "document" && filename) {
+    mediaPayload.filename = filename;
+  }
+
+  const payload = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type,
+    [type]: mediaPayload,
+  };
+
+  try {
+    const response = await axios.post(url, payload, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 20000,
+    });
+    return response.data;
+  } catch (error) {
+    const metaError = error?.response?.data?.error;
+    const structured = new Error(metaError?.message || error.message || "Meta API error");
+    structured.code = metaError?.code || error?.code || "UNKNOWN";
+    structured.response = error.response;
+    throw structured;
+  }
+};
+
+/**
  * Fetch all message templates from Meta WABA.
  * Used for syncing approved/rejected status into local DB.
  * @param {Object} credentials - { accessToken, wabaId }
@@ -217,6 +274,7 @@ const fetchPhoneNumbersFromMeta = async (credentials) => {
 module.exports = {
   sendTemplateMessage,
   sendTextMessage,
+  sendMediaMessage,
   syncTemplatesFromMeta,
   uploadTemplateToMeta,
   fetchPhoneNumbersFromMeta,

@@ -51,6 +51,14 @@ const whatsappMessageSchema = new mongoose.Schema(
       type: String, // Contents of free-form text or the template text sent
       default: "",
     },
+    mediaUrl: {
+      type: String,
+      default: null,
+    },
+    mediaType: {
+      type: String,
+      default: null,
+    },
     // wamid returned by Meta after send
     metaMessageId: {
       type: String,
