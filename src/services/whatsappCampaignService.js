@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const XLSX = require("xlsx");
 const whatsappCampaignModel = require("../models/whatsappCampaignModel");
 const whatsappMessageModel = require("../models/whatsappMessageModel");
@@ -5,8 +6,16 @@ const whatsappQueue = require("../queues/whatsappQueue");
 
 const buildOwnedQuery = ({ createdBy, isAdmin = false, businessId } = {}) => {
   const query = {};
-  if (businessId) query.businessId = businessId;
-  if (createdBy && !isAdmin) query.createdBy = createdBy;
+  if (businessId) {
+    query.businessId = mongoose.Types.ObjectId.isValid(businessId)
+      ? new mongoose.Types.ObjectId(businessId)
+      : businessId;
+  }
+  if (createdBy && !isAdmin) {
+    query.createdBy = mongoose.Types.ObjectId.isValid(createdBy)
+      ? new mongoose.Types.ObjectId(createdBy)
+      : createdBy;
+  }
   return query;
 };
 
@@ -395,36 +404,147 @@ const getCampaignReport = async (campaignId, page = 1, access = {}) => {
  * Summary stats for the WhatsApp dashboard.
  */
 const getOverallStats = async ({ businessId, createdBy, isAdmin = false } = {}) => {
-  const query = buildOwnedQuery({ businessId, createdBy, isAdmin });
+  const businessModel = require("../models/businessModel");
 
-  const [totalCampaigns, aggregate] = await Promise.all([
-    whatsappCampaignModel.countDocuments(query),
+  let targetBizIds = [];
+  if (businessId && mongoose.Types.ObjectId.isValid(businessId)) {
+    targetBizIds.push(new mongoose.Types.ObjectId(businessId));
+  } else if (businessId) {
+    targetBizIds.push(businessId);
+  }
+
+  const userObjId =
+    createdBy && mongoose.Types.ObjectId.isValid(createdBy)
+      ? new mongoose.Types.ObjectId(createdBy)
+      : createdBy;
+
+  if (targetBizIds.length === 0 && userObjId && !isAdmin) {
+    const userBusinesses = await businessModel
+      .find({ userId: userObjId })
+      .select("_id");
+    targetBizIds = userBusinesses.map((b) => b._id);
+  }
+
+  // 1. Campaign aggregation
+  const campaignQuery = {};
+  if (isAdmin) {
+    // Admin sees all
+  } else if (targetBizIds.length > 0 && userObjId) {
+    campaignQuery.$or = [
+      { createdBy: userObjId },
+      { businessId: { $in: targetBizIds } },
+    ];
+  } else if (targetBizIds.length > 0) {
+    campaignQuery.businessId = { $in: targetBizIds };
+  } else if (userObjId) {
+    campaignQuery.createdBy = userObjId;
+  }
+
+  const [totalCampaigns, campaignAgg] = await Promise.all([
+    whatsappCampaignModel.countDocuments(campaignQuery),
     whatsappCampaignModel.aggregate([
-      { $match: query },
+      { $match: campaignQuery },
       {
         $group: {
           _id: null,
           totalSent: { $sum: "$stats.sent" },
           totalDelivered: { $sum: "$stats.delivered" },
           totalRead: { $sum: "$stats.read" },
+          totalFailed: { $sum: "$stats.failed" },
           totalContacts: { $sum: "$totalContacts" },
         },
       },
     ]),
   ]);
 
-  const agg = aggregate[0] || { totalSent: 0, totalDelivered: 0, totalRead: 0, totalContacts: 0 };
-  const overallDeliveryRate =
-    agg.totalSent > 0
-      ? ((agg.totalDelivered / agg.totalSent) * 100).toFixed(1) + "%"
-      : "0%";
+  const campStats = campaignAgg[0] || {
+    totalSent: 0,
+    totalDelivered: 0,
+    totalRead: 0,
+    totalFailed: 0,
+    totalContacts: 0,
+  };
+
+  // 2. All Outbound Messages aggregation (Campaigns + Direct 1-to-1 CRM messages)
+  const ownedCampaigns = await whatsappCampaignModel
+    .find(campaignQuery)
+    .select("_id");
+  const ownedCampaignIds = ownedCampaigns.map((c) => c._id);
+
+  const msgQuery = { direction: "OUTBOUND" };
+  if (!isAdmin) {
+    const orConditions = [];
+    if (targetBizIds.length > 0) {
+      orConditions.push({ businessId: { $in: targetBizIds } });
+    }
+    if (ownedCampaignIds.length > 0) {
+      orConditions.push({ campaignId: { $in: ownedCampaignIds } });
+    }
+    if (orConditions.length > 0) {
+      msgQuery.$or = orConditions;
+    } else if (userObjId) {
+      msgQuery.businessId = { $in: [] };
+    }
+  }
+
+  const msgAgg = await whatsappMessageModel.aggregate([
+    { $match: msgQuery },
+    {
+      $group: {
+        _id: "$status",
+        count: { $sum: 1 },
+      },
+    },
+  ]);
+
+  let msgSent = 0;
+  let msgDelivered = 0;
+  let msgRead = 0;
+  let msgFailed = 0;
+
+  msgAgg.forEach((item) => {
+    if (item._id === "SENT") msgSent += item.count;
+    if (item._id === "DELIVERED") msgDelivered += item.count;
+    if (item._id === "READ") msgRead += item.count;
+    if (item._id === "FAILED") msgFailed += item.count;
+  });
+
+  // Any message that reached READ status was also DELIVERED
+  const msgTotalDelivered = msgDelivered + msgRead;
+  const msgTotalSent = msgSent + msgTotalDelivered + msgFailed;
+
+  // Max between message collection & campaign aggregates to avoid undercounting
+  const totalDelivered = Math.max(campStats.totalDelivered, msgTotalDelivered);
+  const totalRead = Math.max(campStats.totalRead, msgRead);
+  const totalFailed = Math.max(campStats.totalFailed, msgFailed);
+  const totalSent = Math.max(
+    campStats.totalSent,
+    msgTotalSent,
+    totalDelivered + totalFailed
+  );
+  const totalContacts = Math.max(campStats.totalContacts, totalSent);
+
+  const deliveryRate =
+    totalSent > 0
+      ? Number(((totalDelivered / totalSent) * 100).toFixed(1))
+      : 0;
+  const readRate =
+    totalDelivered > 0
+      ? Number(((totalRead / totalDelivered) * 100).toFixed(1))
+      : 0;
+  const overallDeliveryRate = `${deliveryRate.toFixed(1)}%`;
 
   return {
     totalCampaigns,
-    totalMessagesSent: agg.totalSent,
-    totalDelivered: agg.totalDelivered,
-    totalContacts: agg.totalContacts,
+    totalSent,
+    totalMessagesSent: totalSent,
+    totalDelivered,
+    totalRead,
+    totalFailed,
+    totalContacts,
+    deliveryRate,
     overallDeliveryRate,
+    readRate,
   };
 };
 

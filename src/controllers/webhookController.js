@@ -329,7 +329,7 @@ exports.postWhatsAppWebhook = async (req, res) => {
 
           const existingMessage = await whatsappMessageModel.findOne(
             { metaMessageId: wamid },
-            "campaignId status"
+            "campaignId status businessId phoneNumberId conversationId"
           );
 
           if (!existingMessage || !shouldApplyWhatsAppStatus(existingMessage.status, newStatus)) {
@@ -380,12 +380,31 @@ exports.postWhatsAppWebhook = async (req, res) => {
                     campaignId: String(message.campaignId),
                     ...statusData,
                   });
+                global.io
+                  .to(`campaign:${message.campaignId}`)
+                  .emit("campaignStatsUpdate", {
+                    campaignId: String(message.campaignId),
+                    status: newStatus,
+                  });
               }
 
               if (message.conversationId) {
                 global.io
                   .to(`conversation:${message.conversationId}`)
                   .emit("messageStatusUpdate", statusData);
+              }
+
+              const targetBizId = message.businessId || existingMessage.businessId;
+              if (targetBizId) {
+                global.io
+                  .to(`business:${targetBizId}`)
+                  .emit("messageStatusUpdate", statusData);
+                global.io
+                  .to(`business:${targetBizId}`)
+                  .emit("campaignStatsUpdate", {
+                    campaignId: String(message.campaignId || ""),
+                    status: newStatus,
+                  });
               }
             }
           }
