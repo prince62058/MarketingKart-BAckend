@@ -188,14 +188,6 @@ async function syncLeadsForBusiness(businessId, options = {}) {
   // Every form we ever created for this business, with the campaign it was
   // built for. Page forms we did not create are deliberately not synced —
   // they belong to whatever else the customer runs on that Page.
-  const formQuery = { businessId: business._id };
-  if (internalCampaignId) formQuery.internalCampiagnId = internalCampaignId;
-  const formDocs = await leadFormModel
-    .find(formQuery)
-    .select("formId internalCampiagnId")
-    .lean();
-  if (!formDocs.length) return { ...result, reason: "No lead forms yet" };
-
   const campaignQuery = {
     businessId: business._id,
     status: { $in: SYNCABLE_STATUSES },
@@ -213,6 +205,18 @@ async function syncLeadsForBusiness(businessId, options = {}) {
       if (adId) adIdMap.set(String(adId), campaign);
     }
   }
+
+  // Every form we ever created for this business, with the campaign it was
+  // built for. Page forms we did not create are deliberately not synced —
+  // they belong to whatever else the customer runs on that Page.
+  const formQuery = { businessId: business._id };
+  if (internalCampaignId) formQuery.internalCampiagnId = internalCampaignId;
+  const formDocs = await leadFormModel
+    .find(formQuery)
+    .select("formId internalCampiagnId")
+    .lean();
+
+  if (!formDocs.length && !campaigns.length) return { ...result, reason: "No lead forms or active campaigns yet" };
 
   const forms = buildFormMap(formDocs, campaignById);
 
@@ -342,6 +346,120 @@ async function syncLeadsForBusiness(businessId, options = {}) {
 
     if (writes.length) {
       await leadModel.bulkWrite(writes, { ordered: false });
+    }
+  }
+
+  // Also query active ads directly so leads are never missed regardless of form mappings
+  const seenAdIds = new Set();
+  for (const campaign of campaigns) {
+    for (const adId of [campaign.mainAdId, campaign.metaAdId].filter(Boolean)) {
+      if (seenAdIds.has(String(adId))) continue;
+      seenAdIds.add(String(adId));
+
+      const campaignCreatedAt = campaign.createdAt
+        ? Math.floor(new Date(campaign.createdAt).getTime() / 1000) - 600
+        : null;
+      const effectiveSince = sinceUnix != null ? sinceUnix : campaignCreatedAt;
+
+      let adLeads = [];
+      try {
+        adLeads = await fetchFormLeads(adId, token, { since: effectiveSince });
+      } catch (error) {
+        const systemToken = process.env.systemUserAccessToken;
+        if (systemToken && systemToken !== token) {
+          try {
+            adLeads = await fetchFormLeads(adId, systemToken, { since: effectiveSince });
+          } catch {
+            continue;
+          }
+        } else {
+          continue;
+        }
+      }
+
+      if (!adLeads.length) continue;
+      result.fetched += adLeads.length;
+
+      const leadgenIds = adLeads.map((l) => l.id).filter(Boolean);
+      const existingDocs = await leadModel
+        .find({ leadgenId: { $in: leadgenIds } })
+        .select("_id leadgenId userContactNumber name email internalCampiagnId")
+        .lean();
+      const existingByLeadgenId = new Map(
+        existingDocs.map((doc) => [String(doc.leadgenId), doc]),
+      );
+
+      const writes = [];
+
+      for (const lead of adLeads) {
+        if (!lead.id) continue;
+
+        const resolvedCamp = resolveCampaignForLead(lead, { adIdMap, form: { campaign } });
+        if (!resolvedCamp) {
+          result.skipped += 1;
+          continue;
+        }
+
+        const phone = firstValue(lead, PHONE_KEYS);
+        const contact = {
+          name: firstValue(lead, NAME_KEYS),
+          email: firstValue(lead, EMAIL_KEYS),
+          userContactNumber: phone,
+          whatsappNumber: firstValue(lead, WHATSAPP_KEYS) || phone,
+        };
+
+        const existing = existingByLeadgenId.get(String(lead.id));
+
+        if (existing) {
+          const patch = {};
+          if (!existing.userContactNumber && contact.userContactNumber) {
+            patch.userContactNumber = contact.userContactNumber;
+            patch.whatsappNumber = contact.whatsappNumber;
+          }
+          if (!existing.name && contact.name) patch.name = contact.name;
+          if (!existing.email && contact.email) patch.email = contact.email;
+          if (!existing.internalCampiagnId) patch.internalCampiagnId = resolvedCamp._id;
+          if (Object.keys(patch).length) {
+            writes.push({
+              updateOne: { filter: { _id: existing._id }, update: { $set: patch } },
+            });
+            result.updated += 1;
+          }
+          continue;
+        }
+
+        writes.push({
+          updateOne: {
+            filter: { leadgenId: lead.id },
+            update: {
+              $setOnInsert: {
+                businessId: business._id,
+                internalCampiagnId: resolvedCamp._id,
+                adsetId:
+                  lead.adset_id ||
+                  campaign.facebookAdSetId ||
+                  campaign.instaAdSetId ||
+                  null,
+                adId: lead.ad_id || campaign.mainAdId || null,
+                pageId: business.pageId || null,
+                leadgenId: lead.id,
+                formId: lead.form_id || null,
+                createdTime: lead.created_time,
+                leadSource: "META",
+                leadStatus: "NEW",
+                ...contact,
+              },
+            },
+            upsert: true,
+          },
+        });
+        result.created += 1;
+        if (isRecent(lead.created_time)) recentlyCreated += 1;
+      }
+
+      if (writes.length) {
+        await leadModel.bulkWrite(writes, { ordered: false });
+      }
     }
   }
 
