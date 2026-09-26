@@ -31,7 +31,7 @@ const redirectUri = () =>
  * do, so it is pinned here rather than left to an env var that has to be set
  * on every environment before Page linking works at all.
  */
-const DEFAULT_PAGE_LINK_CONFIG_ID = "1378037207117017";
+const DEFAULT_PAGE_LINK_CONFIG_ID = "1864354398275256";
 
 /** Public Meta app id — the same one already shipped inside the Android app. */
 const DEFAULT_META_APP_ID = "2996420554032786";
