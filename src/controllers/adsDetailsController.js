@@ -2266,6 +2266,7 @@ async function processAdCreation({
       );
     }
 
+    console.log('[GEO-TARGET] Sending to Meta Ads API:', JSON.stringify(parsedLocation, null, 2));
     const targetingBase = {
       geo_locations: parsedLocation,
       age_min: Number(ageRangeFrom) || 18,
