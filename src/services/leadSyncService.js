@@ -120,7 +120,24 @@ async function fetchFormLeads(formId, token, { since = null } = {}) {
 function resolveCampaignForLead(lead, { adIdMap, form }) {
   const byAd = lead.ad_id ? adIdMap.get(String(lead.ad_id)) : null;
   if (byAd) return byAd;
-  return form?.campaign || null;
+
+  // A lead created BEFORE the campaign existed belongs to an older ad/campaign and
+  // must never be attributed to this new campaign.
+  if (form?.campaign) {
+    if (lead.created_time && form.campaign.createdAt) {
+      const leadTime = new Date(lead.created_time).getTime();
+      const campaignTime = new Date(form.campaign.createdAt).getTime();
+      if (
+        Number.isFinite(leadTime) &&
+        Number.isFinite(campaignTime) &&
+        leadTime < campaignTime - 10 * 60 * 1000
+      ) {
+        return null;
+      }
+    }
+    return form.campaign;
+  }
+  return null;
 }
 
 /**
@@ -200,9 +217,14 @@ async function syncLeadsForBusiness(businessId, options = {}) {
   const forms = buildFormMap(formDocs, campaignById);
 
   for (const form of forms.values()) {
+    const formCampaignCreatedAt = form.campaign?.createdAt
+      ? Math.floor(new Date(form.campaign.createdAt).getTime() / 1000) - 600
+      : null;
+    const effectiveSince = sinceUnix != null ? sinceUnix : formCampaignCreatedAt;
+
     let metaLeads = [];
     try {
-      metaLeads = await fetchFormLeads(form.formId, token, { since: sinceUnix });
+      metaLeads = await fetchFormLeads(form.formId, token, { since: effectiveSince });
     } catch (error) {
       const detail = error.response?.data?.error?.message || error.message;
       // An expired Page token is the single most common reason leads stop
@@ -213,7 +235,7 @@ async function syncLeadsForBusiness(businessId, options = {}) {
       if (systemToken && systemToken !== token) {
         try {
           metaLeads = await fetchFormLeads(form.formId, systemToken, {
-            since: sinceUnix,
+            since: effectiveSince,
           });
           console.warn(
             `[leadSync] form ${form.formId}: page token failed (${detail}) — recovered with the system token`,

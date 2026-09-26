@@ -50,6 +50,13 @@ check(
   resolveCampaignForLead({ ad_id: "ad-deleted" }, { adIdMap, form })._id === "camp-rebuilt",
 );
 check(
+  "a lead submitted before the campaign existed is rejected, not attributed",
+  resolveCampaignForLead(
+    { ad_id: "ad-old", created_time: "2026-08-01T10:00:00+0000" },
+    { adIdMap, form },
+  ) === null,
+);
+check(
   "a lead with no ad id at all still lands on the form's campaign",
   resolveCampaignForLead({}, { adIdMap, form })._id === "camp-rebuilt",
 );
