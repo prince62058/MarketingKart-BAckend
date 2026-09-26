@@ -85,13 +85,23 @@ exports.startPageLink = async (req, res) => {
       userId: req.user?._id || null,
     });
 
+    const REQUIRED_PAGE_LINK_SCOPES = [
+      "public_profile",
+      "business_management",
+      "pages_show_list",
+      "pages_read_engagement",
+      "pages_manage_metadata",
+      "pages_manage_ads",
+      "leads_retrieval",
+      "ads_management",
+      "ads_read",
+    ];
+
     const params = new URLSearchParams({
       client_id: appId(),
       redirect_uri: redirectUri(),
       response_type: "code",
-      // The configuration carries the permissions; a scope list here is what
-      // breaks Login for Business.
-      config_id: configId(),
+      scope: REQUIRED_PAGE_LINK_SCOPES.join(","),
       state,
     });
 
