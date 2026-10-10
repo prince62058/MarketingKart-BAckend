@@ -629,7 +629,11 @@ async function handleBusinessManagerAccess(business, pageId, pageAccessToken) {
           pageName: clientUserName,
         }
       );
-      return { updatedBusiness };
+      return {
+        updatedBusiness,
+        pending: true,
+        pendingMessage: "Page linked to the business, but the advertising user could not be assigned. Complete Page access in Meta Business Settings before using this Page in Ads Manager.",
+      };
     }
 
     // Meta ne request accept kar li but abhi client_pages me nahi aaya — Page
@@ -848,21 +852,21 @@ async function provideAccessToAppOwnerBusinessManager(
 }
 
 async function assignUserToPage(pageId, pageAccessToken) {
-  try {
-    await axios.post(
-      `https://graph.facebook.com/v21.0/${pageId}/assigned_users`,
-      {
-        user: process.env.assignUserId,
-        tasks: ["MANAGE", "CREATE_CONTENT", "MODERATE", "ADVERTISE", "ANALYZE"],
-        business: process.env.businessId,
-        access_token: process.env.systemUserAccessToken,
-      },
-    );
-    console.log("✅ User assigned to page.");
-  } catch (error) {
-    console.error("Error assigning user to page:", error);
-    throw error;
-  }
+  const { ensurePageAdvertisingAccess } = require("../helpers/pageAdvertisingAccess");
+  // Approved operators for our agency. Environment overrides support other portfolios.
+  const agencyDefaults = process.env.businessId === "1358761842252447"
+    ? { systemUserId: "122094628869460187", advertiserIds: "122119306167405341" }
+    : { systemUserId: process.env.assignUserId, advertiserIds: "" };
+  return ensurePageAdvertisingAccess({
+    pageId,
+    pageAccessToken,
+    systemUserAccessToken: process.env.systemUserAccessToken,
+    businessId: process.env.businessId,
+    userIds: [
+      process.env.META_PAGE_SYSTEM_USER_ID || agencyDefaults.systemUserId,
+      ...(process.env.META_PAGE_ADVERTISER_USER_IDS ?? agencyDefaults.advertiserIds).split(",").map(id => id.trim()).filter(Boolean),
+    ],
+  });
 }
 
 exports.getByIdBusiness = async (req, res) => {

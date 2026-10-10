@@ -51,6 +51,10 @@ const appId = () =>
  */
 const appSecret = () => process.env.clientSecret || process.env.facebook_app_secret;
 
+const escapeHtml = (value) => String(value).replace(/[&<>"']/g, char => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+}[char]));
+
 /** Small HTML page shown in the browser once consent is done. */
 const closingPage = (title, detail, ok = true) => `<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -65,7 +69,7 @@ const closingPage = (title, detail, ok = true) => `<!doctype html>
   p{margin:0;color:#616161;line-height:1.5}
 </style>
 <div class="c"><div class="i">${ok ? "✅" : "⚠️"}</div>
-<h1>${title}</h1><p>${detail}</p></div>`;
+<h1>${escapeHtml(title)}</h1><p>${escapeHtml(detail)}</p></div>`;
 
 /**
  * Step 1 — hand the app a URL to open in the browser.
@@ -78,6 +82,10 @@ exports.startPageLink = async (req, res) => {
       return res.status(400).json({ success: false, message: "businessId is required" });
     }
 
+    const business = await businessModel.findOne({ _id: businessId, userId: req.user._id }).lean();
+    if (!business) {
+      return res.status(404).json({ success: false, message: "Business not found" });
+    }
     const state = crypto.randomBytes(32).toString("hex");
     await PageLinkState.create({
       state,
@@ -85,23 +93,11 @@ exports.startPageLink = async (req, res) => {
       userId: req.user?._id || null,
     });
 
-    const REQUIRED_PAGE_LINK_SCOPES = [
-      "public_profile",
-      "business_management",
-      "pages_show_list",
-      "pages_read_engagement",
-      "pages_manage_metadata",
-      "pages_manage_ads",
-      "leads_retrieval",
-      "ads_management",
-      "ads_read",
-    ];
-
     const params = new URLSearchParams({
       client_id: appId(),
       redirect_uri: redirectUri(),
       response_type: "code",
-      scope: REQUIRED_PAGE_LINK_SCOPES.join(","),
+      config_id: configId(),
       state,
     });
 
@@ -136,7 +132,11 @@ exports.handlePageLinkCallback = async (req, res) => {
   }
 
   try {
-    const stateDoc = await PageLinkState.findOne({ state });
+    const stateDoc = await PageLinkState.findOne({
+      state,
+      completedAt: null,
+      createdAt: { $gt: new Date(Date.now() - 15 * 60 * 1000) },
+    });
     if (!stateDoc) {
       return res.send(closingPage("Link expired", "Please start the connection again from the app.", false));
     }
@@ -194,7 +194,11 @@ exports.pageLinkStatus = async (req, res) => {
       return res.status(400).json({ success: false, message: "state is required" });
     }
 
-    const doc = await PageLinkState.findOne({ state }).lean();
+    const doc = await PageLinkState.findOne({
+      state,
+      userId: req.user._id,
+      createdAt: { $gt: new Date(Date.now() - 15 * 60 * 1000) },
+    }).lean();
     if (!doc) {
       return res.status(404).json({ success: false, message: "This link attempt expired. Start again." });
     }
