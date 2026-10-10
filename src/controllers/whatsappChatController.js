@@ -170,10 +170,9 @@ exports.sendChatMessage = async (req, res) => {
     }
 
     const account = await whatsappAccountModel.findOne({
-      $or: [
-        { phoneNumberId: conversation.phoneNumberId },
-        { wabaId: conversation.wabaId }
-      ]
+      userId: req.user._id,
+      phoneNumberId: conversation.phoneNumberId,
+      status: 'CONNECTED',
     });
     if (!account) {
       return res.status(404).json({ success: false, message: "WhatsApp Account not found for this conversation" });

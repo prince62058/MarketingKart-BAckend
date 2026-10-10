@@ -456,6 +456,12 @@ exports.postWhatsAppWebhook = async (req, res) => {
           const wamid = msg?.id;
           
           if (!phoneNumberId || !customerPhone) continue;
+          // Never route a shared or unowned number into an arbitrary tenant inbox.
+          const phoneOwners = await whatsappAccountModel.find({ phoneNumberId }).limit(2).select('userId status');
+          if (phoneOwners.length !== 1 || phoneOwners[0].status !== 'CONNECTED') continue;
+          const ownerBusinesses = await businessModel.find({ userId: phoneOwners[0].userId }).select('_id');
+          const ownerBusinessIds = ownerBusinesses.map(b => b._id);
+
 
           let customerName = "Unknown";
           const contactInfo = contacts.find((c) => {
@@ -502,15 +508,10 @@ exports.postWhatsAppWebhook = async (req, res) => {
               to: { $in: phoneVariants.length ? phoneVariants : [customerPhone] },
               direction: "OUTBOUND",
               phoneNumberId,
+              businessId: { $in: ownerBusinessIds },
             }).sort({ createdAt: -1 }).select("businessId campaignId");
           }
 
-          if (!lastOutbound) {
-            lastOutbound = await whatsappMessageModel.findOne({
-              to: { $in: phoneVariants.length ? phoneVariants : [customerPhone] },
-              direction: "OUTBOUND",
-            }).sort({ createdAt: -1 }).select("businessId campaignId");
-          }
 
           if (lastOutbound) {
             if (lastOutbound.businessId) {
@@ -543,20 +544,10 @@ exports.postWhatsAppWebhook = async (req, res) => {
 
           let conversation = await whatsappConversationModel.findOne({
             phoneNumberId,
+            businessId: { $in: ownerBusinessIds },
             customerPhone: { $in: phoneVariants.length ? phoneVariants : [customerPhone] },
           });
 
-          // If Meta sends reply with a different phoneNumberId mapping, still attach to existing customer thread
-          if (!conversation) {
-            conversation = await whatsappConversationModel
-              .findOne({ customerPhone: { $in: phoneVariants.length ? phoneVariants : [customerPhone] } })
-              .sort({ lastMessageAt: -1 });
-          }
-
-          // If business mapping from outbound/account failed, reuse existing thread owner
-          if (!businessId && conversation?.businessId) {
-            businessId = conversation.businessId;
-          }
           if (!conversation) {
             conversation = await whatsappConversationModel.create({
               businessId,

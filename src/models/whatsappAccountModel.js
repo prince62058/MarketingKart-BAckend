@@ -73,7 +73,7 @@ const whatsappAccountSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-    toJSON: { getters: true }, // Important to apply getters when converting to JSON
+    toJSON: { getters: true, transform: (_doc, ret) => { delete ret.accessToken; return ret; } }, // Important to apply getters when converting to JSON
     toObject: { getters: true }
   }
 );

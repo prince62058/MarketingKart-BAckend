@@ -1,3 +1,4 @@
+const { assertUniquePhone } = require('./whatsappAccountIsolation');
 const axios = require("axios");
 
 const GRAPH_API_VERSION = "v22.0";
@@ -13,6 +14,7 @@ const BASE_URL = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
  * @returns {Object} Meta API response { messages: [{ id: 'wamid.xxx' }] }
  */
 const sendTemplateMessage = async (to, templateName, languageCode, components, credentials) => {
+  await assertUniquePhone(credentials?.phoneNumberId);
   const { accessToken, phoneNumberId } = credentials || {};
   
   if (!accessToken || !phoneNumberId) {
@@ -59,6 +61,7 @@ const sendTemplateMessage = async (to, templateName, languageCode, components, c
  * @returns {Object} Meta API response
  */
 const sendTextMessage = async (to, body, credentials) => {
+  await assertUniquePhone(credentials?.phoneNumberId);
   const { accessToken, phoneNumberId } = credentials || {};
   
   if (!accessToken || !phoneNumberId) {
@@ -104,6 +107,7 @@ const sendTextMessage = async (to, body, credentials) => {
  * @returns {Object} Meta response
  */
 const sendMediaMessage = async (to, mediaType, mediaUrl, caption, credentials, filename) => {
+  await assertUniquePhone(credentials?.phoneNumberId);
   const { accessToken, phoneNumberId } = credentials || {};
 
   if (!accessToken || !phoneNumberId) {

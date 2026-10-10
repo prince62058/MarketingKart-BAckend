@@ -14,6 +14,14 @@ const IV_LENGTH = 16;
 function encryptText(text) {
   if (!text) return text;
   try {
+    if (process.env.WHATSAPP_TOKEN_ENCRYPTION_KEY) {
+      const key = Buffer.from(process.env.WHATSAPP_TOKEN_ENCRYPTION_KEY, 'hex');
+      if (key.length !== 32) throw new Error('Invalid WhatsApp encryption key');
+      const nonce = crypto.randomBytes(12);
+      const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
+      const data = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
+      return ['gcm1', nonce.toString('hex'), cipher.getAuthTag().toString('hex'), data.toString('hex')].join(':');
+    }
     const iv = crypto.randomBytes(IV_LENGTH);
     const cipher = crypto.createCipheriv(ALGORITHM, ENCRYPTION_KEY, iv);
     let encrypted = cipher.update(text, 'utf8', 'hex');
@@ -31,6 +39,12 @@ function encryptText(text) {
 function decryptText(encryptedText) {
   if (!encryptedText) return encryptedText;
   try {
+    if (encryptedText.startsWith('gcm1:')) {
+      const [,nonce,tag,data] = encryptedText.split(':');
+      const cipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(process.env.WHATSAPP_TOKEN_ENCRYPTION_KEY || '', 'hex'), Buffer.from(nonce, 'hex'));
+      cipher.setAuthTag(Buffer.from(tag, 'hex'));
+      return Buffer.concat([cipher.update(Buffer.from(data, 'hex')), cipher.final()]).toString('utf8');
+    }
     const textParts = encryptedText.split(':');
     if (textParts.length !== 2) return encryptedText; // Probably not encrypted with this method
     

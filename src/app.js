@@ -66,10 +66,8 @@ app.use(express.json({
   },
 }));
 app.use((req, res, next) => {
-  console.log(`${req.method} ${req.path}`, {
-    query: req.query,
-    body: req.body,
-  });
+  // Never log OAuth codes, bearer tokens, OTPs, or customer message bodies.
+  console.log(`${req.method} ${req.path}`);
   next();
 });
 app.use(express.urlencoded({ extended: true }));

@@ -15,13 +15,15 @@ router.get("/whatsapp/debug-logs", authUser, isAdmin, webhookController.getDebug
 
 // ─── Stats & Account (mobile dashboard) ─────────────────────────────────────
 router.get("/whatsapp/stats", authUser, campaignController.getWhatsAppStats);
-router.post("/whatsapp/account/connect", authUser, accountController.connectAccount);
-router.post("/whatsapp/account/connect-facebook", authUser, accountController.connectViaFacebook);
+router.post("/whatsapp/account/connect", authUser, isAdmin, accountController.connectAccount);
+router.post("/whatsapp/account/connect-facebook", authUser, (_req, res) => res.status(410).json({success:false,message:'Update MarketingKart and use Connect WhatsApp to select your own business number.'}));
 router.get("/whatsapp/account", authUser, accountController.getAccountDetails);
 router.post("/whatsapp/account/disconnect", authUser, accountController.disconnectAccount);
 
 // ─── Meta OAuth / Embedded Signup Flow ──────────────────────────────────────
 router.get("/whatsapp/meta/start", authUser, metaOAuthController.startOAuth);
+router.get("/whatsapp/meta/signup", metaOAuthController.signupPage);
+router.post("/whatsapp/meta/complete", metaOAuthController.completeSignup);
 router.get("/whatsapp/meta/callback", metaOAuthController.handleCallback);
 router.get("/whatsapp/meta/status", authUser, metaOAuthController.checkStatus);
 

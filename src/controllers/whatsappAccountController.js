@@ -416,7 +416,12 @@ exports.getAccountDetails = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: buildAccountResponse(account),
+      data: {
+        ...buildAccountResponse(account),
+        ...((await whatsappAccountModel.countDocuments({ phoneNumberId: account.phoneNumberId })) !== 1
+          ? { status: 'DISCONNECTED', connectionError: 'This number is linked to multiple accounts. Contact support or connect your own number.' }
+          : {}),
+      },
     });
 
   } catch (error) {
