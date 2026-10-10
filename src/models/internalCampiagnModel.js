@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const ObjectId = mongoose.Schema.Types.ObjectId;
 const internalCampiagnModel = new mongoose.Schema(
   {
+    metaGeoVerifiedAt: Date,
     approvalStatus: { type: String, enum: ["PENDING", "APPROVED", "REJECTED"] },
     approvedBy: { type: ObjectId, ref: "userModel" },
     approvedAt: Date,

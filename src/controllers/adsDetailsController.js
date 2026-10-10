@@ -1969,6 +1969,7 @@ async function processAdCreation(input, { approvedCampaignId = null } = {}) {
           audienceId,
           interest: parsedInterest,
           location: parsedLocation,
+          targetArea: input.targetArea || null,
           audienceGender: parsedGender,
           ageRangeFrom,
           ageRangeTo,
@@ -2716,6 +2717,7 @@ const prepareProcessAdCreationPayload = (payload) => {
 exports.createAdSetDefineBudgetAndDuration = async (req, res) => {
   try {
     const requestData = extractAdSetRequest(req.body);
+    requestData.targetArea = String(req.body.targetArea || '').trim().slice(0, 2000);
 
     validateAdSetRequest(requestData);
 
@@ -3296,13 +3298,17 @@ exports.targetingLocation = async (req, res) => {
         data: [],
       });
     }
-    const q = encodeURIComponent(String(search).trim());
-    const apiUrl = `https://graph.facebook.com/v22.0/search?type=adgeolocation&q=${q}&location_types=["city","region","neighborhood","geo_market","electoral_district","zip"]&access_token=${process.env.systemUserAccessToken}&country_code=IN`;
-    const response = await axios.get(apiUrl);
+    const business = await businessModel.findOne({ _id: businessId, userId: req.user._id }).lean();
+    if (!business) return res.status(403).json({ success: false, message: "Business access denied" });
+    const response = await axios.get("https://graph.facebook.com/v22.0/search", {
+      headers: { Authorization: `Bearer ${getMetaAccessToken()}` },
+      params: { type: "adgeolocation", q: String(search).trim().slice(0, 120), location_types: JSON.stringify(["city", "region", "zip"]), country_code: "IN", limit: 25 },
+      timeout: 15000,
+    });
     return res.status(200).send({
       success: true,
       message: "Target Search Area Data",
-      data: response?.data?.data || [],
+      data: (response?.data?.data || []).filter(row => row.country_code === "IN" && ["city", "region", "zip"].includes(row.type)),
     });
   } catch (error) {
     console.error(
@@ -3402,85 +3408,8 @@ exports.updateMetaAdsId = async (req, res) => {
  * True when a parsed geo spec carries something Meta can actually target —
  * either pin-and-radius custom_locations, or a country/region selection (Pan India).
  */
-function hasUsableGeoTarget(geo) {
-  if (!geo || typeof geo !== "object") return false;
-  return Boolean(
-    (Array.isArray(geo.custom_locations) && geo.custom_locations.length) ||
-      (Array.isArray(geo.countries) && geo.countries.length) ||
-      (Array.isArray(geo.regions) && geo.regions.length),
-  );
-}
-
-function convertLocationToMetaGeo(inputString) {
-  try {
-    let b =
-      typeof inputString === "string"
-        ? inputString.replace(/\\/g, "")
-        : JSON.stringify(inputString);
-    const locations = typeof b === "string" ? JSON.parse(b) : b;
-    const coords = Array.isArray(locations?.coordinates)
-      ? locations.coordinates
-      : [];
-
-    const custom_locations = coords
-      .map((coord) => {
-        const newObj = {};
-        if (coord.address) newObj.address_string = String(coord.address);
-
-        const lat = parseFloat(coord.latitude);
-        if (!isNaN(lat)) newObj.latitude = lat;
-
-        const lng = parseFloat(coord.longitude);
-        if (!isNaN(lng)) newObj.longitude = lng;
-
-        // Meta wants kilometres, 1–80. The app sends km (its picker is capped
-        // at 50); legacy callers sent metres, so a magnitude guess still covers
-        // them — but an explicit unit always wins over the guess.
-        let radiusKm = parseFloat(coord.radius);
-        if (!isNaN(radiusKm)) {
-          const unit = String(
-            coord.distance_unit || coord.radiusUnit || "",
-          ).toLowerCase();
-          const isMetres = unit
-            ? unit.startsWith("m") && !unit.startsWith("mi")
-            : radiusKm > 200;
-          if (isMetres) radiusKm = radiusKm / 1000;
-          newObj.radius = Math.max(1, Math.min(80, radiusKm));
-        } else {
-          newObj.radius = 8;
-        }
-
-        newObj.distance_unit = "kilometer";
-        return newObj;
-      })
-      .filter(
-        (c) =>
-          Number.isFinite(c.latitude) && Number.isFinite(c.longitude),
-      );
-
-    // Country / region targeting (e.g. Pan India) is a first-class Meta geo spec and
-    // carries no coordinates, so pass it straight through instead of dropping it.
-    const passthrough = {};
-    if (Array.isArray(locations?.countries) && locations.countries.length) {
-      passthrough.countries = locations.countries.map((c) => String(c).toUpperCase());
-    }
-    if (Array.isArray(locations?.regions) && locations.regions.length) {
-      passthrough.regions = locations.regions;
-    }
-
-    if (!custom_locations.length && Object.keys(passthrough).length) {
-      return passthrough;
-    }
-
-    return {
-      custom_locations,
-      ...passthrough,
-    };
-  } catch (err) {
-    console.error("Failed to fix, parse, and convert location string:", err);
-    return null;
-  }
-}
+const { normalizeGeo, hasUsableGeoTarget } = require("../helpers/metaGeoTargeting");
+function convertLocationToMetaGeo(input) { return normalizeGeo(input); }
 
 function fixParseAndConvertLocationString(inputString) {
   return convertLocationToMetaGeo(inputString);

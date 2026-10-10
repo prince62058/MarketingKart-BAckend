@@ -58,7 +58,7 @@ const main = () => {
   check("one custom location", oneArea.custom_locations.length === 1);
   check("latitude kept", loc.latitude === 23.2599, String(loc.latitude));
   check("longitude kept", loc.longitude === 77.4126, String(loc.longitude));
-  check("address kept", loc.address_string === "Bhopal", loc.address_string);
+  check("coordinates are authoritative; no address re-geocoding", loc.address_string === undefined);
   check("radius stays 20 km", loc.radius === 20, String(loc.radius));
   check("unit is kilometer", loc.distance_unit === "kilometer", loc.distance_unit);
   check("usable geo target", __test__.hasUsableGeoTarget(oneArea));
@@ -84,22 +84,23 @@ const main = () => {
   check("no empty custom_locations", india.custom_locations === undefined);
   check("usable geo target", __test__.hasUsableGeoTarget(india));
 
-  console.log("\n4. Target area — radius is clamped to Meta's limits");
-  check("0 km becomes the 1 km minimum", geo({ coordinates: [{ latitude: 1, longitude: 1, radius: 0 }] }).custom_locations[0].radius === 1);
-  // The picker is capped at 50 km, so bare numbers above 200 are legacy metres.
-  check("a bare 500 is read as 500 m → the 1 km minimum", geo({ coordinates: [{ latitude: 1, longitude: 1, radius: 500 }] }).custom_locations[0].radius === 1);
-  check(
-    "500 km stated in kilometres clamps to Meta's 80 km",
-    geo({ coordinates: [{ latitude: 1, longitude: 1, radius: 500, distance_unit: "kilometer" }] }).custom_locations[0].radius === 80,
-  );
-  check(
-    "an explicit metre unit beats the magnitude guess",
-    geo({ coordinates: [{ latitude: 1, longitude: 1, radius: 30000, distance_unit: "meter" }] }).custom_locations[0].radius === 30,
-  );
-  check("a metres value (5000) reads as 5 km", geo({ coordinates: [{ latitude: 1, longitude: 1, radius: 5000 }] }).custom_locations[0].radius === 5);
-  check("missing radius falls back to 8 km", geo({ coordinates: [{ latitude: 1, longitude: 1 }] }).custom_locations[0].radius === 8);
-  check("a pin with no coordinates is dropped", geo({ coordinates: [{ address: "nowhere" }] }).custom_locations.length === 0);
-  check("no target at all is refused", !__test__.hasUsableGeoTarget(geo({ coordinates: [] })));
+  console.log("\n4. Invalid targeting is rejected without guessing or widening");
+  for (const [label, payload] of [
+    ["zero radius", {coordinates:[{latitude:1, longitude:1, radius:0}]}],
+    ["ambiguous metre value", {coordinates:[{latitude:1, longitude:1, radius:5000}]}],
+    ["unsupported unit", {coordinates:[{latitude:1, longitude:1, radius:30, distance_unit:'meter'}]}],
+    ["missing coordinates", {coordinates:[{address:'nowhere', radius:5}]}],
+    ["missing radius", {coordinates:[{latitude:1, longitude:1}]}],
+    ["empty target", {coordinates:[]}],
+  ]) {
+    let rejected=false;
+    try { geo(payload); } catch (_) { rejected=true; }
+    check(label + ' rejected', rejected);
+  }
+  const city=geo({cities:[{key:'1019761'}]});
+  check("Meta city key kept", city.cities[0].key === '1019761');
+  check("city has no added radius", city.cities[0].radius === 0);
+  check("city is usable", __test__.hasUsableGeoTarget(city));
 
   console.log("\n5. Gender");
   for (const [label, want] of [["All", []], ["Male", [1]], ["Female", [2]]]) {

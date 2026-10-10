@@ -5,6 +5,7 @@ const User = require('../models/userModel');
 const Transaction = require('../models/transtionModel');
 const External = require('../models/ExternalCampaignsModel');
 const axios = require('axios');
+const { assertGeoMatches } = require('../helpers/metaGeoTargeting');
 const { syncCampaignStatuses } = require('../helpers/metaStatusHelper');
 
 const fundingIssue = message => /insufficient.*(fund|balance)|payment|billing|spending limit|account.*balance/i.test(message || '');
@@ -87,6 +88,17 @@ async function deliverCampaign(campaign, deps = {}) {
   const external = await models.External.findById(campaign.externalCampiagnId);
   if (!campaign.mainAdId || !campaign.facebookAdSetId || !external?.meta_CampaignId) throw new Error('Meta delivery objects are incomplete');
   const requestOptions = { headers: { Authorization: `Bearer ${process.env.systemUserAccessToken}` }, timeout: 20000 };
+  // Verify the saved ad-set targeting before any ACTIVE write. Never spend on a widened area.
+  if (!campaign.location) throw new Error('Saved location targeting is missing; delivery blocked');
+  {
+    const { data: savedAdSet } = await api.get(`https://graph.facebook.com/v22.0/${campaign.facebookAdSetId}`, {
+      ...requestOptions, params: { fields: 'targeting' },
+    });
+    const expected = campaign.location;
+    assertGeoMatches(expected, savedAdSet.targeting?.geo_locations);
+    if (savedAdSet.targeting?.excluded_geo_locations && Object.values(savedAdSet.targeting.excluded_geo_locations).some(v => Array.isArray(v) && v.length)) throw new Error('Meta returned unexpected location exclusions');
+    await models.Campaign.updateOne({ _id: campaign._id }, { $set: { metaGeoVerifiedAt: new Date() } });
+  }
   // Retry after a billing delay only moves dates while the parent remains paused.
   // A response lost after activation must not extend an already running ad.
   if (refreshedPayload) {

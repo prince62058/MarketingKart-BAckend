@@ -106,8 +106,8 @@ test('delivery rejects unapproved requests and changed Page before any external 
   assert.equal(calls.length,0);
 });
 test('Meta objects activate child first and campaign last; no DONE marker on funding failure',async()=>{
-  const calls=[];const c={_id:'c',approvalStatus:'APPROVED',paymentStatus:'APPROVED',submissionPageId:'page',mainAdId:'ad',facebookAdSetId:'adset',externalCampiagnId:'ext'};
-  const deps={api:{post:async url=>calls.push(url.split('/').pop())},build:async()=>assert.fail('must reuse objects'),models:{Business:{findById:()=>({lean:async()=>({pageId:'page'})})},External:{findById:async()=>({meta_CampaignId:'campaign'})},Campaign:{updateOne:async()=>calls.push('DONE')}}};
+  const calls=[];const c={_id:'c',approvalStatus:'APPROVED',paymentStatus:'APPROVED',submissionPageId:'page',mainAdId:'ad',facebookAdSetId:'adset',externalCampiagnId:'ext',location:{countries:['IN']}};
+  const deps={api:{get:async()=>({data:{targeting:{geo_locations:{countries:['IN']}}}}),post:async url=>calls.push(url.split('/').pop())},build:async()=>assert.fail('must reuse objects'),models:{Business:{findById:()=>({lean:async()=>({pageId:'page'})})},External:{findById:async()=>({meta_CampaignId:'campaign'})},Campaign:{updateOne:async(_,patch)=>{if(patch.$set.deliveryJobState==='DONE')calls.push('DONE')}}}};
   await service.deliverCampaign(c,deps);assert.deepEqual(calls,['ad','adset','campaign','DONE']);
   calls.length=0;deps.api.post=async()=>{throw new Error('Insufficient funds')};await assert.rejects(service.deliverCampaign(c,deps));assert.equal(calls.length,0);
 });
@@ -122,9 +122,9 @@ test('approved builder creates only paused Meta objects and never charges a seco
   const saved=await Campaign.findById(c._id);assert.equal(saved.mainAdId,'test-ads');assert.equal(saved.facebookAdSetId,'test-adsets');assert.equal(saved.approvalStatus,'APPROVED');
 });
 test('billing retry shifts paused delivery dates but does not extend a campaign already active',async()=>{
-  const c={_id:'c',approvalStatus:'APPROVED',paymentStatus:'APPROVED',submissionPageId:'page',mainAdId:'ad',facebookAdSetId:'adset',externalCampiagnId:'ext',totalBudget:1000,submissionPayload:{startDate:1000,endDate:87400}};
+  const c={_id:'c',approvalStatus:'APPROVED',paymentStatus:'APPROVED',submissionPageId:'page',mainAdId:'ad',facebookAdSetId:'adset',externalCampiagnId:'ext',location:{countries:['IN']},totalBudget:1000,submissionPayload:{startDate:1000,endDate:87400}};
   let parentStatus='PAUSED';const calls=[];
-  const deps={api:{get:async()=>({data:{status:parentStatus}}),post:async(url,payload)=>calls.push({url,payload})},models:{Business:{findById:()=>({lean:async()=>({pageId:'page'})})},External:{findById:async()=>({meta_CampaignId:'campaign'})},Campaign:{updateOne:async()=>{}}}};
+  const deps={api:{get:async()=>({data:{status:parentStatus,targeting:{geo_locations:{countries:['IN']}}}}),post:async(url,payload)=>calls.push({url,payload})},models:{Business:{findById:()=>({lean:async()=>({pageId:'page'})})},External:{findById:async()=>({meta_CampaignId:'campaign'})},Campaign:{updateOne:async()=>{}}}};
   await service.deliverCampaign(c,deps);
   const schedule=calls.find(x=>x.payload.start_time).payload;
   assert.equal((Date.parse(schedule.end_time)-Date.parse(schedule.start_time))/1000,86400);
@@ -138,4 +138,13 @@ test('normal users cannot call admin approval and pending delivery controls are 
   const {requireDeliveryAccess}=require('../src/middlewares/adCampaignAccess');
   const c=await Campaign.findOne({submissionKey:'wallet_once'});const gate=response();
   await requireDeliveryAccess({body:{internalCampaignId:c._id},user:owner},gate,()=>{next=true});assert.equal(gate.code,409);assert.equal(next,false);
+});
+test('Meta city/state/PIN selection is saved and sent to ad set unchanged',async()=>{
+  const location={cities:[{key:'1019761',radius:0,distance_unit:'kilometer'}],regions:[{key:'1753'}],zips:[{key:'IN:462023'}]};
+  const r=await submit('wallet_meta_keys',{location:JSON.stringify(location),targetArea:'Bhopal (City only) + Madhya Pradesh + 462023'});assert.equal(r.code,201);
+  let c=await Campaign.findById(r.body.data.campaignId);assert.deepEqual(c.location,location);assert.match(c.targetArea,/Bhopal/);
+  await service.approveCampaign(c._id,owner._id);c=await Campaign.findById(c._id).select('+submissionPayload');
+  buildRequests.length=0;allowMetaBuild=true;
+  try{await controller.buildApprovedCampaign(c._id,c.submissionPayload)}finally{allowMetaBuild=false}
+  assert.deepEqual(JSON.parse(JSON.stringify(buildRequests.find(x=>x.url.endsWith('/adsets')).payload.targeting.geo_locations)),location);
 });

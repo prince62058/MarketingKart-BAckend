@@ -83,7 +83,7 @@ router.get(
 );
 router.post("/scheduleDeliveryOfAdd", asyncHandler(authUser), asyncHandler(requireDeliveryAccess), controller.scheduleDeliveryOfAdd);
 
-router.get("/searchTargetArea", controller.targetingLocation);
+router.get("/searchTargetArea", asyncHandler(authUser), controller.targetingLocation);
 router.get("/targetingInterest", controller.targetingInterest);
 router.get("/adsDetails/syncLiveSpend", controller.syncLiveSpend);
 router.get("/forDemoAd", controller.forDemoAd);

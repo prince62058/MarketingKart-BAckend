@@ -8,7 +8,7 @@ exports.getAllIntenalCampiagnByBusinessId = async (query,skip) => {
       // id was never persisted, so it has to travel with the list.
       .populate('externalCampiagnId','meta_CampaignId')
       .select(
-        "approvalStatus deliveryJobState paymentStatus rejectionReason refundedAt image title status mainAdId metaAdId facebookAdSetId instaAdSetId externalCampiagnId createdAt totalBudget dailyBudget startDate endDate isInstaAdEnabled isFacebookAdEnabled thambnail videoId adtype spendAmount totalSpendBudget totalReach totalImpression totalClicks totalLeads totalFirstReplies metaCreateError metaEffectiveStatus metaStatusReason metaStatusSyncedAt location mobileNumber AddAmountInsights",
+        "approvalStatus deliveryJobState paymentStatus rejectionReason refundedAt image title status mainAdId metaAdId facebookAdSetId instaAdSetId externalCampiagnId createdAt totalBudget dailyBudget startDate endDate isInstaAdEnabled isFacebookAdEnabled thambnail videoId adtype spendAmount totalSpendBudget totalReach totalImpression totalClicks totalLeads totalFirstReplies metaCreateError metaEffectiveStatus metaStatusReason metaStatusSyncedAt location targetArea mobileNumber AddAmountInsights",
       )
       .sort({createdAt:-1})
       .skip(skip)
