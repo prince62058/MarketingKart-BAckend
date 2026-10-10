@@ -67,14 +67,14 @@ const main = () => {
   const many = geo({
     coordinates: [
       { address: "Bhopal", latitude: 23.2599, longitude: 77.4126, radius: 20 },
-      { address: "Indore", latitude: 22.7196, longitude: 75.8577, radius: 15 },
-      { address: "Jabalpur", latitude: 23.1815, longitude: 79.9864, radius: 10 },
+      { address: "Indore", latitude: 22.7196, longitude: 75.8577, radius: 17 },
+      { address: "Jabalpur", latitude: 23.1815, longitude: 79.9864, radius: 80 },
     ],
   });
   check("all three kept", many.custom_locations.length === 3, String(many.custom_locations.length));
   check(
     "each keeps its own radius",
-    many.custom_locations.map((c) => c.radius).join(",") === "20,15,10",
+    many.custom_locations.map((c) => c.radius).join(",") === "20,17,80",
     many.custom_locations.map((c) => c.radius).join(","),
   );
 

@@ -42,7 +42,7 @@ function normalizeGeo(input) {
       return {
         latitude: number(pin.latitude, 'Latitude', -90, 90),
         longitude: number(pin.longitude, 'Longitude', -180, 180),
-        radius: number(pin.radius, 'Radius (km)', 1, 50),
+        radius: number(pin.radius, 'Radius (km)', 17, 80),
         distance_unit: 'kilometer',
       };
     });
