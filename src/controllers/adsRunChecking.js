@@ -41,6 +41,8 @@ async function manageCampaigns() {
     for (const campaign of campaigns) {
       // Safe guard: check if campaign or required nested fields exist
       if (!campaign || !campaign.businessId) continue;
+      // Approved queue campaigns follow Meta, never the local wall clock.
+      if (campaign.approvalStatus) continue;
 
       const startDate = new Date(campaign.startDate);
       const endDate = new Date(campaign.endDate);

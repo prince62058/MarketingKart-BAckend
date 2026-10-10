@@ -16,6 +16,10 @@ exports.authUser = async (req, res, next) => {
   const authHeader = req.headers["authorization"];
   const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : authHeader?.trim();
 
+  // This old shared admin token was shipped in the public web bundle. Require a real login.
+  if (token && require("crypto").createHash("sha256").update(token).digest("hex") === "db3bd56ed9895ec245ec77e91b616e7f87e1280afefe2b86071f15e178247c5a") {
+    return res.status(401).json({ success: false, message: "Please sign in again" });
+  }
   let decoded = null;
   if (token) {
     for (const key of SECRET_KEYS) {

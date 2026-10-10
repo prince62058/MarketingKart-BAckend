@@ -18,7 +18,7 @@ const META_STATUS_MAP = {
   ARCHIVED: "COMPLETED",
   IN_PROCESS: "PREPARING",
   PREAPPROVED: "PREPARING",
-  PENDING_BILLING_INFO: "PREPARING",
+  PENDING_BILLING_INFO: "WAITING_FOR_FUNDS",
   PENDING_REVIEW: "IN_REVIEW",
   // Meta looked at the ad and said no. Kept apart from DELIVERY_ERROR (our own
   // failure to build the ad) because the advertiser has to do something
@@ -86,7 +86,7 @@ const fetchMetaAdStatus = async (adId) => {
 const syncCampaignStatuses = async (campaigns = []) => {
   const results = new Map();
   const targets = campaigns.filter(
-    (c) => c && (c.mainAdId || c.metaAdId) && !LOCAL_TERMINAL.has(c.status),
+    (c) => c && (c.mainAdId || c.metaAdId) && !LOCAL_TERMINAL.has(c.status) && (!c.approvalStatus || (c.approvalStatus === "APPROVED" && c.deliveryJobState === "DONE")),
   );
   if (!targets.length) return results;
 

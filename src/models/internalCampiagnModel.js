@@ -2,6 +2,19 @@ const mongoose = require("mongoose");
 const ObjectId = mongoose.Schema.Types.ObjectId;
 const internalCampiagnModel = new mongoose.Schema(
   {
+    approvalStatus: { type: String, enum: ["PENDING", "APPROVED", "REJECTED"] },
+    approvedBy: { type: ObjectId, ref: "userModel" },
+    approvedAt: Date,
+    rejectionReason: String,
+    chargedAmount: Number,
+    chargedUserId: { type: ObjectId, ref: "userModel" },
+    refundedAt: Date,
+    submissionKey: { type: String },
+    submissionPayload: { type: mongoose.Schema.Types.Mixed, select: false },
+    submissionPageId: String,
+    deliveryJobState: { type: String, enum: ["QUEUED", "RUNNING", "DONE", "FAILED"] },
+    deliveryJobLease: Date,
+    nextDeliveryAttemptAt: Date,
     creativeId: String,
     businessId: {
       type: ObjectId,
@@ -89,6 +102,9 @@ const internalCampiagnModel = new mongoose.Schema(
     status: {
       type: String,
       enum: [
+        "PENDING_APPROVAL",
+        "ADMIN_REJECTED",
+        "WAITING_FOR_FUNDS",
         "ACTIVE",
         "PAUSED",
         "DELETED",
@@ -220,6 +236,8 @@ const internalCampiagnModel = new mongoose.Schema(
   }
 );
 
+internalCampiagnModel.index({ submissionKey: 1 }, { unique: true, sparse: true });
+internalCampiagnModel.index({ deliveryJobState: 1, nextDeliveryAttemptAt: 1 });
 internalCampiagnModel.index({ createdAt: -1 });
 internalCampiagnModel.index({ status: 1 });
 internalCampiagnModel.index({ addTypeId: 1 });

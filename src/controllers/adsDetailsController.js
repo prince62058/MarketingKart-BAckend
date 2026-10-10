@@ -377,6 +377,9 @@ const resolveMetaAdSetConfig = ({
       },
     };
   }
+  if (adKind === AD_KIND.CALL) {
+    return { optimization_goal: "QUALITY_CALL", billing_event: "IMPRESSIONS", destination_type: null, promoted_object: { page_id: pageId } };
+  }
   if (application_id) {
     return {
       optimization_goal: optimization_goal || "APP_INSTALLS",
@@ -741,20 +744,20 @@ async function createFacebookCampaign(
   }
 
   const apiUrl = `https://graph.facebook.com/v22.0/${metaAdAccountPath()}/campaigns`;
-  // Create as ACTIVE so campaign, ad set, and ad are directly active and delivery runs without 'Ad set off'
+  // Build paused; the approval worker enables delivery after all IDs are saved.
   // Meta requires is_adset_budget_sharing_enabled when not using campaign budget (CBO).
   const payload = {
     name,
     objective:
       outcomeType === "APP_INSTALLS" ? "OUTCOME_APP_PROMOTION" : outcomeType,
     access_token: process.env.systemUserAccessToken,
-    status: "ACTIVE",
+    status: "PAUSED",
     special_ad_categories: [],
     is_adset_budget_sharing_enabled: false,
   };
 
   try {
-    console.info("Creating Facebook campaign with payload:", payload);
+    console.info("Creating paused Facebook campaign");
     const response = await axios.post(apiUrl, payload);
     console.info("Facebook campaign created successfully:", response.data);
 
@@ -764,7 +767,7 @@ async function createFacebookCampaign(
           meta_CampaignId: response.data.id,
           name,
           objective: outcomeType,
-          status: "ACTIVE",
+          status: "PAUSED",
           businessId: businessData._id,
           adTypeId,
           createdAt: new Date(),
@@ -1688,7 +1691,7 @@ async function createFacebookAdSet(
       daily_budget: dailyBudget,
       targeting,
       campaign_id: campaignId,
-      status: "ACTIVE",
+      status: "PAUSED",
       access_token: process.env.systemUserAccessToken,
     };
 
@@ -1749,12 +1752,12 @@ async function createAd(
       name,
       adset_id: adsetId,
       creative: { creative_id: creativeId },
-      status: "ACTIVE",
+      status: "PAUSED",
       access_token: accessToken,
     };
 
     console.info("API URL:", apiUrl);
-    console.info("Payload:", payload);
+    console.info("Creating paused Meta ad");
 
     const response = await axios.post(apiUrl, payload);
     console.info("Ad Created Successfully:", response.data);
@@ -1775,7 +1778,8 @@ async function createAd(
   }
 }
 
-async function processAdCreation({
+async function processAdCreation(input, { approvedCampaignId = null } = {}) {
+  let {
   businessId,
   name,
   optimization_goal,
@@ -1823,16 +1827,11 @@ async function processAdCreation({
   mobileNumber,
   advantageAudienceEnabled,
   dailyBudget: clientDailyBudgetRupees,
-}) {
+  } = input;
   console.log("processAdCreation called with:");
   const session = await mongoose.startSession();
-  session.startTransaction();
-  let trackedInternalCampaignId = null;
-  // The failure path deliberately commits, to keep the DELIVERY_ERROR row the
-  // advertiser needs to see. That would also commit the wallet debit, so a
-  // failed ad has to hand the money back explicitly.
-  let chargedAmount = 0;
-  let chargedUserId = null;
+  if (!approvedCampaignId) session.startTransaction();
+  let trackedInternalCampaignId = approvedCampaignId;
 
   try {
     // Input validation
@@ -1865,9 +1864,25 @@ async function processAdCreation({
       );
     }
 
-    const clientUserId = businessData?.pageName
-      ? businessData?.pageName
-      : await fetchClientUserId(businessData.pageAccessToken);
+    const effectiveMobileNumber =
+      mobileNumber || businessData?.whatsappNumber || null;
+    // Creatives read this for WhatsApp CTA phone link
+    if (businessData && typeof businessData === "object") {
+      businessData._effectiveWhatsApp = effectiveMobileNumber;
+    }
+
+    if (
+      adKind === AD_KIND.WHATSAPP &&
+      !normalizeWhatsAppPhone(effectiveMobileNumber)
+    ) {
+      throw new Error(
+        "WhatsApp number is required. Enter a valid number on the ad form or save it on the business profile.",
+      );
+    }
+
+    if (!Number.isFinite(Number(startDate)) || !Number.isFinite(Number(endDate)) || Number(endDate) <= Number(startDate)) throw new Error("Invalid campaign dates");
+
+    const clientUserId = businessData.pageName || businessData.businessName || "Facebook Page";
     console.log("clientUserId", clientUserId);
     const planData = planId
       ? await planModel.findById(planId).session(session)
@@ -1907,6 +1922,9 @@ async function processAdCreation({
     let bugetFace = Number(planDatas.facebookBudget || facebookBudge || 0);
     let bugetInsta = Number(planDatas.instaBudget || instaBudge || 0);
     totalBudget = bugetFace + bugetInsta;
+    if (![bugetFace, bugetInsta].every(value => Number.isFinite(value) && value >= 0) || totalBudget <= 0) throw new Error("Invalid ad budget");
+    const purchasedDays = Math.max(1, Math.ceil((Number(endDate) - Number(startDate)) / 86400));
+    if (totalBudget / purchasedDays < 88.71) throw new Error("Daily budget must be at least ₹88.71. Increase the budget or shorten the duration.");
     const facebookGst =
       Number(planDatas.facebookBudget || facebookBudge || 0) * 0.18;
     console.log("facebookGst:", facebookGst);
@@ -1929,10 +1947,19 @@ async function processAdCreation({
     const sanitizedThumbnail = ensurePublicMediaUrl(thambnail);
 
     // Create internal campaign
-    const internalCampaignData = await internalCampaignModel.create(
+    const internalCampaignData = approvedCampaignId
+      ? [await internalCampaignModel.findById(approvedCampaignId).session(session)]
+      : await internalCampaignModel.create(
       [
         {
           totalBudget,
+          approvalStatus: "PENDING",
+          status: "PENDING_APPROVAL",
+          submissionPayload: { ...input, planId: null, facebookBudget: bugetFace, instaBudget: bugetInsta,
+            isFacebookAdEnabled: Boolean(isFacebookAdEnabled || planData?.facebookBudget > 0),
+            isInstaAdEnabled: Boolean(isInstaAdEnabled || planData?.instaBudget > 0) },
+          submissionPageId: businessData.pageId,
+          submissionKey: input.transactionId || undefined,
           businessId,
           title: name,
           imageId,
@@ -1972,6 +1999,9 @@ async function processAdCreation({
       ],
       { session },
     );
+    if (!internalCampaignData[0]) throw new Error("Paid campaign not found");
+    let internalTxId = internalCampaignData[0].transactionId;
+    if (!approvedCampaignId) {
     let tokens = [];
 
     let findAdmin = await userModel
@@ -2012,12 +2042,14 @@ async function processAdCreation({
       const paidTxn = await Transaction.findOne({
         transactionId,
         type: "CREDIT",
+        userId: fid.userId,
       })
         .session(session)
         .lean();
-      if (paidTxn && Number.isFinite(Number(paidTxn.amount))) {
-        adCost = Number(paidTxn.amount);
+      if (!paidTxn || !Number.isFinite(Number(paidTxn.amount)) || Number(paidTxn.amount) < finalAmount - 1) {
+        throw new Error("Verified payment is missing or insufficient for this ad");
       }
+      adCost = Number(paidTxn.amount);
     } else {
       // Wallet payment: verify user has sufficient funds
       const currentUser = await userModel.findById(fid?.userId).session(session).lean();
@@ -2029,6 +2061,7 @@ async function processAdCreation({
       }
     }
 
+    if (!Number.isFinite(adCost) || adCost <= 0) throw new Error("Ad payment must be greater than zero");
     let transtion = {
       type: "DEBIT",
       amount: adCost,
@@ -2041,14 +2074,8 @@ async function processAdCreation({
       // serviceAmount: serviceAmount || 0,
       // paymentGetwayAmount: 0,
     };
-    let internalTxId = await createTransaction(transtion, session);
-    await generateInvoice(
-      internalCampaignData,
-      transactionId || internalTxId,
-      facebookBudget,
-      instaBudget,
-      googleBudget,
-    );
+    internalTxId = await createTransaction(transtion, session);
+
 
     console.log(transactionId || internalTxId, "transactionId");
 
@@ -2074,25 +2101,27 @@ async function processAdCreation({
           `Insufficient wallet balance for ₹${adCost.toLocaleString("en-IN")}. Top up your wallet or pay online.`,
         );
       }
-      chargedAmount = adCost;
-      chargedUserId = fid.userId;
     }
 
-    const effectiveMobileNumber =
-      mobileNumber || businessData?.whatsappNumber || null;
-    // Creatives read this for WhatsApp CTA phone link
-    if (businessData && typeof businessData === "object") {
-      businessData._effectiveWhatsApp = effectiveMobileNumber;
-    }
-
-    if (
-      adKind === AD_KIND.WHATSAPP &&
-      !normalizeWhatsAppPhone(effectiveMobileNumber)
-    ) {
-      throw new Error(
-        "WhatsApp number is required. Enter a valid number on the ad form or save it on the business profile.",
-      );
-    }
+    const paidCampaign = await internalCampaignModel.findByIdAndUpdate(
+      trackedInternalCampaignId,
+      { $set: { transactionId: transactionId || internalTxId, paymentStatus: "APPROVED",
+        chargedAmount: adCost, chargedUserId: fid.userId, status: "PENDING_APPROVAL", approvalStatus: "PENDING" } },
+      { new: true, session },
+    );
+    if (session.inTransaction()) await session.commitTransaction();
+    session.endSession();
+    try {
+    await generateInvoice(
+      internalCampaignData,
+      transactionId || internalTxId,
+      facebookBudget,
+      instaBudget,
+      googleBudget,
+    );
+    } catch (invoiceError) { console.error("Paid ad invoice generation failed:", invoiceError.message); }
+    return { campaignId: paidCampaign._id, status: "PENDING_APPROVAL" };
+    } // Payment submission ends here. Only the approval worker reaches Meta.
 
     // Map DB types (LEADS / WHATSAPP_MESSAGES) → Meta OUTCOME_* objectives
     const outcomeType = mapAdvertisementTypeToMetaOutcome(
@@ -2204,7 +2233,7 @@ async function processAdCreation({
           creativeId: creativeData?.id,
           externalCampiagnId: externalCampiagnData.data?._id,
           transactionId: transactionId || internalTxId,
-          paymentStatus: (transactionId || internalTxId) ? "APPROVED" : "PENDING",
+          paymentStatus: "APPROVED",
           // Never store campaign id as mainAdId — webhook/spend/admin ACTIVE need real ad id
         },
       },
@@ -2364,6 +2393,7 @@ async function processAdCreation({
             dailyBudget: dailyBudgetRupeesStored,
           },
         },
+        { session },
       );
       targeting.publisher_platforms = [];
       targeting.facebook_positions = [];
@@ -2389,10 +2419,7 @@ async function processAdCreation({
         targeting.instagram_positions = ["stream"];
       }
 
-      // Call ads still skip Meta adset/ad (out of scope). Lead Form + WhatsApp now create full Meta objects.
-      const skipMetaAdSetAndAd = adKind === AD_KIND.CALL;
-
-      if (!skipMetaAdSetAndAd) {
+      {
         const adSetConfig = resolveMetaAdSetConfig({
           adKind,
           pageId: businessData?.pageId,
@@ -2503,135 +2530,29 @@ async function processAdCreation({
       }
     }
 
-    await session.commitTransaction();
+    if (session.inTransaction()) await session.commitTransaction();
     session.endSession();
 
     // Generate invoice
 
-    console.info("Background ad creation completed successfully");
+    return { campaignId: trackedInternalCampaignId, status: "PREPARING" };
   } catch (error) {
-    // Persist DELIVERY_ERROR inside the open transaction, then commit —
-    // aborting would wipe the campaign row so admin never sees the failure.
-    try {
-      if (trackedInternalCampaignId && session.inTransaction()) {
-        await internalCampaignModel.findByIdAndUpdate(
-          trackedInternalCampaignId,
-          {
-            $set: {
-              status: "DELIVERY_ERROR",
-              metaCreateError: formatMetaAxiosError(error),
-            },
-          },
-          { session },
-        );
-        // Give back anything already charged. Committing here is what keeps the
-        // DELIVERY_ERROR row visible, and it would otherwise also make the
-        // wallet debit for an ad that never ran permanent.
-        if (chargedAmount > 0 && chargedUserId) {
-          await userModel.findByIdAndUpdate(
-            chargedUserId,
-            { $inc: { wallet: chargedAmount } },
-            { session },
-          );
-          await Transaction.create(
-            [
-              {
-                type: "CREDIT",
-                walletType: "MAIN",
-                amount: chargedAmount,
-                userId: chargedUserId,
-                adsId: trackedInternalCampaignId,
-                transactionId: `refund_${trackedInternalCampaignId}`,
-                description: "Refund — ad could not be delivered",
-              },
-            ],
-            { session },
-          );
-          console.log(
-            `[processAdCreation] refunded ₹${chargedAmount} for failed campaign ${trackedInternalCampaignId}`,
-          );
-          chargedAmount = 0;
-        }
-        await session.commitTransaction();
-      } else if (session.inTransaction()) {
-        await session.abortTransaction();
-      }
-    } catch (txnErr) {
-      console.error("Failed to persist DELIVERY_ERROR in txn:", txnErr?.message);
-      try {
-        if (session.inTransaction()) await session.abortTransaction();
-      } catch (_e) {
-        /* ignore */
-      }
-    }
-    try {
+    if (!trackedInternalCampaignId) {
+      if (session.inTransaction()) await session.abortTransaction();
       session.endSession();
-    } catch (_e) {
-      /* ignore */
+      throw error;
     }
-
-    // Safety net if commit path failed (e.g. session already closed)
-    try {
-      if (trackedInternalCampaignId) {
-        await internalCampaignModel.findByIdAndUpdate(
-          trackedInternalCampaignId,
-          {
-            $set: {
-              status: "DELIVERY_ERROR",
-              metaCreateError: formatMetaAxiosError(error),
-            },
-          },
-        );
-      } else {
-        // The run failed before the campaign row existed — a missing page
-        // token, an unknown ad type, no usable targeting. The request already
-        // answered 201, so without a row here the advertiser is told the ad was
-        // created and then finds nothing at all. Leave a visible, explained row.
-        // Carry everything the advertiser actually submitted, so the failed
-        // campaign still reads as the ad they built — creative included —
-        // rather than an empty black card with an error on it.
-        const failedMedia = normalizeMediaArray(
-          Array.isArray(fileLocation) ? fileLocation : [fileLocation],
-        );
-        await internalCampaignModel.create({
-          businessId,
-          title: name || "Untitled Campaign",
-          addTypeId: addTypeId || null,
-          status: "DELIVERY_ERROR",
-          metaCreateError: formatMetaAxiosError(error),
-          paymentStatus: transactionId ? "APPROVED" : "PENDING",
-          totalBudget: Number(totalBudget) || 0,
-          facebookBudget: Number(facebookBudget) || 0,
-          instaBudget: Number(instaBudget) || 0,
-          dailyBudget: Number(clientDailyBudgetRupees) || 0,
-          image: failedMedia,
-          thambnail: ensurePublicMediaUrl(thambnail) || failedMedia[0] || null,
-          caption,
-          headline,
-          primaryText,
-          isFacebookAdEnabled: Boolean(isFacebookAdEnabled),
-          isInstaAdEnabled: Boolean(isInstaAdEnabled),
-          startDate: startDate
-            ? new Date(startDate * 1000).toUTCString()
-            : new Date().toUTCString(),
-          ...(endDate ? { endDate: new Date(endDate * 1000).toUTCString() } : {}),
-        });
-      }
-    } catch (statusErr) {
-      console.error("Failed to persist DELIVERY_ERROR:", statusErr.message);
+    if (approvedCampaignId) {
+      try { if (session.inTransaction()) await session.commitTransaction(); }
+      catch (_) { if (session.inTransaction()) await session.abortTransaction(); }
+      finally { session.endSession(); }
+      throw error;
     }
-
-    console.error(
-      "Background ad creation failed:",
-      formatMetaAxiosError(error),
-    );
-
-    await logMetaError({
-      businessId,
-      errorType: "GENERAL",
-      error,
-      internalCampaignId: trackedInternalCampaignId,
-    });
+    // A failed submission rolls back both the pending request and its debit.
+    // The caller receives an error and can retry the same payment reference.
+    try { if (session.inTransaction()) await session.abortTransaction(); }
+    finally { await session.endSession(); }
+    throw error;
   }
 }
 
@@ -2798,20 +2719,17 @@ exports.createAdSetDefineBudgetAndDuration = async (req, res) => {
 
     validateAdSetRequest(requestData);
 
-    res
-      .status(statusCodes.Created)
-      .json(
-        responseBuilder(apiResponseStatusCode[201], "Ads Create Successfully."),
-      );
-
-    processAdCreation(prepareProcessAdCreationPayload(requestData)).catch(
-      (error) => {
-        console.error(
-          "Error in detached background processing:",
-          error.message,
-        );
-      },
-    );
+    const business = await businessModel.findOne({ _id: requestData.businessId, userId: req.user._id }).lean();
+    if (!business) return res.status(403).json({ success: false, message: "This business does not belong to you" });
+    if (!requestData.transactionId) throw new Error("A payment reference is required");
+    const previous = await internalCampaignModel.findOne({ $or: [{ submissionKey: requestData.transactionId }, { transactionId: requestData.transactionId }] }).lean();
+    if (previous) {
+      if (String(previous.businessId) !== String(business._id)) throw new Error("Payment reference already used");
+      if (previous.paymentStatus !== "APPROVED" || previous.refundedAt || previous.approvalStatus === "REJECTED") throw new Error("This payment reference is closed. Start a new ad request using your wallet balance.");
+      return res.status(200).json({ success: true, message: "Ad request already saved", data: { campaignId: previous._id, status: previous.status } });
+    }
+    const data = await processAdCreation(prepareProcessAdCreationPayload(requestData));
+    return res.status(201).json({ success: true, message: "Payment received. Ad is awaiting admin approval.", data });
   } catch (error) {
     console.error(
       "Error in createAdSetDefineBudgetAndDuration:",
@@ -4375,6 +4293,9 @@ exports.updateInternalCampaignStatus = async (req, res) => {
       });
     }
 
+    if (existing.approvalStatus && (existing.approvalStatus !== "APPROVED" || existing.deliveryJobState !== "DONE")) {
+      return res.status(409).json({ success: false, message: "Use the admin approval action before changing delivery status." });
+    }
     const patch = { status };
     if (mainAdId) patch.mainAdId = mainAdId;
 
@@ -4852,8 +4773,8 @@ exports.syncLiveSpend = async (req, res) => {
 
 exports.updateAddAmountInsights = async (req, res) => {
   try {
-    const internalCampaignId = req.body;
-    const data = req.body;
+    const { internalCampaignId, AddAmountInsights } = req.body;
+    const data = { AddAmountInsights };
     if (!internalCampaignId) {
       return res.status(400).json({
         success: false,
@@ -5694,3 +5615,5 @@ exports.__test__ = {
 };
 
 exports.__test__.computeAdChargeBreakdown = computeAdChargeBreakdown;
+
+exports.buildApprovedCampaign = (campaignId, payload) => processAdCreation(payload, { approvedCampaignId: campaignId });

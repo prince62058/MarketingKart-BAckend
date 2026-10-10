@@ -422,7 +422,7 @@ exports.adListForAdmin = async (req, res) => {
         // metaCreateError carries Meta's own words for why an ad never got
         // built. It was written on every failure and then selected nowhere, so
         // DELIVERY_ERROR reached the admin as a bare red badge.
-        "status addTypeId businessId title pageName fromName caption destinationUrl targetArea image thambnail createdAt instaBudget facebookBudget totalBudget dailyBudget mainAdId spendAmount totalLeads totalFirstReplies totalReach totalImpression totalClicks metaCreateError metaStatusReason",
+        "approvalStatus deliveryJobState paymentStatus chargedAmount rejectionReason refundedAt status addTypeId businessId title pageName fromName caption destinationUrl targetArea image thambnail createdAt instaBudget facebookBudget totalBudget dailyBudget mainAdId spendAmount totalLeads totalFirstReplies totalReach totalImpression totalClicks metaCreateError metaStatusReason",
       )
       .populate("addTypeId", "title")
       .populate({
@@ -471,7 +471,7 @@ exports.adListForAdmin = async (req, res) => {
     }
 
     const count = await internalCampiagnModel.countDocuments(query);
-    const pageCount = Math.ceil(count / 20);
+    const pageCount = Math.ceil(count / Number(limit));
 
     return res.status(200).send({
       success: true,
@@ -667,6 +667,7 @@ exports.linkMetaAdToCampaign = async (req, res) => {
 
     const existing = await internalCampiagnModel.findOne({ $or: orConditions });
     if (existing) {
+      if (existing.approvalStatus) return res.status(409).json({ success: false, message: "Use the approval workflow for paid app campaigns" });
       Object.assign(existing, doc);
       await existing.save();
       return res.status(200).json({ success: true, message: "Campaign already linked – data refreshed", data: existing });
@@ -1077,7 +1078,7 @@ exports.liveAdsStatus = async (req, res) => {
     const allAds = await internalCampiagnModel
       .find({})
       .select(
-        "status addTypeId businessId title pageName image thambnail createdAt " +
+        "approvalStatus deliveryJobState paymentStatus chargedAmount rejectionReason refundedAt status addTypeId businessId title pageName image thambnail createdAt " +
         "instaBudget facebookBudget totalBudget mainAdId spendAmount startDate endDate dailyBudget"
       )
       .populate("addTypeId", "title")

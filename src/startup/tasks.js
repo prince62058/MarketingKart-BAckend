@@ -36,6 +36,7 @@ async function initializeBackgroundTasks() {
 
         // Start the manual campaign manager (starts its own 5s loop)
         manageCampaigns();
+        require("../services/adApprovalService").startAdApprovalWorker();
 
         // Start the follow-up reminder scheduler (1 min loop)
         startFollowUpScheduler();
