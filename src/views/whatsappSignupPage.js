@@ -33,7 +33,7 @@ button.onclick=function(){
  FB.login(response=>{
   if(response.authResponse?.code){code=response.authResponse.code;finish();}
   else{status('Signup cancelled. You can try again.');button.disabled=false;}
- },{config_id:${JSON.stringify(configId)},response_type:'code',override_default_response_type:true,extras:{setup:{},sessionInfoVersion:'3'}});
+ },{config_id:${JSON.stringify(configId)},response_type:'code',override_default_response_type:true,extras:{setup:{}}});
 };
 setTimeout(()=>{if(typeof FB==='undefined')status('Meta could not load. Check your connection and reopen signup from the app.');},15000);
 </script><script async defer crossorigin="anonymous" src="https://connect.facebook.net/en_US/sdk.js"></script></body></html>`;
