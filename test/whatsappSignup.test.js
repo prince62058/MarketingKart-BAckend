@@ -178,3 +178,26 @@ test('signed coexistence events are persisted before acknowledgement and exclude
   await capture({...req(),get:()=> 'sha256=invalid'},res,()=>next++);assert.equal(status,403);assert.equal(next,1);
  }finally{Event.updateOne=original;}
 });
+test('Business App history is tenant-scoped, deduplicated, and offboarding disables the account',async()=>{
+ const {processEvent}=require('../src/services/whatsappCoexistenceService');
+ const Account=require('../src/models/whatsappAccountModel'),Business=require('../src/models/businessModel'),Conversation=require('../src/models/whatsappConversationModel'),Message=require('../src/models/whatsappMessageModel');
+ const saved=[];const changes=[];const originals=[];
+ function replace(obj,key,fn){originals.push([obj,key,obj[key]]);obj[key]=fn;}
+ const account={_id:'a',userId:'owner',wabaId:'123456',phoneNumberId:'987654',phoneNumber:'919999999999',status:'CONNECTED',onboardingMode:'BUSINESS_APP'};
+ try{
+  replace(Account,'find',q=>{assert.equal(q.wabaId,'123456');return {limit:async()=>[account]};});
+  replace(Account,'updateOne',async(q,u)=>changes.push(u));
+  replace(Business,'find',q=>{assert.equal(q.userId,'owner');return {select:()=>({sort:async()=>[{_id:'business'}]})};});
+  replace(Conversation,'findOne',async()=>({_id:'conv',businessId:'business'}));
+  replace(Conversation,'updateOne',async()=>{});
+  replace(Message,'findOne',async q=>{assert.equal(q.phoneNumberId,'987654');return saved.find(x=>x.metaMessageId===q.metaMessageId);});
+  replace(Message,'updateOne',async(q,u)=>saved.push(u.$setOnInsert));
+  const job={wabaId:'123456',field:'history',value:{metadata:{phone_number_id:'987654',display_phone_number:'919999999999'},history:[{metadata:{progress:100},threads:[{id:'918888888888',messages:[{id:'wamid.test',from:'919999999999',timestamp:'1700000000',type:'text',text:{body:'historical message'}}]}]}]}};
+  await processEvent(job);await processEvent(job);assert.equal(saved.length,1);assert.equal(saved[0].direction,'OUTBOUND');assert.equal(saved[0].businessId,'business');
+  assert.ok(changes.some(x=>x.$set?.['coexistenceSync.historyStatus']==='COMPLETE'));
+  await processEvent({wabaId:'123456',field:'account_update',value:{event:'PARTNER_REMOVED'}});
+  assert.equal(changes.at(-1).$set.status,'DISCONNECTED');
+  replace(Conversation,'findOne',async()=>({_id:'foreign',businessId:'other-owner'}));
+  await assert.rejects(processEvent(job),/owner mismatch/);
+ }finally{for(const [obj,key,original] of originals.reverse())obj[key]=original;}
+});
