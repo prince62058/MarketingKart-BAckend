@@ -11,7 +11,9 @@ function signupOptions(configId, mode) {
     response_type: 'code',
     override_default_response_type: true,
     extras: mode === 'BUSINESS_APP'
-      ? { setup: {}, featureType: 'whatsapp_business_app_onboarding' }
+      // Session logging v3 is distinct from Embedded Signup v4 (selected by config_id).
+      // Meta's Business App onboarding launch requires this session payload format.
+      ? { setup: {}, featureType: 'whatsapp_business_app_onboarding', sessionInfoVersion: '3' }
       : { setup: {} },
   };
 }
