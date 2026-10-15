@@ -27,10 +27,14 @@ test('hosted signup handles either callback order and ignores foreign origins', 
  for(const eventFirst of [true,false]) {
   const html=getSignupHtml({appId:'app-test',configId:'config-test',version:'v22.0',nonce:'nonce'});
   const source=html.match(/<script nonce="nonce">([\s\S]*?)<\/script>/)[1];
-  const elements={status:{},connect:{},pin:{value:'123456'}};
-  const calls=[];let receive,login;
-  const context={location:{hash:'#'+'ab'.repeat(32),pathname:'/api/whatsapp/meta/signup'},history:{replaceState(){}},document:{getElementById:id=>elements[id]},window:{addEventListener:(_name,fn)=>{receive=fn;}},FB:{init(){},login:fn=>{login=fn;}},setTimeout(){},fetch:async(_url,options)=>{calls.push(JSON.parse(options.body));return {ok:true,json:async()=>({success:true})};}};
-  vm.runInNewContext(source,context);context.window.fbAsyncInit();elements.connect.onclick();
+  const elements={status:{},connect:{},pin:{value:'123456',type:'password'},'pin-toggle':{setAttribute(name,value){this[name]=value;}},'eye-slash':{setAttribute(name,value){this[name]=value;}}};
+  const calls=[];let receive,login,blur;
+  const context={location:{hash:'#'+'ab'.repeat(32),pathname:'/api/whatsapp/meta/signup'},history:{replaceState(){}},document:{getElementById:id=>elements[id]},window:{addEventListener:(name,fn)=>{if(name==='message')receive=fn;if(name==='blur')blur=fn;}},FB:{init(){},login:fn=>{login=fn;}},setTimeout(){},fetch:async(_url,options)=>{calls.push(JSON.parse(options.body));return {ok:true,json:async()=>({success:true})};}};
+  vm.runInNewContext(source,context);context.window.fbAsyncInit();
+  elements['pin-toggle'].onclick();assert.equal(elements.pin.type,'text');assert.equal(elements['pin-toggle']['aria-label'],'Hide PIN');assert.equal(calls.length,0);
+  blur();assert.equal(elements.pin.type,'password');assert.equal(elements['pin-toggle']['aria-pressed'],'false');
+  elements['pin-toggle'].onclick();elements['pin-toggle'].onclick();assert.equal(elements.pin.type,'password');
+  elements['pin-toggle'].onclick();elements.connect.onclick();assert.equal(elements.pin.type,'password');
   const event={origin:'https://www.facebook.com',data:{type:'WA_EMBEDDED_SIGNUP',event:'FINISH',data:{waba_id:'123456',phone_number_id:'987654'}}};
   receive({...event,origin:'https://untrusted.example'});assert.equal(calls.length,0);
   if(eventFirst){receive(event);login({authResponse:{code:'code'}});}else{login({authResponse:{code:'code'}});receive(event);}
