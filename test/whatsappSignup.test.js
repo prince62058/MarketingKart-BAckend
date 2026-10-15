@@ -162,7 +162,7 @@ test('Business App event accepts waba-only completion in either callback order',
   const event={origin:'https://www.facebook.com',data:{type:'WA_EMBEDDED_SIGNUP',event:'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING',data:{waba_id:'123456'}}};
   if(eventFirst){receive(event);login({authResponse:{code:'code'}});}else{login({authResponse:{code:'code'}});receive(event);}
   await new Promise(r=>setImmediate(r));assert.equal(calls.length,1);assert.equal(calls[0].wabaId,'123456');
-  assert.equal(options.extras.featureType,'whatsapp_business_app_onboarding');assert.equal(options.extras.sessionInfoVersion,'3');
+  assert.equal(options.extras.featureType,'whatsapp_business_app_onboarding');assert.equal(options.extras.sessionInfoVersion,'3');assert.equal(options.extras.version,'v4');
  }
 });
 test('signed coexistence events are persisted before acknowledgement and excluded from inbound processing',async()=>{
