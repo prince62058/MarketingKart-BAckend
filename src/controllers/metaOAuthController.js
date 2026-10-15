@@ -3,14 +3,20 @@ const Sessions = require('../models/whatsappSignupSessionModel');
 const Accounts = require('../models/whatsappAccountModel');
 const {connectSignup} = require('../services/whatsappSignupService');
 const {getSignupHtml} = require('../views/whatsappSignupPage');
+const {parseSignupMode} = require('../services/whatsappSignupFlow');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const ready = () => process.env.clientId && process.env.clientSecret && process.env.META_WHATSAPP_CONFIG_ID && /^[a-f0-9]{64}$/i.test(process.env.WHATSAPP_TOKEN_ENCRYPTION_KEY || '');
 const publicBase = () => process.env.PUBLIC_API_URL || 'https://api.marketingkart.in';
 exports.startOAuth = async (req,res) => {
+ let mode;
+ try { mode = parseSignupMode(req.query.mode); }
+ catch(error) { return res.status(400).json({success:false,message:error.message}); }
+ // Coexistence must not be offered until history/state/echo ingestion is deployed.
+ if(mode === 'BUSINESS_APP') return res.status(503).json({success:false,message:'WhatsApp Business App connection needs history and contact synchronization setup. Please contact support. Keep your WhatsApp Business app account active; do not delete it.'});
  try {
   if(!ready())return res.status(503).json({success:false,message:'WhatsApp onboarding setup is being completed. Please contact support.'});
   const state=crypto.randomBytes(32).toString('hex');
-  await Sessions.findOneAndUpdate({_id:req.user._id,status:{$ne:'PROCESSING'}},{$set:{stateHash:hash(state),userId:req.user._id,status:'WAITING',message:null,expiresAt:new Date(Date.now()+600000)}},{upsert:true,new:true});
+  await Sessions.findOneAndUpdate({_id:req.user._id,status:{$ne:'PROCESSING'}},{$set:{stateHash:hash(state),userId:req.user._id,mode,status:'WAITING',message:null,expiresAt:new Date(Date.now()+600000)}},{upsert:true,new:true});
   res.set('Cache-Control','no-store').json({success:true,data:{state,oauthUrl:publicBase()+'/api/whatsapp/meta/signup#'+state}});
  }catch{res.status(500).json({success:false,message:'Could not start WhatsApp signup. Please retry.'});}
 };
@@ -28,7 +34,7 @@ exports.completeSignup = async (req,res) => {
  try {
   session=await Sessions.findOneAndUpdate({stateHash:hash(state),status:'WAITING',expiresAt:{$gt:new Date()}},{$set:{status:'PROCESSING'}},{new:true});
   if(!session)return res.status(409).json({success:false,message:'Signup session expired or already used. Start again from the app.'});
-  await connectSignup({userId:session.userId,code,wabaId,phoneNumberId,pin});
+  await connectSignup({userId:session.userId,code,wabaId,phoneNumberId,pin,mode:session.mode});
   await Sessions.updateOne({_id:session._id},{$set:{status:'CONNECTED'}});
   res.json({success:true});
  }catch(error){

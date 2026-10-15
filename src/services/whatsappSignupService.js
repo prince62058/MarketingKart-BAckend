@@ -10,7 +10,8 @@ function validateGrant(grant, appId, wabaId, now = Date.now()) {
   const assetGrant = grant.granular_scopes?.find(s => s.scope === 'whatsapp_business_management');
   if (!assetGrant?.target_ids?.map(String).includes(String(wabaId))) throw new Error('This WhatsApp account was not shared in signup.');
 }
-async function connectSignup({userId, code, wabaId, phoneNumberId, pin}, deps = {}) {
+async function connectSignup({userId, code, wabaId, phoneNumberId, pin, mode = 'NEW_OR_MIGRATE'}, deps = {}) {
+  if (mode !== 'NEW_OR_MIGRATE') throw new Error('WhatsApp Business App connection requires the coexistence setup.');
   const api = deps.api || axios;
   const Accounts = deps.Account || Account;
   const Claims = deps.Claim || Claim;
@@ -29,13 +30,14 @@ async function connectSignup({userId, code, wabaId, phoneNumberId, pin}, deps = 
   let cursor;
   let phone;
   for (let page=0; page<100; page++) {
-    const response = await api.get(`${base}/${wabaId}/phone_numbers`, {headers,params:{fields:'id,display_phone_number,verified_name,quality_rating,status,code_verification_status',limit:100,...(cursor ? {after:cursor}: {})},timeout:15000});
+    const response = await api.get(`${base}/${wabaId}/phone_numbers`, {headers,params:{fields:'id,display_phone_number,verified_name,quality_rating,status,code_verification_status,is_on_biz_app',limit:100,...(cursor ? {after:cursor}: {})},timeout:15000});
     phone = response.data?.data?.find(p => String(p.id) === phoneNumberId);
     if (phone) break;
     cursor = response.data?.paging?.cursors?.after;
     if (!response.data?.paging?.next || !cursor) break;
   }
   if (!phone) throw new Error('Selected number does not belong to the authorized WhatsApp account.');
+  if (phone.is_on_biz_app === true) throw new Error('This number is registered in WhatsApp Business App. Use Connect WhatsApp Business App instead; do not delete your account.');
   const existing = await Accounts.findOne({phoneNumberId,userId:{$ne:userId}});
   if (existing) throw new Error('This number is already linked to another MarketingKart account. Contact support.');
   let claim;

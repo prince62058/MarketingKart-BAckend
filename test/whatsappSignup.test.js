@@ -4,6 +4,40 @@ process.env.clientId='app-test';process.env.clientSecret='secret-test';process.e
 const {connectSignup,validateGrant}=require('../src/services/whatsappSignupService');
 const grant={is_valid:true,app_id:'app-test',scopes:['whatsapp_business_management','whatsapp_business_messaging'],granular_scopes:[{scope:'whatsapp_business_management',target_ids:['123456']}]};
 const input={userId:'tenant-a',code:'one-time-code',wabaId:'123456',phoneNumberId:'987654'};
+test('new-number signup never registers a Business App number', async () => {
+ const deps=mocks({phone:{status:'PENDING',is_on_biz_app:true}});
+ await assert.rejects(connectSignup({...input,pin:'123456'},deps),/Business App/);
+ assert.equal(deps.calls.filter(c=>c[0]==='post'||c[0]==='save').length,0);
+});
+test('coexistence cannot fall through to standard registration', async () => {
+ const deps=mocks();
+ await assert.rejects(connectSignup({...input,mode:'BUSINESS_APP'},deps),/coexistence/);
+ assert.equal(deps.calls.length,0);
+});
+test('number types are explicit and use distinct Meta options', () => {
+ const {parseSignupMode,signupOptions}=require('../src/services/whatsappSignupFlow');
+ assert.equal(parseSignupMode(),'NEW_OR_MIGRATE');
+ assert.throws(()=>parseSignupMode('UNKNOWN'));
+ assert.deepEqual(signupOptions('config','NEW_OR_MIGRATE').extras,{setup:{}});
+ assert.equal(signupOptions('config','BUSINESS_APP').extras.featureType,'whatsapp_business_app_onboarding');
+});
+test('hosted signup handles either callback order and ignores foreign origins', async () => {
+ const vm=require('node:vm');
+ const {getSignupHtml}=require('../src/views/whatsappSignupPage');
+ for(const eventFirst of [true,false]) {
+  const html=getSignupHtml({appId:'app-test',configId:'config-test',version:'v22.0',nonce:'nonce'});
+  const source=html.match(/<script nonce="nonce">([\s\S]*?)<\/script>/)[1];
+  const elements={status:{},connect:{},pin:{value:'123456'}};
+  const calls=[];let receive,login;
+  const context={location:{hash:'#'+'ab'.repeat(32),pathname:'/api/whatsapp/meta/signup'},history:{replaceState(){}},document:{getElementById:id=>elements[id]},window:{addEventListener:(_name,fn)=>{receive=fn;}},FB:{init(){},login:fn=>{login=fn;}},setTimeout(){},fetch:async(_url,options)=>{calls.push(JSON.parse(options.body));return {ok:true,json:async()=>({success:true})};}};
+  vm.runInNewContext(source,context);context.window.fbAsyncInit();elements.connect.onclick();
+  const event={origin:'https://www.facebook.com',data:{type:'WA_EMBEDDED_SIGNUP',event:'FINISH',data:{waba_id:'123456',phone_number_id:'987654'}}};
+  receive({...event,origin:'https://untrusted.example'});assert.equal(calls.length,0);
+  if(eventFirst){receive(event);login({authResponse:{code:'code'}});}else{login({authResponse:{code:'code'}});receive(event);}
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(calls.length,1);assert.equal(calls[0].phoneNumberId,'987654');assert.equal(elements.pin.value,'');
+ }
+});
 function mocks(overrides={}){
  const calls=[];
  const phone={id:'987654',display_phone_number:'+910000000000',status:'CONNECTED',code_verification_status:'VERIFIED',...overrides.phone};
