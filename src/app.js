@@ -60,6 +60,8 @@ app.use(cors()); // Allows requests from all origins by default. You can configu
 // `verify` stashes the raw request bytes on req.rawBody so webhook handlers
 // (e.g. the WhatsApp webhook) can check Meta's X-Hub-Signature-256 HMAC,
 // which has to be computed over the exact bytes Meta sent, not the re-serialized object.
+// Coexistence history arrives in batches; keep other JSON endpoints at their default limit.
+app.use('/api/whatsapp/webhook', express.json({limit:'8mb', verify:(req,_res,buf)=>{req.rawBody=buf;}}));
 app.use(express.json({
   verify: (req, res, buf) => {
     req.rawBody = buf;

@@ -29,6 +29,13 @@ const whatsappAccountSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    onboardingMode: { type: String, enum: ['NEW_OR_MIGRATE','BUSINESS_APP'], default: 'NEW_OR_MIGRATE' },
+    coexistenceSync: {
+      contactsRequestId: String, historyRequestId: String,
+      contactsRequestedAt: Date, historyRequestedAt: Date,
+      historyStatus: String, historyProgress: {type:Number,default:0},
+    },
+    disconnectionReason: String,
     businessName: {
       type: String,
       default: null,

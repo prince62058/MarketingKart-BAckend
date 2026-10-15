@@ -13,14 +13,15 @@ function validateGrant(grant, appId, wabaId, now = Date.now()) {
   if (!assetGrant?.target_ids?.map(String).includes(String(wabaId))) throw new Error('This WhatsApp account was not shared in signup.');
 }
 async function connectSignup({userId, code, wabaId, phoneNumberId, mode = 'NEW_OR_MIGRATE'}, deps = {}) {
-  if (mode !== 'NEW_OR_MIGRATE') throw new Error('WhatsApp Business App connection requires the coexistence setup.');
+  if (!['NEW_OR_MIGRATE','BUSINESS_APP'].includes(mode)) throw new Error('Invalid signup mode.');
+  const coexistence = mode === 'BUSINESS_APP';
   const api = deps.api || axios;
   const Accounts = deps.Account || Account;
   const Claims = deps.Claim || Claim;
   const appId = process.env.clientId;
   const secret = process.env.clientSecret;
   if (!appId || !secret || !process.env.WHATSAPP_TOKEN_ENCRYPTION_KEY) throw new Error('WhatsApp onboarding is not configured. Contact support.');
-  if (typeof code !== 'string' || !code || code.length > 8192 || !/^\d{5,30}$/.test(wabaId || '') || !/^\d{5,30}$/.test(phoneNumberId || '')) throw new Error('Complete Meta signup and select a WhatsApp number.');
+  if (typeof code !== 'string' || !code || code.length > 8192 || !/^\d{5,30}$/.test(wabaId || '') || ((!coexistence || phoneNumberId) && !/^\d{5,30}$/.test(phoneNumberId || ''))) throw new Error('Complete Meta signup and select a WhatsApp number.');
   const base = `https://graph.facebook.com/${version()}`;
   const exchanged = await api.get(`${base}/oauth/access_token`, {params:{client_id:appId,client_secret:secret,code},timeout:15000});
   const token = exchanged.data?.access_token;
@@ -31,22 +32,26 @@ async function connectSignup({userId, code, wabaId, phoneNumberId, mode = 'NEW_O
   // Read the selected phone through this customer's WABA, never through our system token.
   let cursor;
   let phone;
+  const eligible=[];
   for (let page=0; page<100; page++) {
-    const response = await api.get(`${base}/${wabaId}/phone_numbers`, {headers,params:{fields:'id,display_phone_number,verified_name,quality_rating,status,code_verification_status,is_on_biz_app',limit:100,...(cursor ? {after:cursor}: {})},timeout:15000});
+    const response = await api.get(`${base}/${wabaId}/phone_numbers`, {headers,params:{fields:'id,display_phone_number,verified_name,quality_rating,status,code_verification_status,is_on_biz_app,platform_type',limit:100,...(cursor ? {after:cursor}: {})},timeout:15000});
+    eligible.push(...(response.data?.data||[]).filter(p=>p.is_on_biz_app===true&&p.platform_type==='CLOUD_API'));
     phone = response.data?.data?.find(p => String(p.id) === phoneNumberId);
     if (phone) break;
     cursor = response.data?.paging?.cursors?.after;
     if (!response.data?.paging?.next || !cursor) break;
   }
+  if(coexistence&&!phoneNumberId&&eligible.length===1){phone=eligible[0];phoneNumberId=String(phone.id);}
   if (!phone) throw new Error('Selected number does not belong to the authorized WhatsApp account.');
-  if (phone.is_on_biz_app === true) throw new Error('This number is registered in WhatsApp Business App. Use Connect WhatsApp Business App instead; do not delete your account.');
+  if (!coexistence && phone.is_on_biz_app === true) throw new Error('This number is registered in WhatsApp Business App. Use Connect WhatsApp Business App instead; do not delete your account.');
+  if(coexistence&&(phone.is_on_biz_app!==true||phone.platform_type!=='CLOUD_API'))throw new Error('Complete the connection approval inside WhatsApp Business first.');
   const existing = await Accounts.findOne({phoneNumberId,userId:{$ne:userId}});
   if (existing) throw new Error('This number is already linked to another MarketingKart account. Contact support.');
   let claim;
   try { claim = await Claims.findOneAndUpdate({_id:phoneNumberId},{$setOnInsert:{userId}},{upsert:true,new:true}); }
   catch (error) { if (error.code !== 11000) throw error; claim = await Claims.findById(phoneNumberId); }
   if (String(claim?.userId) !== String(userId)) throw new Error('This number is already linked to another MarketingKart account.');
-  if (phone.status !== 'CONNECTED') {
+  if (!coexistence && phone.status !== 'CONNECTED') {
     if (phone.code_verification_status !== 'VERIFIED') throw new Error('Verify your number with the Meta OTP step first.');
     // Persist once before calling Meta so a timed-out registration can reuse its PIN.
     // The atomic predicate prevents concurrent attempts from choosing different PINs.
@@ -73,10 +78,25 @@ async function connectSignup({userId, code, wabaId, phoneNumberId, mode = 'NEW_O
   const account = await Accounts.findOneAndUpdate({userId}, {$set:{
     wabaId,phoneNumberId,accessToken:token,phoneNumber:phone.display_phone_number,
     verifiedName:phone.verified_name || null,qualityRating:phone.quality_rating || null,
-    phoneStatus:phone.status,codeVerificationStatus:phone.code_verification_status,
+    onboardingMode:mode,phoneStatus:coexistence?'CONNECTED':phone.status,codeVerificationStatus:phone.code_verification_status,
     connectedVia:'EMBEDDED_SIGNUP',status:'CONNECTED',
     tokenExpiresAt:grant.expires_at ? new Date(grant.expires_at*1000) : null,
   }}, {upsert:true,new:true,runValidators:true});
+  if(coexistence){
+    // These are one-shot requests. Persist intent before sending so a timeout is not blindly replayed.
+    for(const [syncType,key] of [['smb_app_state_sync','contacts'],['history','history']]){
+      const at=`coexistenceSync.${key}RequestedAt`, id=`coexistenceSync.${key}RequestId`;
+      const reserved=await Accounts.findOneAndUpdate({_id:account._id,[at]:{$exists:false}},{$set:{[at]:new Date(),...(key==='history'?{'coexistenceSync.historyStatus':'REQUESTED'}:{})}},{new:true});
+      if(!reserved){
+        const current=await Accounts.findOne({_id:account._id});
+        if(!current?.coexistenceSync?.[`${key}RequestId`])throw new Error('Business App synchronization request is awaiting confirmation. Contact support; do not disconnect your account.');
+        continue;
+      }
+      const result=await api.post(`${base}/${phoneNumberId}/smb_app_data`,{messaging_product:'whatsapp',sync_type:syncType},{headers,timeout:20000});
+      if(!result.data?.request_id)throw new Error('Meta did not confirm Business App synchronization. Contact support before retrying.');
+      await Accounts.updateOne({_id:account._id},{$set:{[id]:result.data.request_id}});
+    }
+  }
   return account;
 }
 module.exports = {connectSignup,validateGrant};

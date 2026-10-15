@@ -11,13 +11,12 @@ exports.startOAuth = async (req,res) => {
  let mode;
  try { mode = parseSignupMode(req.query.mode); }
  catch(error) { return res.status(400).json({success:false,message:error.message}); }
- // Coexistence must not be offered until history/state/echo ingestion is deployed.
- if(mode === 'BUSINESS_APP') return res.status(503).json({success:false,message:'WhatsApp Business App connection needs history and contact synchronization setup. Please contact support. Keep your WhatsApp Business app account active; do not delete it.'});
  try {
   if(!ready())return res.status(503).json({success:false,message:'WhatsApp onboarding setup is being completed. Please contact support.'});
+  if(mode==='BUSINESS_APP')await require('../services/whatsappCoexistenceService').assertConfigured();
   const state=crypto.randomBytes(32).toString('hex');
   await Sessions.findOneAndUpdate({_id:req.user._id,status:{$ne:'PROCESSING'}},{$set:{stateHash:hash(state),userId:req.user._id,mode,status:'WAITING',message:null,expiresAt:new Date(Date.now()+600000)}},{upsert:true,new:true});
-  res.set('Cache-Control','no-store').json({success:true,data:{state,oauthUrl:publicBase()+'/api/whatsapp/meta/signup#'+state}});
+  res.set('Cache-Control','no-store').json({success:true,data:{state,oauthUrl:publicBase()+'/api/whatsapp/meta/signup#'+state+(mode==='BUSINESS_APP'?'&mode=BUSINESS_APP':'')}});
  }catch{res.status(500).json({success:false,message:'Could not start WhatsApp signup. Please retry.'});}
 };
 exports.signupPage = (req,res) => {

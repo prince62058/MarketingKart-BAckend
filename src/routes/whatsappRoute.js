@@ -10,7 +10,7 @@ const { uploadExcel, uploadWhatsAppMedia } = require("../middlewares/multer");
 
 // ─── Webhook (no auth — Meta calls this directly) ──────────────────────────
 router.get("/whatsapp/webhook", webhookController.getWhatsAppWebhook);
-router.post("/whatsapp/webhook", webhookController.postWhatsAppWebhook);
+router.post("/whatsapp/webhook", require("../services/whatsappCoexistenceService").capture, webhookController.postWhatsAppWebhook);
 router.get("/whatsapp/debug-logs", authUser, isAdmin, webhookController.getDebugLogs);
 
 // ─── Stats & Account (mobile dashboard) ─────────────────────────────────────

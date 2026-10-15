@@ -96,6 +96,8 @@ exports.getMessages = async (req, res) => {
 
     const phoneVariants = getPhoneVariants(conversation.customerPhone);
     const messageQuery = {
+      phoneNumberId: conversation.phoneNumberId,
+      businessId: { $in: (await businessModel.find({userId:req.user._id}).select("_id")).map(b=>b._id) },
       $or: [
         { conversationId },
         ...(phoneVariants.length ? [{ to: { $in: phoneVariants } }] : []),

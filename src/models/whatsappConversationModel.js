@@ -21,6 +21,7 @@ const whatsappConversationSchema = new mongoose.Schema(
       type: String,
       required: true, // E.164 without '+'
     },
+    contactSyncedAt: Date,
     customerName: {
       type: String,
       default: "Unknown",

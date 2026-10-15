@@ -11,7 +11,7 @@ function signupOptions(configId, mode) {
     response_type: 'code',
     override_default_response_type: true,
     extras: mode === 'BUSINESS_APP'
-      ? { setup: {}, featureType: 'whatsapp_business_app_onboarding', sessionInfoVersion: '3' }
+      ? { setup: {}, featureType: 'whatsapp_business_app_onboarding' }
       : { setup: {} },
   };
 }

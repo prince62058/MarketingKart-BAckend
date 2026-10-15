@@ -9,10 +9,10 @@ test('new-number signup never registers a Business App number', async () => {
  await assert.rejects(connectSignup({...input,pin:'123456'},deps),/Business App/);
  assert.equal(deps.calls.filter(c=>c[0]==='post'||c[0]==='save').length,0);
 });
-test('coexistence cannot fall through to standard registration', async () => {
+test('coexistence requires a verified Business App Cloud API number', async () => {
  const deps=mocks();
- await assert.rejects(connectSignup({...input,mode:'BUSINESS_APP'},deps),/coexistence/);
- assert.equal(deps.calls.length,0);
+ await assert.rejects(connectSignup({...input,mode:'BUSINESS_APP'},deps),/WhatsApp Business/);
+ assert.equal(deps.calls.filter(c=>c[0]==='post').length,0);
 });
 test('number types are explicit and use distinct Meta options', () => {
  const {parseSignupMode,signupOptions}=require('../src/services/whatsappSignupFlow');
@@ -125,4 +125,56 @@ test('ambiguous, disconnected and expired number mappings cannot send messages',
   await assert.rejects(assertUniquePhone('12345', model([{status:'CONNECTED',tokenExpiresAt:new Date(0)}])), /expired/);
   const account = {status:'CONNECTED',userId:'customer'};
   assert.equal(await assertUniquePhone('12345', model([account])), account);
+});
+
+test('Business App completion resolves the unique phone, skips register and starts contacts then history',async()=>{
+ const deps=mocks({phone:{is_on_biz_app:true,platform_type:'CLOUD_API'}});
+ const saves=[];
+ deps.Account.findOneAndUpdate=async(q,u)=>{saves.push([q,u]);return {_id:'account',...u.$set};};
+ deps.Account.updateOne=async()=>{};
+ const original=deps.api.post;
+ deps.api.post=async(...args)=>{const r=await original(...args);return args[0].endsWith('/smb_app_data')?{data:{request_id:'sync-'+args[1].sync_type}}:r;};
+ await connectSignup({...input,phoneNumberId:undefined,mode:'BUSINESS_APP'},deps);
+ assert.equal(deps.calls.some(c=>c[0]==='storePin'||c[1]?.endsWith('/register')),false);
+ assert.deepEqual(deps.calls.filter(c=>c[1]?.endsWith('/smb_app_data')).map(c=>c[2].sync_type),['smb_app_state_sync','history']);
+ assert.equal(saves[0][1].$set.onboardingMode,'BUSINESS_APP');
+ assert.equal(saves[0][1].$set.phoneNumberId,'987654');
+});
+test('Business App phone discovery rejects ambiguous WABA numbers',async()=>{
+ const deps=mocks({phones:[{id:'987654',is_on_biz_app:true,platform_type:'CLOUD_API'},{id:'987655',is_on_biz_app:true,platform_type:'CLOUD_API'}]});
+ await assert.rejects(connectSignup({...input,phoneNumberId:undefined,mode:'BUSINESS_APP'},deps),/Selected number/);
+ assert.equal(deps.calls.some(c=>c[0]==='post'),false);
+});
+test('Business App message mapping preserves historical time, direction and media placeholders',()=>{
+ const {messageData}=require('../src/services/whatsappCoexistenceService');
+ const out=messageData({from:'+919999999999',id:'a',timestamp:'1700000000',type:'text',text:{body:'hello'},history_context:{status:'READ'}},'918888888888','919999999999');
+ assert.equal(out.direction,'OUTBOUND');assert.equal(out.status,'READ');assert.equal(out.createdAt.getTime(),1700000000000);
+ const incoming=messageData({from:'918888888888',timestamp:'1700000000',type:'media_placeholder'},'918888888888','919999999999');
+ assert.equal(incoming.direction,'INBOUND');assert.equal(incoming.type,'UNKNOWN');
+});
+test('Business App event accepts waba-only completion in either callback order',async()=>{
+ const vm=require('node:vm'); const {getSignupHtml}=require('../src/views/whatsappSignupPage');
+ for(const eventFirst of [true,false]){
+  const source=getSignupHtml({appId:'app',configId:'config',version:'v22.0',nonce:'nonce'}).match(/<script nonce="nonce">([\s\S]*?)<\/script>/)[1];
+  const elements={status:{},connect:{}};const calls=[];let receive,login,options;
+  const context={location:{hash:'#'+'ab'.repeat(32)+'&mode=BUSINESS_APP',pathname:'/api/whatsapp/meta/signup'},history:{replaceState(){}},document:{getElementById:id=>elements[id],querySelector:()=>({})},window:{addEventListener:(_,fn)=>receive=fn},FB:{init(){},login:(fn,opts)=>{login=fn;options=opts;}},setTimeout(){},fetch:async(_,opts)=>{calls.push(JSON.parse(opts.body));return {ok:true,json:async()=>({success:true})};}};
+  vm.runInNewContext(source,context);context.window.fbAsyncInit();elements.connect.onclick();
+  const event={origin:'https://www.facebook.com',data:{type:'WA_EMBEDDED_SIGNUP',event:'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING',data:{waba_id:'123456'}}};
+  if(eventFirst){receive(event);login({authResponse:{code:'code'}});}else{login({authResponse:{code:'code'}});receive(event);}
+  await new Promise(r=>setImmediate(r));assert.equal(calls.length,1);assert.equal(calls[0].wabaId,'123456');
+  assert.equal(options.extras.featureType,'whatsapp_business_app_onboarding');assert.equal(options.extras.sessionInfoVersion,undefined);
+ }
+});
+test('signed coexistence events are persisted before acknowledgement and excluded from inbound processing',async()=>{
+ const {capture}=require('../src/services/whatsappCoexistenceService');const Event=require('../src/models/whatsappCoexistenceEventModel');const original=Event.updateOne;
+ const body={object:'whatsapp_business_account',entry:[{id:'123456',changes:[{field:'history',value:{messages:[{id:'media'}]}},{field:'messages',value:{messages:[{id:'incoming'}]}}]}]};
+ const rawBody=Buffer.from(JSON.stringify(body));const signature='sha256='+require('crypto').createHmac('sha256',process.env.clientSecret).update(rawBody).digest('hex');
+ let persisted=0,next=0,status;
+ const req=()=>({body:JSON.parse(rawBody),rawBody,get:()=>signature});const res={sendStatus:n=>status=n};
+ try{
+  Event.updateOne=async()=>{persisted++;};const request=req();await capture(request,res,()=>{assert.equal(persisted,1);next++;});
+  assert.equal(next,1);assert.equal(request.body.entry[0].changes.length,1);assert.equal(request.body.entry[0].changes[0].field,'messages');
+  Event.updateOne=async()=>{throw new Error('database unavailable');};await capture(req(),res,()=>next++);assert.equal(status,503);assert.equal(next,1);
+  await capture({...req(),get:()=> 'sha256=invalid'},res,()=>next++);assert.equal(status,403);assert.equal(next,1);
+ }finally{Event.updateOne=original;}
 });
