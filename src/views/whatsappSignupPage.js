@@ -1,12 +1,15 @@
 const { signupOptions } = require('../services/whatsappSignupFlow');
-exports.getSignupHtml = ({appId,configId,version,nonce}) => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect WhatsApp · MarketingKart</title><style nonce="${nonce}">body{font:16px system-ui;background:#f0fdf4;color:#123;max-width:480px;margin:40px auto;padding:24px}button{font:inherit;padding:14px;box-sizing:border-box;width:100%;margin:10px 0;border-radius:12px;border:1px solid #ccc}button{background:#087d55;color:white}button:disabled{opacity:.5}#status{white-space:pre-wrap}small{display:block;color:#456}a{color:#087d55}</style></head><body><h1>New / Migrate Number</h1><p>Choose your business portfolio, create or select a WhatsApp Business Account, then add your number and verify it by SMS or phone call in Meta.</p><small>For a new number, it must not already be registered in WhatsApp Messenger or the WhatsApp Business mobile app. If you want to keep using the Business app, return and choose Connect WhatsApp Business App. An existing API number needs a supported provider migration. Do not delete or disconnect an existing account to try this flow.</small><button id="connect" disabled>Continue with Meta</button><p id="status">Loading Meta…</p><a href="myapp://whatsapp-connected">Return to MarketingKart</a><script nonce="${nonce}">
-const [state, modeFlag] = location.hash.slice(1).split('&');
-const isBusinessApp=modeFlag==='mode=BUSINESS_APP';
+exports.getSignupHtml = ({appId,configId,version,nonce}) => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect WhatsApp · MarketingKart</title><style nonce="${nonce}">body{font:16px system-ui;background:#f0fdf4;color:#123;max-width:480px;margin:40px auto;padding:24px}button{font:inherit;padding:14px;box-sizing:border-box;width:100%;margin:10px 0;border-radius:12px;border:1px solid #ccc}button{background:#087d55;color:white}button:disabled{opacity:.5}#status{white-space:pre-wrap}small{display:block;color:#456}a{color:#087d55}[hidden]{display:none}</style></head><body><div id="intro"><h1>New / Migrate Number</h1><p>Choose your business portfolio, create or select a WhatsApp Business Account, then add your number and verify it by SMS or phone call in Meta.</p><small>For a new number, it must not already be registered in WhatsApp Messenger or the WhatsApp Business mobile app. If you want to keep using the Business app, return and choose Connect WhatsApp Business App. An existing API number needs a supported provider migration. Do not delete or disconnect an existing account to try this flow.</small></div><button id="connect" disabled>Continue with Meta</button><p id="status">Loading Meta…</p><a href="myapp://whatsapp-connected">Return to MarketingKart</a><script nonce="${nonce}">
+const [state, ...flags] = location.hash.slice(1).split('&');
+const isBusinessApp=flags.includes('mode=BUSINESS_APP');
+const autoStart=flags.includes('launch=app_modal');
 if(isBusinessApp){document.querySelector('h1').textContent='Connect WhatsApp Business App';document.querySelector('p').textContent='Enter the number already used in your WhatsApp Business app on Meta’s first phone-number screen. For an eligible number, Meta shows your existing business profile, then lets you create a business portfolio or select one you administer in this same window. Approve the connection inside WhatsApp Business.';document.querySelector('small').textContent='No separate Business Manager setup is needed. Keep your business name, email and website ready. Keep WhatsApp Business open during verification and synchronization. Do not delete or disconnect your account. Meta decides number eligibility.';}
 history.replaceState(null,'',location.pathname);
-let code, selection, sending=false;
+let code, selection, sending=false, sdkReady=false;
 const statusEl=document.getElementById('status'), button=document.getElementById('connect');
 function status(text){statusEl.textContent=text;}
+if(autoStart){document.getElementById('intro').hidden=true;button.hidden=true;status('Opening Meta…');}
+function retry(message){status(message);button.hidden=false;button.disabled=false;}
 async function finish(){
  if(!code || !selection || sending)return;
  sending=true;button.disabled=true;status('Verifying your selected number…');
@@ -27,19 +30,25 @@ window.addEventListener('message',event=>{
  }
  if(data.event==='FINISH'){
   selection=data.data;finish();
- }else if(data.event==='CANCEL' || data.event==='ERROR'){status('Signup was not completed. You can try again.');button.disabled=false;}
+ }else if(data.event==='CANCEL' || data.event==='ERROR'){retry('Signup was not completed. You can try again.');}
 });
 window.fbAsyncInit=function(){
+ if(sdkReady)return;
+ sdkReady=true;
  FB.init({appId:${JSON.stringify(appId)},version:${JSON.stringify(version)},cookie:true,xfbml:false});
  if(!/^[a-f0-9]{64}$/.test(state)){status('Open this page using Connect WhatsApp inside MarketingKart.');return;}
- button.disabled=false;status('Ready. Your Facebook password and SMS OTP are entered only on Meta.');
+ button.disabled=false;
+ if(autoStart)button.onclick();
+ else status('Ready. Your Facebook password and SMS OTP are entered only on Meta.');
 };
 button.onclick=function(){
+ if(!sdkReady || button.disabled)return;
  code=null;selection=null;sending=false;button.disabled=true;status('Complete the steps in the Meta window.');
- FB.login(response=>{
+ try{FB.login(response=>{
   if(response.authResponse?.code){code=response.authResponse.code;finish();}
-  else{status('Signup cancelled. You can try again.');button.disabled=false;}
- },isBusinessApp ? ${JSON.stringify(signupOptions(configId, 'BUSINESS_APP'))} : ${JSON.stringify(signupOptions(configId, 'NEW_OR_MIGRATE'))});
+  else{retry('Signup cancelled. You can try again.');}
+ },isBusinessApp ? ${JSON.stringify(signupOptions(configId, 'BUSINESS_APP'))} : ${JSON.stringify(signupOptions(configId, 'NEW_OR_MIGRATE'))});}
+ catch{retry('Meta could not open. Tap Continue with Meta to retry.');}
 };
 setTimeout(()=>{if(typeof FB==='undefined')status('Meta could not load. Check your connection and reopen signup from the app.');},15000);
 </script><script async defer crossorigin="anonymous" src="https://connect.facebook.net/en_US/sdk.js"></script></body></html>`;

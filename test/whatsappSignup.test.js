@@ -39,6 +39,43 @@ test('hosted signup handles either callback order and ignores foreign origins', 
   assert.equal(calls.length,1);assert.equal(calls[0].phoneNumberId,'987654');assert.equal(calls[0].pin,undefined);
  }
 });
+function hostedLaunch(hash, loginImpl) {
+ const {getSignupHtml}=require('../src/views/whatsappSignupPage');
+ const source=getSignupHtml({appId:'app-test',configId:'config-test',version:'v22.0',nonce:'nonce'}).match(/<script nonce="nonce">([\s\S]*?)<\/script>/)[1];
+ const elements={status:{},intro:{hidden:false},connect:{disabled:true,hidden:false}};
+ const launches=[];
+ const context={location:{hash,pathname:'/api/whatsapp/meta/signup'},history:{replaceState(){}},document:{getElementById:id=>elements[id],querySelector:()=>({})},window:{addEventListener(){}},FB:{init(){},login:(callback,options)=>{launches.push({callback,options});loginImpl?.();}},setTimeout(){}};
+ require('node:vm').runInNewContext(source,context);
+ return {elements,launches,init:context.window.fbAsyncInit};
+}
+test('app modal launches Meta once after SDK readiness and preserves the chosen number route',()=>{
+ for(const mode of ['NEW_OR_MIGRATE','BUSINESS_APP']){
+  const page=hostedLaunch('#'+'ab'.repeat(32)+'&mode='+mode+'&launch=app_modal');
+  assert.equal(page.launches.length,0);
+  page.init();page.init();
+  assert.equal(page.launches.length,1);
+  assert.equal(page.elements.intro.hidden,true);
+  assert.equal(page.elements.connect.hidden,true);
+  assert.equal(page.launches[0].options.config_id,'config-test');
+  assert.equal(page.launches[0].options.extras.featureType,mode==='BUSINESS_APP'?'whatsapp_business_app_onboarding':undefined);
+ }
+});
+test('browser signup still requires a click and invalid sessions never auto-launch Meta',()=>{
+ const browser=hostedLaunch('#'+'ab'.repeat(32));browser.init();
+ assert.equal(browser.launches.length,0);assert.equal(browser.elements.intro.hidden,false);
+ browser.elements.connect.onclick();assert.equal(browser.launches.length,1);
+ const invalid=hostedLaunch('#invalid&launch=app_modal');invalid.init();invalid.elements.connect.onclick();
+ assert.equal(invalid.launches.length,0);assert.equal(invalid.elements.connect.disabled,true);
+});
+test('cancelled or blocked automatic launch exposes a manual retry without reopening a popup loop',()=>{
+ const cancelled=hostedLaunch('#'+'ab'.repeat(32)+'&mode=BUSINESS_APP&launch=app_modal');cancelled.init();
+ cancelled.launches[0].callback({});
+ assert.equal(cancelled.launches.length,1);assert.equal(cancelled.elements.connect.hidden,false);assert.equal(cancelled.elements.connect.disabled,false);
+ cancelled.elements.connect.onclick();assert.equal(cancelled.launches.length,2);
+ assert.equal(cancelled.launches[1].options.extras.featureType,'whatsapp_business_app_onboarding');
+ const blocked=hostedLaunch('#'+'ab'.repeat(32)+'&launch=app_modal',()=>{throw new Error('popup failed');});blocked.init();
+ assert.equal(blocked.launches.length,1);assert.equal(blocked.elements.connect.hidden,false);assert.equal(blocked.elements.connect.disabled,false);
+});
 function mocks(overrides={}){
  const calls=[];let registrationPinEncrypted;
  const phone={id:'987654',display_phone_number:'+910000000000',status:'CONNECTED',code_verification_status:'VERIFIED',...overrides.phone};
