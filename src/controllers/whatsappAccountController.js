@@ -58,6 +58,11 @@ const buildAccountResponse = (account) => ({
   codeVerificationStatus: account.codeVerificationStatus || null,
   businessName: account.businessName || null,
   connectedVia: account.connectedVia || "MANUAL",
+  onboardingMode: account.onboardingMode || 'NEW_OR_MIGRATE',
+  coexistenceSync: account.onboardingMode === 'BUSINESS_APP' ? {
+    historyStatus: account.coexistenceSync?.historyStatus || 'PENDING',
+    historyProgress: account.coexistenceSync?.historyProgress || 0,
+  } : null,
 });
 
 const fetchBusinessWabas = async ({ businessId, accessToken }) => {
