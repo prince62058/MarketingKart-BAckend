@@ -3,4 +3,5 @@ const mongoose = require('mongoose');
 module.exports = mongoose.model('WhatsAppPhoneClaim', new mongoose.Schema({
   _id: {type:String,required:true},
   userId: {type:mongoose.Schema.Types.ObjectId,required:true},
-}, {timestamps:true}));
+  registrationPinEncrypted: {type:String,select:false},
+}, {timestamps:true,toJSON:{transform:(_doc,ret)=>{delete ret.registrationPinEncrypted;return ret;}},toObject:{transform:(_doc,ret)=>{delete ret.registrationPinEncrypted;return ret;}}}));

@@ -18,7 +18,7 @@ Rollout checks: verify code exchange and webhook subscription with a customer-ow
 
 Isolation: one number may belong to one MarketingKart account only. Legacy duplicate mappings fail closed for outgoing messages and incoming routing. Resolve their ownership through support; never arbitrarily transfer an existing mapping. The provider system token is not a fallback for public customer signup. Signup state expires after ten minutes and is consumed once. API JSON omits access tokens.
 
-Customer instructions: use a number/business you control. Complete the SMS/voice verification in Meta yourself. A six-digit WhatsApp two-step registration PIN is distinct from the SMS OTP. Existing WhatsApp Business app coexistence is available only when Meta offers it for the number; do not tell customers to delete their WhatsApp account. Messaging eligibility, templates, opt-in and billing still need to be satisfied after authentication.
+Customer instructions: use a number/business you control. Complete the SMS/voice verification in Meta yourself. Customers do not enter a registration PIN in MarketingKart. The backend generates the Meta-required PIN and stores it encrypted in the tenant-owned phone claim before registration, reusing it on retries. This does not bypass or reset an existing PIN imposed by Meta or another provider. Existing WhatsApp Business app coexistence is available only when Meta offers it for the number; do not tell customers to delete their WhatsApp account. Messaging eligibility, templates, opt-in and billing still need to be satisfied after authentication.
 
 ## Audit and number-type flow — 16 October 2026
 

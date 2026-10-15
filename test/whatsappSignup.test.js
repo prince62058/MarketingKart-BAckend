@@ -27,23 +27,20 @@ test('hosted signup handles either callback order and ignores foreign origins', 
  for(const eventFirst of [true,false]) {
   const html=getSignupHtml({appId:'app-test',configId:'config-test',version:'v22.0',nonce:'nonce'});
   const source=html.match(/<script nonce="nonce">([\s\S]*?)<\/script>/)[1];
-  const elements={status:{},connect:{},pin:{value:'123456',type:'password'},'pin-toggle':{setAttribute(name,value){this[name]=value;}},'eye-slash':{setAttribute(name,value){this[name]=value;}}};
-  const calls=[];let receive,login,blur;
-  const context={location:{hash:'#'+'ab'.repeat(32),pathname:'/api/whatsapp/meta/signup'},history:{replaceState(){}},document:{getElementById:id=>elements[id]},window:{addEventListener:(name,fn)=>{if(name==='message')receive=fn;if(name==='blur')blur=fn;}},FB:{init(){},login:fn=>{login=fn;}},setTimeout(){},fetch:async(_url,options)=>{calls.push(JSON.parse(options.body));return {ok:true,json:async()=>({success:true})};}};
-  vm.runInNewContext(source,context);context.window.fbAsyncInit();
-  elements['pin-toggle'].onclick();assert.equal(elements.pin.type,'text');assert.equal(elements['pin-toggle']['aria-label'],'Hide PIN');assert.equal(calls.length,0);
-  blur();assert.equal(elements.pin.type,'password');assert.equal(elements['pin-toggle']['aria-pressed'],'false');
-  elements['pin-toggle'].onclick();elements['pin-toggle'].onclick();assert.equal(elements.pin.type,'password');
-  elements['pin-toggle'].onclick();elements.connect.onclick();assert.equal(elements.pin.type,'password');
+  const elements={status:{},connect:{}};
+  assert.doesNotMatch(html, /id="pin"|pin-toggle|pin-help/);
+  const calls=[];let receive,login;
+  const context={location:{hash:'#'+'ab'.repeat(32),pathname:'/api/whatsapp/meta/signup'},history:{replaceState(){}},document:{getElementById:id=>elements[id]},window:{addEventListener:(name,fn)=>{if(name==='message')receive=fn;}},FB:{init(){},login:fn=>{login=fn;}},setTimeout(){},fetch:async(_url,options)=>{calls.push(JSON.parse(options.body));return {ok:true,json:async()=>({success:true})};}};
+  vm.runInNewContext(source,context);context.window.fbAsyncInit();elements.connect.onclick();
   const event={origin:'https://www.facebook.com',data:{type:'WA_EMBEDDED_SIGNUP',event:'FINISH',data:{waba_id:'123456',phone_number_id:'987654'}}};
   receive({...event,origin:'https://untrusted.example'});assert.equal(calls.length,0);
   if(eventFirst){receive(event);login({authResponse:{code:'code'}});}else{login({authResponse:{code:'code'}});receive(event);}
   await new Promise(resolve=>setImmediate(resolve));
-  assert.equal(calls.length,1);assert.equal(calls[0].phoneNumberId,'987654');assert.equal(elements.pin.value,'');
+  assert.equal(calls.length,1);assert.equal(calls[0].phoneNumberId,'987654');assert.equal(calls[0].pin,undefined);
  }
 });
 function mocks(overrides={}){
- const calls=[];
+ const calls=[];let registrationPinEncrypted;
  const phone={id:'987654',display_phone_number:'+910000000000',status:'CONNECTED',code_verification_status:'VERIFIED',...overrides.phone};
  return {calls,api:{get:async(url,opts)=>{
   calls.push(['get',url,opts]);
@@ -52,7 +49,9 @@ function mocks(overrides={}){
   return {data:{data:overrides.phones || [phone]}};
  },post:async(url,body,opts)=>{calls.push(['post',url,body,opts]);return {data:{success:!overrides.postFailure}};}},
  Account:{findOne:async()=>overrides.existing || null,findOneAndUpdate:async(query,update)=>{calls.push(['save',query,update]);return update.$set;}},
- Claim:{findOneAndUpdate:async()=>({userId:overrides.claimUser || 'tenant-a'})}};
+ Claim:{findOneAndUpdate:async()=>({userId:overrides.claimUser || 'tenant-a'}),
+ updateOne:async(query,update)=>{calls.push(['storePin',query,update]);registrationPinEncrypted ??= update.$set.registrationPinEncrypted;},
+ findOne:()=>({select:async()=>({registrationPinEncrypted})})}};
 }
 test('rejects foreign app, unshared WABA, missing permissions and expired grants',()=>{
  for(const data of [{...grant,app_id:'other'},{...grant,granular_scopes:[]},{...grant,scopes:[]},{...grant,expires_at:1}])assert.throws(()=>validateGrant(data,'app-test','123456'));
@@ -71,11 +70,38 @@ test('wrong phone, existing tenant and concurrent claim cannot connect or mutate
   assert.equal(deps.calls.filter(c=>c[0]==='post'||c[0]==='save').length,0);
  }
 });
-test('OTP verified is not connected: registration requires explicit PIN',async()=>{
- const deps=mocks({phone:{status:'PENDING'}});await assert.rejects(connectSignup(input,deps),/PIN/);
- assert.equal(deps.calls.filter(c=>c[0]==='post').length,0);
- const ready=mocks({phone:{status:'PENDING'}});await connectSignup({...input,pin:'123456'},ready);
- assert.ok(ready.calls.find(c=>c[0]==='post')[1].endsWith('/987654/register'));
+test('registration requires verified OTP and generates its PIN on the server',async()=>{
+ const deps=mocks({phone:{status:'PENDING',code_verification_status:'NOT_VERIFIED'}});
+ await assert.rejects(connectSignup(input,deps),/OTP/);
+ assert.equal(deps.calls.filter(c=>['post','storePin'].includes(c[0])).length,0);
+ const ready=mocks({phone:{status:'PENDING'}});await connectSignup(input,ready);
+ const registration=ready.calls.find(c=>c[0]==='post');
+ assert.ok(registration[1].endsWith('/987654/register'));
+ assert.match(registration[2].pin,/^\d{6}$/);
+ const stored=ready.calls.find(c=>c[0]==='storePin');
+ assert.equal(stored[1].userId,'tenant-a');
+ assert.deepEqual(stored[1].registrationPinEncrypted,{$exists:false});
+ assert.match(stored[2].$set.registrationPinEncrypted,/^gcm1:/);
+ assert.equal(require('../src/utils/cryptoUtils').decryptText(stored[2].$set.registrationPinEncrypted),registration[2].pin);
+ const saved=ready.calls.find(c=>c[0]==='save')[2].$set;
+ assert.equal(saved.pin,undefined);assert.equal(saved.registrationPinEncrypted,undefined);
+});
+test('registration retries reuse the encrypted PIN and never reset existing Meta protection',async()=>{
+ const deps=mocks({phone:{status:'PENDING'}});const post=deps.api.post;let first=true;
+ deps.api.post=async(...args)=>{const result=await post(...args);if(first){first=false;throw new Error('request timed out');}return result;};
+ await assert.rejects(connectSignup(input,deps),/timed out/);
+ await connectSignup(input,deps);
+ const registrations=deps.calls.filter(c=>c[0]==='post'&&c[1].endsWith('/register'));
+ assert.equal(registrations.length,2);assert.equal(registrations[0][2].pin,registrations[1][2].pin);
+ const protectedNumber=mocks({phone:{status:'PENDING'}});
+ protectedNumber.api.post=async()=>{throw {response:{data:{error:{code:133005}}}};};
+ await assert.rejects(connectSignup(input,protectedNumber),/recovery.*WhatsApp Manager/);
+ assert.equal(protectedNumber.calls.some(c=>c[0]==='save'),false);
+ const Claim=require('../src/models/whatsappPhoneClaimModel');
+ const row=new Claim({_id:'987654',userId:'507f1f77bcf86cd799439011',registrationPinEncrypted:'gcm1:test'});
+ assert.equal(row.toJSON().registrationPinEncrypted,undefined);
+ assert.equal(row.toObject().registrationPinEncrypted,undefined);
+ assert.equal(Claim.schema.path('registrationPinEncrypted').options.select,false);
 });
 test('failed subscription does not save a falsely connected account',async()=>{
  const deps=mocks({postFailure:true});await assert.rejects(connectSignup(input,deps),/subscription/);

@@ -1,4 +1,6 @@
 const axios = require('axios');
+const { randomInt } = require('crypto');
+const { encryptText, decryptText } = require('../utils/cryptoUtils');
 const Account = require('../models/whatsappAccountModel');
 const Claim = require('../models/whatsappPhoneClaimModel');
 const version = () => process.env.META_GRAPH_API_VERSION || 'v22.0';
@@ -10,7 +12,7 @@ function validateGrant(grant, appId, wabaId, now = Date.now()) {
   const assetGrant = grant.granular_scopes?.find(s => s.scope === 'whatsapp_business_management');
   if (!assetGrant?.target_ids?.map(String).includes(String(wabaId))) throw new Error('This WhatsApp account was not shared in signup.');
 }
-async function connectSignup({userId, code, wabaId, phoneNumberId, pin, mode = 'NEW_OR_MIGRATE'}, deps = {}) {
+async function connectSignup({userId, code, wabaId, phoneNumberId, mode = 'NEW_OR_MIGRATE'}, deps = {}) {
   if (mode !== 'NEW_OR_MIGRATE') throw new Error('WhatsApp Business App connection requires the coexistence setup.');
   const api = deps.api || axios;
   const Accounts = deps.Account || Account;
@@ -46,8 +48,22 @@ async function connectSignup({userId, code, wabaId, phoneNumberId, pin, mode = '
   if (String(claim?.userId) !== String(userId)) throw new Error('This number is already linked to another MarketingKart account.');
   if (phone.status !== 'CONNECTED') {
     if (phone.code_verification_status !== 'VERIFIED') throw new Error('Verify your number with the Meta OTP step first.');
-    if (!/^\d{6}$/.test(pin || '')) throw new Error('Enter your six-digit WhatsApp two-step verification PIN to register this number.');
-    const registered = await api.post(`${base}/${phoneNumberId}/register`, {messaging_product:'whatsapp',pin}, {headers,timeout:20000});
+    // Persist once before calling Meta so a timed-out registration can reuse its PIN.
+    // The atomic predicate prevents concurrent attempts from choosing different PINs.
+    await Claims.updateOne({_id:phoneNumberId,userId,registrationPinEncrypted:{$exists:false}},
+      {$set:{registrationPinEncrypted:encryptText(String(randomInt(0,1000000)).padStart(6,'0'))}});
+    const pinClaim = await Claims.findOne({_id:phoneNumberId,userId}).select('+registrationPinEncrypted');
+    const pin = decryptText(pinClaim?.registrationPinEncrypted);
+    if (!/^\d{6}$/.test(pin || '')) throw new Error('Could not prepare number registration. Please contact support.');
+    let registered;
+    try {
+      registered = await api.post(`${base}/${phoneNumberId}/register`, {messaging_product:'whatsapp',pin}, {headers,timeout:20000});
+    } catch (error) {
+      if (Number(error.response?.data?.error?.code) === 133005) {
+        throw new Error('Meta requires recovery of the existing two-step verification on this number. Complete recovery in WhatsApp Manager or contact your current API provider, then connect again.');
+      }
+      throw error;
+    }
     if (!registered.data?.success) throw new Error('Meta has not completed phone registration. Retry signup.');
     phone.status = 'CONNECTED';
   }

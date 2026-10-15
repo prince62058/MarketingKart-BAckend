@@ -28,13 +28,13 @@ exports.signupPage = (req,res) => {
 };
 exports.completeSignup = async (req,res) => {
  if (req.get('origin') !== new URL(publicBase()).origin) return res.status(403).json({success:false,message:'Open signup from MarketingKart.'});
- const {state,code,wabaId,phoneNumberId,pin}=req.body || {};
+ const {state,code,wabaId,phoneNumberId}=req.body || {};
  if(!/^[a-f0-9]{64}$/.test(state || ''))return res.status(400).json({success:false,message:'Invalid signup session.'});
  let session;
  try {
   session=await Sessions.findOneAndUpdate({stateHash:hash(state),status:'WAITING',expiresAt:{$gt:new Date()}},{$set:{status:'PROCESSING'}},{new:true});
   if(!session)return res.status(409).json({success:false,message:'Signup session expired or already used. Start again from the app.'});
-  await connectSignup({userId:session.userId,code,wabaId,phoneNumberId,pin,mode:session.mode});
+  await connectSignup({userId:session.userId,code,wabaId,phoneNumberId,mode:session.mode});
   await Sessions.updateOne({_id:session._id},{$set:{status:'CONNECTED'}});
   res.json({success:true});
  }catch(error){
