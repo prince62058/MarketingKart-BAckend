@@ -23,7 +23,7 @@ exports.startOAuth = async (req,res) => {
 exports.signupPage = (req,res) => {
  if(!ready())return res.status(503).send('WhatsApp signup configuration is pending. Return to MarketingKart.');
  const nonce=crypto.randomBytes(18).toString('base64');
- res.set({'Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Frame-Options':'DENY','Content-Security-Policy':`default-src 'self'; script-src 'self' 'nonce-${nonce}' https://connect.facebook.net; style-src 'nonce-${nonce}'; frame-src https://www.facebook.com https://web.facebook.com; connect-src 'self' https://www.facebook.com https://graph.facebook.com; img-src 'self' data: https://*.facebook.com https://*.fbcdn.net; base-uri 'none'; form-action 'self' https://www.facebook.com`});
+ res.set({'Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Frame-Options':'DENY','Content-Security-Policy':`default-src 'self'; script-src 'self' 'nonce-${nonce}' https://connect.facebook.net; style-src 'nonce-${nonce}'; frame-src https://www.facebook.com https://web.facebook.com; connect-src 'self' https://connect.facebook.net https://www.facebook.com https://graph.facebook.com; img-src 'self' data: https://*.facebook.com https://*.fbcdn.net; base-uri 'none'; form-action 'self' https://www.facebook.com`});
  res.type('html').send(getSignupHtml({appId:process.env.clientId,configId:process.env.META_WHATSAPP_CONFIG_ID,version:process.env.META_GRAPH_API_VERSION || 'v22.0',nonce}));
 };
 exports.completeSignup = async (req,res) => {
