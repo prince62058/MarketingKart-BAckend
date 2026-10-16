@@ -5,6 +5,7 @@ const Event=require('../models/whatsappCoexistenceEventModel');
 const Conversation=require('../models/whatsappConversationModel');
 const Message=require('../models/whatsappMessageModel');
 const Business=require('../models/businessModel');
+const {describeMessage,previewText}=require('./whatsappChatFormat');
 const fields=['history','smb_app_state_sync','smb_message_echoes','account_update'];
 const digits=x=>String(x||'').replace(/\D/g,'');
 const date=x=>{const n=Number(x);return n>0&&Number.isFinite(n)?new Date(n*1000):new Date(0);};
@@ -30,13 +31,25 @@ async function capture(req,res,next){
  }catch{return res.sendStatus(503);}
 }
 function messageData(msg,customerPhone,businessPhone){
- const media=['image','video','audio','document','sticker'].includes(msg.type);
+ const described=describeMessage(msg);
+ if(!described)return null;
  const state={READ:'READ',PLAYED:'READ',DELIVERED:'DELIVERED',SENT:'SENT',ERROR:'FAILED',PENDING:'QUEUED'}[msg.history_context?.status]||'SENT';
  return {to:customerPhone,direction:digits(msg.from)===digits(businessPhone)?'OUTBOUND':'INBOUND',
-  type:msg.type==='text'?'TEXT':media?'MEDIA':'UNKNOWN',
-  textBody:msg.text?.body||msg[msg.type]?.caption||`[${String(msg.type||'unknown').toUpperCase()}]`,
-  mediaType:media?msg.type:null,mediaId:media?msg[msg.type]?.id||null:null,
+  type:described.type,textBody:described.textBody,mediaType:described.mediaType,mediaId:described.mediaId,
   status:state,sentAt:date(msg.timestamp),createdAt:date(msg.timestamp),source:'BUSINESS_APP'};
+}
+// Business App messages sent while the app is open: tell the owner's inbox right away.
+function emitLive(account,conv,data,messageId){
+ const io=global.io;if(!io||!conv)return;
+ const convObj={_id:String(conv._id),businessId:conv.businessId,customerPhone:conv.customerPhone,customerName:conv.customerName,
+  contactPhone:conv.customerPhone,contactName:conv.customerName&&conv.customerName!=='Unknown'?conv.customerName:conv.customerPhone,
+  lastMessage:previewText(data.textBody),lastMessageAt:data.sentAt,unreadCount:conv.unreadCount||0,status:conv.status||'OPEN',isBotActive:false};
+ const payload={_id:messageId,conversationId:String(conv._id),customerPhone:conv.customerPhone,customerName:convObj.contactName,
+  textBody:data.textBody,content:data.textBody,direction:data.direction,senderType:data.direction==='OUTBOUND'?'USER':'CONTACT',
+  type:data.type,messageType:data.type==='MEDIA'?String(data.mediaType||'image').toUpperCase():data.type,mediaType:data.mediaType,
+  status:data.status,createdAt:data.createdAt,sentAt:data.sentAt,conversation:convObj};
+ const rooms=[`user:${account.userId}`,conv.businessId&&`business:${conv.businessId}`,`conversation:${conv._id}`].filter(Boolean);
+ for(const room of rooms){io.to(room).emit('newWhatsAppMessage',payload);if(!room.startsWith('conversation:'))io.to(room).emit('conversationUpdated',convObj);}
 }
 async function processEvent(job){
  const value=job.value||{};
@@ -61,15 +74,18 @@ async function processEvent(job){
   if(!row)row=await Conversation.findOneAndUpdate(q,{$setOnInsert:{...q,wabaId:account.wabaId,businessId:ownerIds[0],customerName:name||'Unknown',lastMessageAt:new Date(0),unreadCount:0}},{upsert:true,new:true});
   return row;
  }
- async function saveMessage(msg,phone){
+ async function saveMessage(msg,phone,live=false){
   if(!msg.id||!phone)return;
-  const conv=await conversation(phone);
   const data=messageData(msg,phone,value.metadata?.display_phone_number||account.phoneNumber);
+  if(!data)return;
+  const conv=await conversation(phone);
   const q={phoneNumberId:account.phoneNumberId,metaMessageId:msg.id};
+  const messageId=crypto.createHash('sha256').update(account.phoneNumberId+':'+msg.id).digest('hex').slice(0,24);
   const existing=await Message.findOne(q);
-  if(!existing)await Message.updateOne({_id:crypto.createHash('sha256').update(account.phoneNumberId+':'+msg.id).digest('hex').slice(0,24)},{$setOnInsert:{...data,...q,conversationId:conv._id,businessId:conv.businessId}},{upsert:true});
+  if(!existing)await Message.updateOne({_id:messageId},{$setOnInsert:{...data,...q,conversationId:conv._id,businessId:conv.businessId}},{upsert:true});
   else if(existing.source==='BUSINESS_APP'&&existing.type==='UNKNOWN'&&data.type==='MEDIA')await Message.updateOne({_id:existing._id},{$set:{type:data.type,textBody:data.textBody,mediaId:data.mediaId,mediaType:data.mediaType}});
-  await Conversation.updateOne({_id:conv._id,lastMessageAt:{$lte:data.sentAt}},{$set:{lastMessage:data.textBody.slice(0,100),lastMessageAt:data.sentAt}});
+  await Conversation.updateOne({_id:conv._id,lastMessageAt:{$lte:data.sentAt}},{$set:{lastMessage:previewText(data.textBody),lastMessageAt:data.sentAt}});
+  if(live&&!existing)emitLive(account,conv,data,messageId);
  }
  if(job.field==='smb_app_state_sync'){
   for(const item of value.state_sync||[]){
@@ -80,13 +96,16 @@ async function processEvent(job){
    await Conversation.updateOne({_id:conv._id,$or:[{contactSyncedAt:{$exists:false}},{contactSyncedAt:{$lte:timestamp}}]},{$set:{contactSyncedAt:timestamp,customerName:item.action==='remove'?'Unknown':item.contact.full_name||item.contact.first_name||'Unknown'}});
   }
  }
- if(job.field==='smb_message_echoes')for(const msg of value.message_echoes||[])await saveMessage(msg,digits(msg.to));
+ if(job.field==='smb_message_echoes')for(const msg of value.message_echoes||[])await saveMessage(msg,digits(msg.to),true);
  if(job.field==='history'){
   for(const part of value.history||[]){
    if(part.errors?.some(e=>Number(e.code)===2593109))await Account.updateOne({_id:account._id},{$set:{'coexistenceSync.historyStatus':'DECLINED'}});
    else if(part.errors?.length)throw new Error('Meta history synchronization failed');
    for(const thread of part.threads||[])for(const msg of thread.messages||[])await saveMessage(msg,digits(thread.id));
-   if(Number.isFinite(part.metadata?.progress))await Account.updateOne({_id:account._id},{$max:{'coexistenceSync.historyProgress':part.metadata.progress},...(part.metadata.progress===100?{$set:{'coexistenceSync.historyStatus':'COMPLETE'}}:{})});
+   if(Number.isFinite(part.metadata?.progress)){
+    await Account.updateOne({_id:account._id},{$max:{'coexistenceSync.historyProgress':part.metadata.progress},...(part.metadata.progress===100?{$set:{'coexistenceSync.historyStatus':'COMPLETE'}}:{})});
+    global.io?.to(`user:${account.userId}`).emit('whatsappSyncProgress',{progress:part.metadata.progress,complete:part.metadata.progress===100});
+   }
   }
   // Supplemental media enriches the original message; it must not invent a new conversation.
   for(const msg of value.messages||[]){const existing=await Message.findOne({phoneNumberId:account.phoneNumberId,metaMessageId:msg.id});if(!existing)throw new Error('Waiting for history media placeholder');await saveMessage(msg,existing.to);}
@@ -100,7 +119,11 @@ async function drain(){
   const job=await Event.findOneAndUpdate({status:{$in:['PENDING','PROCESSING']},availableAt:{$lte:new Date()}},{$set:{status:'PROCESSING',availableAt:new Date(Date.now()+300000)},$inc:{attempts:1}},{new:true,sort:{createdAt:1}});
   if(!job)break;
   try{await processEvent(job);await Event.updateOne({_id:job._id},{$set:{status:'DONE',completedAt:new Date()},$unset:{value:1,error:1}});}
-  catch(error){await Event.updateOne({_id:job._id},{$set:{status:'PENDING',availableAt:new Date(Date.now()+Math.min(300000,job.attempts*10000)),error:error.message}});}
+  catch(error){
+   // Events that can never map to an account (for example partner-level notices) must not retry forever.
+   const dead=job.attempts>=25;
+   await Event.updateOne({_id:job._id},{$set:{status:dead?'FAILED':'PENDING',availableAt:new Date(Date.now()+Math.min(300000,job.attempts*10000)),error:error.message,...(dead?{completedAt:new Date()}:{})},...(dead?{$unset:{value:1}}:{})});
+  }
  }}catch{console.warn('[WhatsApp] Business App sync queue temporarily unavailable');}finally{running=false;}
 }
 const timer=setInterval(()=>void drain(),10000);timer.unref();

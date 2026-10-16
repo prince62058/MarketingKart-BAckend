@@ -6,6 +6,8 @@ const { authUser: auth } = require("../middlewares/authMidd");
 const { uploadWhatsAppMedia } = require("../middlewares/multer");
 const templateController = require("../controllers/whatsappTemplateController");
 
+router.get("/sync-status", auth, whatsappChatController.getSyncStatus);
+router.get("/media/:messageId", auth, whatsappChatController.getMedia);
 router.get("/conversations", auth, whatsappChatController.getConversations);
 router.get("/conversations/:conversationId", auth, whatsappChatController.getMessages);
 router.post("/conversations/:conversationId/send", auth, whatsappChatController.sendChatMessage);
