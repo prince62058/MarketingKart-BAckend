@@ -34,10 +34,13 @@ async function mirror(sourceUrl, { folder, name, fallbackMimetype }) {
       .trim()
       .toLowerCase();
     const extension = EXTENSIONS[mimetype] || EXTENSIONS[fallbackMimetype] || "";
+    // HeyGen's file host labels every file `binary/octet-stream`; that says nothing about the
+    // content, and storing it as such would serve videos and thumbnails as generic downloads.
+    const unlabelled = /(^|\/)octet-stream$/.test(mimetype);
     const stored = await uploadBuffer(Buffer.from(res.data), {
       folder,
       publicId: `${name}${extension}`,
-      mimetype: mimetype === "application/octet-stream" ? fallbackMimetype : mimetype,
+      mimetype: unlabelled ? fallbackMimetype : mimetype,
     });
     return stored.secure_url;
   } catch (error) {
