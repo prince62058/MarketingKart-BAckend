@@ -190,9 +190,12 @@ app.use("/api", videoYoutubeRoute);
 app.use("/api", recentAdsDesignRoute);
 app.use("/api", teamMemberRoute);
 app.use("/api", subscriptionRoute);
+app.use("/api", require("./modules/aiVideo/aiVideo.routes"));
+app.use("/api", require("./modules/aiVideo/aiVideo.admin.routes"));
 app.use("/api/staff", staffRoute);
 
 app.use("/api", require("./routes/whatsappRoute"));
+app.use("/api", require("./routes/rcsRoute"));
 app.use("/api/premium-plan", require("./routes/premiumPlanRoute"));
 app.use("/api", require("./routes/pageLinkOAuthRoute"));
 app.use("/api", require("./routes/whatsappWalletRoute"));

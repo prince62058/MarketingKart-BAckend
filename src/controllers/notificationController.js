@@ -2,6 +2,7 @@ const Notification = require("../models/notificationModel");
 const User = require("../models/userModel");
 const Business = require("../models/businessModel");
 const InternalCampaign = require("../models/internalCampiagnModel");
+const { notificationImage, buildFcmMessage } = require("../helpers/fcmMessage");
 
 const admin = require("firebase-admin");
 let serviceAccount;
@@ -51,26 +52,21 @@ const sendNotificationToMultipleTokens = async (
     const responses = await Promise.all(
       tokens.map(async (token) => {
         try {
-          const response = await admin.messaging().send({
-            token,
-            notification: {
-              title: notificationPayload.length
-                ? notificationPayload[0].title
-                : notificationPayload.title,
-              body: notificationPayload.length
-                ? notificationPayload[0].description
-                : notificationPayload.description,
-            },
-            android: {
-              notification: {
-                channelId: "alerts", // Match the channel ID in Flutter
-              },
-            },
-
-            data: {
-              customKey: notificationPayload.customData || "default",
-            },
-          });
+          const title = notificationPayload.length
+            ? notificationPayload[0].title
+            : notificationPayload.title;
+          const body = notificationPayload.length
+            ? notificationPayload[0].description
+            : notificationPayload.description;
+          const response = await admin.messaging().send(
+            buildFcmMessage({
+              token,
+              title,
+              body,
+              image: notificationPayload.image,
+              data: { customKey: notificationPayload.customData || "default" },
+            }),
+          );
           return { token, success: true, response };
         } catch (error) {
           console.error(
@@ -128,32 +124,23 @@ const sendNotificationToMultipleToken = async (
     const responses = await Promise.all(
       tokens.map(async (token) => {
         try {
-          const response = await admin.messaging().send({
-            token,
-            // Visible notification for heads-up display
-            notification: {
-              title: notificationPayload?.title || "New Lead Received",
-              body: notificationPayload?.description || `You have ${newLeadsCount} new lead(s) from your ads`,
-            },
-            // Data payload for app handling
-            data: {
-              customKey: notificationPayload.customData || "default",
-              type: newLeadsCount ? "Lead" : "FollowUp",
-              count: `${newLeadsCount}` || "0",
-              title: notificationPayload?.title || "New Lead Received",
-              description: notificationPayload?.description || `You have ${newLeadsCount} new lead(s) from your ads`,
-            },
-            android: {
-              priority: "high",
-              notification: {
-                channelId: "alerts",
-                sound: "default",
-                icon: "notification_icon",
-                color: "#1a73e8",
-                clickAction: "FLUTTER_NOTIFICATION_CLICK",
+          const title = notificationPayload?.title || "New Lead Received";
+          const body = notificationPayload?.description || `You have ${newLeadsCount} new lead(s) from your ads`;
+          const response = await admin.messaging().send(
+            buildFcmMessage({
+              token,
+              title,
+              body,
+              image: notificationPayload?.image,
+              data: {
+                customKey: notificationPayload.customData || "default",
+                type: newLeadsCount ? "Lead" : "FollowUp",
+                count: `${newLeadsCount || 0}`,
+                title,
+                description: body,
               },
-            },
-          });
+            }),
+          );
           return { token, success: true, response };
         } catch (error) {
           console.error(
@@ -205,7 +192,7 @@ const sendNotificationToAllUsersBusiness = async (req, res) => {
       userId: user._id,
       title,
       message,
-      image: req.file?.location,
+      image: notificationImage(req.file?.location),
       read: false,
       status: "sent",
       createdAt: new Date(),
@@ -248,7 +235,7 @@ const sendNotificationToBusinessUsers = async (req, res) => {
         title,
         message,
         businessId,
-        // image: req.file?.location,
+        image: notificationImage(req.file?.location),
       });
       await notification.save();
 
@@ -349,39 +336,17 @@ const sendNotificationToSingleUserAndBusiness = async (req, res) => {
     }
 
     // 4️⃣ Prepare notification payload with additional metadata
-    const notificationPayload = {
-      notification: {
-        title: String(title).substring(0, 100),
-        body: String(message).substring(0, 500),
-      },
+    const picture = notificationImage(req.file?.location);
+    const notificationPayload = buildFcmMessage({
+      token: user.fcm,
+      title: String(title).substring(0, 100),
+      body: String(message).substring(0, 500),
+      image: picture,
       data: {
-        type: 'direct_notification',
+        type: "direct_notification",
         timestamp: new Date().toISOString(),
-        customData: JSON.stringify({
-          notificationType: 'single_user',
-          source: 'api'
-        })
       },
-      android: {
-        priority: 'high',
-        notification: {
-          channelId: 'alerts',
-          sound: 'default',
-          icon: 'notification_icon',
-          color: '#1a73e8',
-          clickAction: 'FLUTTER_NOTIFICATION_CLICK'
-        }
-      },
-      apns: {
-        payload: {
-          aps: {
-            sound: 'default',
-            badge: 1,
-          },
-        },
-      },
-      token: user.fcm
-    };
+    });
 
     console.log(`[${requestId}] Sending FCM to user ${user._id} (${user.email})`);
     
@@ -409,7 +374,7 @@ const sendNotificationToSingleUserAndBusiness = async (req, res) => {
       userId: user._id,
       title: notificationPayload.notification?.title || notificationPayload.data?.title || 'New Notification',
       message: notificationPayload.notification?.body || notificationPayload.data?.description || 'You have a new message',
-      image: req.file?.location || null,
+      image: picture,
       fcmMessageId: fcmResponse,
       status: fcmFailed ? 'failed' : 'sent',
       metadata: {
@@ -581,10 +546,13 @@ const sendNotificationToAllUsersWithCondition = async (req, res) => {
     const tokens = targetUsers.map(u => u.fcm).filter(Boolean);
 
     // FCM Payload
-    const payload = {
-      notification: { title, body: message },
-      data: { customKey: "default" }
-    };
+    const picture = notificationImage(req.file?.location);
+    const payload = buildFcmMessage({
+      title,
+      body: message,
+      image: picture,
+      data: { customKey: "default" },
+    });
 
     // Send in chunks
     const chunkSize = 500;
@@ -595,7 +563,9 @@ const sendNotificationToAllUsersWithCondition = async (req, res) => {
         await admin.messaging().sendEachForMulticast({
           tokens: chunk,
           notification: payload.notification,
-          data: payload.data
+          data: payload.data,
+          android: payload.android,
+          apns: payload.apns,
         });
       } catch (err) {
         // Remove invalid tokens
@@ -609,7 +579,7 @@ const sendNotificationToAllUsersWithCondition = async (req, res) => {
       title,
       message,
       businessId: businessMap.get(u._id.toString())?._id || null,
-      image: req.file?.location || null
+      image: picture
     }));
 
     await Notification.insertMany(notifications);

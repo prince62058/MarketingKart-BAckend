@@ -38,6 +38,9 @@ exports.updateCompany = async (req, res) => {
     serviceFee: req.body.serviceFee,
     gstFee: req.body.gstFee,
   };
+  if (req.body.whatsappSupport !== undefined) {
+    updates.whatsappSupport = String(req.body.whatsappSupport).trim();
+  }
   if (req.body.homeBannerUrl !== undefined) {
     updates.homeBannerUrl = req.body.homeBannerUrl;
   }

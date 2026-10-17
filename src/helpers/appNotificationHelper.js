@@ -1,4 +1,5 @@
 const admin = require("firebase-admin");
+const { buildFcmMessage, notificationImage } = require("./fcmMessage");
 const Notification = require("../models/notificationModel");
 const User = require("../models/userModel");
 const Business = require("../models/businessModel");
@@ -42,6 +43,7 @@ async function dispatchNotification({ userId, businessId, title, message, type =
         businessId: businessId || null,
         title,
         message,
+        image: notificationImage(metadata.image),
         read: false,
         status: "pending",
         metadata: {
@@ -74,39 +76,20 @@ async function dispatchNotification({ userId, businessId, title, message, type =
       await Promise.all(
         tokenList.map(async (token) => {
           try {
-            const resp = await admin.messaging().send({
-              token,
-              notification: {
+            const resp = await admin.messaging().send(
+              buildFcmMessage({
+                token,
                 title,
                 body: message,
-              },
-              data: {
-                type: String(type).toUpperCase(),
-                title: String(title),
-                body: String(message),
-                ...Object.fromEntries(
-                  Object.entries(customData).map(([k, v]) => [k, String(v ?? "")])
-                ),
-              },
-              android: {
-                priority: "high",
-                notification: {
-                  channelId: "alerts",
-                  sound: "default",
-                  priority: "max",
-                  defaultVibrateTimings: true,
-                  defaultSound: true,
+                image: metadata.image,
+                data: {
+                  type: String(type).toUpperCase(),
+                  title: String(title),
+                  body: String(message),
+                  ...customData,
                 },
-              },
-              apns: {
-                payload: {
-                  aps: {
-                    sound: "default",
-                    badge: 1,
-                  },
-                },
-              },
-            });
+              }),
+            );
             console.log(`[AppNotification] FCM delivered (${type}) to user ${user._id}`);
             if (notifDoc) {
               await Notification.findByIdAndUpdate(notifDoc._id, {

@@ -13,6 +13,11 @@ const companySchema = new mongoose.Schema({
     type: String,
     trim: true,
   },
+  whatsappSupport: {
+    type: String,
+    trim: true,
+    default: "9111155016",
+  },
   email: {
     type: String,
     trim: true,

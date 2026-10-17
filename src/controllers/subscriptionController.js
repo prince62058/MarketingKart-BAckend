@@ -1,6 +1,8 @@
 const crypto = require("crypto");
+const Razorpay = require("razorpay");
 const Subscription = require("../models/subscriptionModel");
 const Manager = require("../models/managerModel");
+const PlanPriceLock = require("../models/planPriceLockModel");
 
 const TIER_PRICES = {
   starter: 15999,
@@ -8,10 +10,35 @@ const TIER_PRICES = {
   premium: 35999,
 };
 
+const TIER_RANK = { starter: 0, standard: 1, premium: 2 };
+const PRICE_BAND = 2000;
+const MAX_PRICE_CHECKS = 2;
+
 const ADDON_PRICES = {
   linkedin: 1999,
   gmb: 3999,
 };
+
+function rollPrice(ceiling) {
+  const floor = ceiling - PRICE_BAND;
+  return floor + Math.floor(Math.random() * (PRICE_BAND + 1));
+}
+
+function presentLock(lock) {
+  const quotes = lock?.quotes || {};
+  return {
+    checks: lock?.checks || 0,
+    maxChecks: MAX_PRICE_CHECKS,
+    frozen: Boolean(lock?.frozen),
+    minTier: lock?.minTier || null,
+    ceilings: TIER_PRICES,
+    prices: {
+      starter: Number.isFinite(quotes.starter) ? quotes.starter : null,
+      standard: Number.isFinite(quotes.standard) ? quotes.standard : null,
+      premium: Number.isFinite(quotes.premium) ? quotes.premium : null,
+    },
+  };
+}
 
 function verifyRazorpaySignature({ orderId, paymentId, signature }) {
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
@@ -27,12 +54,22 @@ function verifyRazorpaySignature({ orderId, paymentId, signature }) {
   );
 }
 
-function computeMonthlyAmount(tier, addons = []) {
-  const base = TIER_PRICES[tier];
+function computeMonthlyAmount(tier, addons = [], lock) {
+  const quoted = lock?.quotes?.[tier];
+  const base = quoted || TIER_PRICES[tier];
   if (!base) return null;
   if (tier !== "starter") return base;
   const addonTotal = (addons || []).reduce((sum, a) => sum + (ADDON_PRICES[a] || 0), 0);
   return base + addonTotal;
+}
+
+async function razorpayOrderPaise(orderId) {
+  const keyId = process.env.RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
+  if (!keyId || !keySecret) return null;
+  const razorpay = new Razorpay({ key_id: keyId, key_secret: keySecret });
+  const order = await razorpay.orders.fetch(orderId);
+  return Number(order.amount);
 }
 
 async function assignManager() {
@@ -60,7 +97,15 @@ exports.createSubscription = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid plan tier" });
     }
 
-    const monthlyAmount = computeMonthlyAmount(tier, addons);
+    const lock = await PlanPriceLock.findOne({ userId: req.user._id });
+    if (lock?.frozen && lock.minTier && TIER_RANK[tier] < TIER_RANK[lock.minTier]) {
+      return res.status(400).json({
+        success: false,
+        message: "This price is locked. Buy this plan or a higher plan.",
+      });
+    }
+
+    const monthlyAmount = computeMonthlyAmount(tier, addons, lock);
     if (!monthlyAmount) {
       return res.status(400).json({ success: false, message: "Could not compute plan amount" });
     }
@@ -70,6 +115,10 @@ exports.createSubscription = async (req, res) => {
     }
     if (!verifyRazorpaySignature({ orderId, paymentId, signature })) {
       return res.status(400).json({ success: false, message: "Payment verification failed" });
+    }
+    const paidPaise = await razorpayOrderPaise(orderId);
+    if (paidPaise !== Math.round(monthlyAmount * 100)) {
+      return res.status(400).json({ success: false, message: "Paid amount does not match the locked plan price" });
     }
     const existingPayment = await Subscription.findOne({ "lastPayment.paymentId": paymentId });
     if (existingPayment) {
@@ -105,6 +154,86 @@ exports.createSubscription = async (req, res) => {
       success: true,
       message: "Subscription activated successfully",
       data: populated,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getPlanPrices = async (req, res) => {
+  try {
+    const lock = await PlanPriceLock.findOne({ userId: req.user._id });
+    return res.status(200).json({
+      success: true,
+      message: "Plan prices fetched",
+      data: presentLock(lock),
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.checkPlanPrice = async (req, res) => {
+  try {
+    const { tier } = req.body;
+    if (!TIER_PRICES[tier]) {
+      return res.status(400).json({ success: false, message: "Invalid plan tier" });
+    }
+
+    const userId = req.user._id;
+    let lock = await PlanPriceLock.findOne({ userId });
+    if (lock?.frozen || (lock && lock.checks >= MAX_PRICE_CHECKS)) {
+      return res.status(200).json({
+        success: true,
+        message: "Price is locked",
+        data: presentLock(lock),
+      });
+    }
+
+    const price = rollPrice(TIER_PRICES[tier]);
+    if (!lock) {
+      try {
+        lock = await PlanPriceLock.create({
+          userId,
+          checks: 1,
+          frozen: false,
+          quotes: { [tier]: price },
+        });
+        return res.status(200).json({
+          success: true,
+          message: "Price updated",
+          data: presentLock(lock),
+        });
+      } catch (error) {
+        if (error.code !== 11000) throw error;
+        lock = await PlanPriceLock.findOne({ userId });
+        return res.status(200).json({
+          success: true,
+          message: lock?.frozen ? "Price locked" : "Price updated",
+          data: presentLock(lock),
+        });
+      }
+    }
+
+    const nextChecks = lock.checks + 1;
+    const updated = await PlanPriceLock.findOneAndUpdate(
+      { userId, checks: lock.checks, frozen: false },
+      {
+        $set: {
+          checks: nextChecks,
+          frozen: nextChecks >= MAX_PRICE_CHECKS,
+          minTier: nextChecks >= MAX_PRICE_CHECKS ? tier : null,
+          [`quotes.${tier}`]: price,
+        },
+      },
+      { new: true },
+    );
+
+    const current = updated || (await PlanPriceLock.findOne({ userId }));
+    return res.status(200).json({
+      success: true,
+      message: current?.frozen ? "Price locked" : "Price updated",
+      data: presentLock(current),
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
