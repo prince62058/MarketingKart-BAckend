@@ -2,7 +2,7 @@ const dotenvPath = require('path').resolve(__dirname, '../../.env');
 require("dotenv").config({ path: dotenvPath });
 const multer = require("multer");
 const path = require("path");
-const { uploadBuffer, deleteByUrl } = require("../utils/cloudinaryClient");
+const { uploadBuffer, deleteByUrl } = require("../utils/spacesClient");
 
 // File Upload Filter Function
 function multerFilter(req, file, cb) {
@@ -28,10 +28,10 @@ const sanitizeFileName = (originalName = "file") => {
   return `${safeBase}${ext.toLowerCase()}`;
 };
 
-// Multer storage engine that streams files straight to Cloudinary. Exposes `location`
-// (alongside `path`) on the resulting file object so existing controllers reading
+// Multer storage engine that streams files straight to DigitalOcean Spaces.
+// Exposes `location` (alongside `path`) so controllers reading
 // `req.file.location` / `req.files.X[0].location` keep working unchanged.
-class CloudinaryMulterStorage {
+class SpacesMulterStorage {
   constructor({ folder } = {}) {
     this.folderFn = folder;
   }
@@ -72,7 +72,7 @@ function folderForMimetype(mimetype = "") {
 
 // Multer Storage Configuration
 const upload = multer({
-  storage: new CloudinaryMulterStorage({ folder: (req, file) => folderForMimetype(file.mimetype) }),
+  storage: new SpacesMulterStorage({ folder: (req, file) => folderForMimetype(file.mimetype) }),
 });
 
 // Export the upload function
@@ -80,7 +80,7 @@ exports.upload = upload;
 
 // Excel/CSV Upload for WhatsApp Contact Import
 const uploadExcel = multer({
-  storage: new CloudinaryMulterStorage({ folder: "MARKETINGKART/EXCEL" }),
+  storage: new SpacesMulterStorage({ folder: "MARKETINGKART/EXCEL" }),
   fileFilter: (_req, file, cb) => {
     const allowed = [
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -102,7 +102,7 @@ exports.uploadExcel = uploadExcel;
 
 // WhatsApp Media Upload (Image/Video/Document for template headers)
 const uploadWhatsAppMedia = multer({
-  storage: new CloudinaryMulterStorage({
+  storage: new SpacesMulterStorage({
     folder: (req, file) => {
       let folderPath = "MARKETINGKART/WHATSAPP_MEDIA";
       if (file.mimetype.startsWith("image")) {

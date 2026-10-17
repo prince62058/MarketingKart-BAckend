@@ -1,5 +1,5 @@
 const axios = require("axios");
-const { uploadBuffer } = require("./cloudinaryClient");
+const { uploadBuffer } = require("./spacesClient");
 const path = require("path");
 
 const fs = require("fs");
@@ -51,13 +51,13 @@ async function uploadLocalFileToBucket(filePath, folderPath) {
 }
 
 /**
- * Internal helper to upload a buffer to Cloudinary.
+ * Internal helper to upload a buffer to DigitalOcean Spaces.
  */
 async function uploadBufferToBucket(buffer, folderPath, contentType) {
   const publicId = `${Date.now()}_ad_asset`;
   const folder = folderPath.replace(/\/+$/, "");
 
-  console.log(`[BUCKET] Uploading to Cloudinary folder: ${folder}`);
+  console.log(`[BUCKET] Uploading to Spaces folder: ${folder}`);
   const uploadResult = await uploadBuffer(buffer, { folder, mimetype: contentType, publicId });
   return uploadResult.secure_url;
 }

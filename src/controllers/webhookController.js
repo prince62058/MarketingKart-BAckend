@@ -1326,7 +1326,7 @@ exports.uploadLeadDocument = async (req, res) => {
 
 
 const XLSX = require("xlsx");
-const { uploadBuffer } = require("../utils/cloudinaryClient");
+const { uploadBuffer } = require("../utils/spacesClient");
 
 exports.getLeadOfYourBusinessByMemberIdExcel = async (req, res) => {
   try {
@@ -1418,7 +1418,7 @@ exports.getLeadOfYourBusinessByMemberIdExcel = async (req, res) => {
 
     const timestamp = Date.now();
 
-    // Upload Excel and CSV to Cloudinary
+    // Upload Excel and CSV to DigitalOcean Spaces
     const excelUpload = uploadBuffer(excelBuffer, {
       folder: "MARKETINGKART/EXPORTS",
       resourceType: "raw",

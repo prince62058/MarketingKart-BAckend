@@ -1,6 +1,6 @@
 const puppeteer = require("puppeteer");
 const nodemailer = require("nodemailer");
-const { uploadBuffer } = require("../utils/cloudinaryClient");
+const { uploadBuffer } = require("../utils/spacesClient");
 const companyModel = require("../models/commpanyModelV2.js");
 const businessModel = require("../models/businessModel.js");
 const GstOfUserModel = require("../models/GstOfUserModel.js");
@@ -302,7 +302,7 @@ exports.generateInvoice = async (
     const pdfBuffer = await page.pdf({ format: "A4" });
     await browser.close();
 
-    // Upload PDF to Cloudinary
+    // Upload PDF to DigitalOcean Spaces
     const uploadedFile = await uploadBuffer(pdfBuffer, {
       folder: "MARKETINGKART/INVOICES",
       resourceType: "raw",
