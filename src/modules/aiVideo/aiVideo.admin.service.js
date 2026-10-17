@@ -3,6 +3,8 @@
 const mongoose = require("mongoose");
 const Studio = require("./aiVideo.model");
 const User = require("../../models/userModel");
+const Business = require("../../models/businessModel");
+const { normalizeMobileNumber } = require("../../utils/mobileValidetionHandler");
 const heygen = require("./heygen.client");
 const catalog = require("./heygen.catalog");
 const avatars = require("./aiVideo.avatars");
@@ -435,6 +437,42 @@ async function adjustCredits({ admin, studioId, amount, reason }) {
   return { studioId: String(id), credits: updated.credits };
 }
 
+// Finds (or opens) the studio a customer's app really uses, so credits land where they will be seen.
+// A studio belongs to one business, so a customer with several businesses must be told apart.
+async function studioForMobile({ mobile, businessId }) {
+  const number = normalizeMobileNumber(mobile);
+  if (!number) throw httpError(400, "Enter the customer's 10 digit mobile number.");
+  const user = await User.findOne({ mobile: number }).select("_id name mobile").lean();
+  if (!user) throw httpError(404, "No customer has this mobile number.");
+
+  const [studios, businesses] = await Promise.all([
+    Studio.find({ userId: user._id }).select("businessId").lean(),
+    Business.find({ userId: user._id }).select("_id businessName").lean(),
+  ]);
+  const known = new Map(businesses.map(business => [String(business._id), business.businessName || "Business"]));
+  for (const studio of studios) if (studio.businessId && !known.has(studio.businessId)) known.set(studio.businessId, "Business");
+
+  let target = businessId ? String(businessId).trim() : null;
+  if (target && !known.has(target)) throw httpError(400, "That business does not belong to this customer.");
+  if (!target) {
+    if (known.size > 1) {
+      const list = [...known].map(([id, name]) => `${name} (${id})`).join(", ");
+      throw httpError(409, `This customer has several businesses. Add the business id of the one to credit: ${list}`);
+    }
+    target = known.size === 1 ? [...known.keys()][0] : null;
+  }
+  // Opens the studio with the usual free credits if the customer has never used AI Video.
+  const studio = await require("./aiVideo.service").getStudio(user._id, target);
+  return { studio, user, businessName: target ? known.get(target) : null };
+}
+
+// The same audited credit change as adjustCredits, found by the customer's phone number.
+async function adjustCreditsByMobile({ admin, mobile, businessId, amount, reason }) {
+  const { studio, user, businessName } = await studioForMobile({ mobile, businessId });
+  const result = await adjustCredits({ admin, studioId: studio._id, amount, reason });
+  return { ...result, businessId: studio.businessId || null, businessName, user: { id: String(user._id), name: user.name || null, mobile: user.mobile } };
+}
+
 async function setPlan({ admin, studioId, planId, days }) {
   const id = objectId(studioId, "studio id");
   const config = await settings.get({ fresh: true });
@@ -549,6 +587,7 @@ module.exports = {
   listEnterprise,
   listAudit,
   adjustCredits,
+  adjustCreditsByMobile,
   setPlan,
   refundVideo,
   deleteVideo,

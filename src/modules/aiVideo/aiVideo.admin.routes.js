@@ -21,6 +21,7 @@ router.delete(`${base}/avatars/:studioId/:avatarId`, admin, controller.deleteAva
 router.get(`${base}/studios`, admin, controller.studios);
 router.get(`${base}/studios/:studioId`, admin, controller.studio);
 router.post(`${base}/studios/:studioId/credits`, admin, controller.adjustCredits);
+router.post(`${base}/credits`, admin, controller.adjustCreditsByMobile);
 router.post(`${base}/studios/:studioId/plan`, admin, controller.setPlan);
 
 router.get(`${base}/orders`, admin, controller.orders);

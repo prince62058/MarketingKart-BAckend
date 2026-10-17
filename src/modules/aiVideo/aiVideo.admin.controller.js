@@ -42,6 +42,7 @@ module.exports = {
   studios: list(req => admin.listStudios(req.query), "Studios"),
   studio: one(req => admin.getStudio(req.params.studioId), "Studio"),
   adjustCredits: one(req => admin.adjustCredits({ admin: req.user, studioId: req.params.studioId, amount: req.body?.amount, reason: req.body?.reason }), "Credits updated"),
+  adjustCreditsByMobile: one(req => admin.adjustCreditsByMobile({ admin: req.user, mobile: req.body?.mobile, businessId: req.body?.businessId, amount: req.body?.amount, reason: req.body?.reason }), "Credits updated"),
   setPlan: one(req => admin.setPlan({ admin: req.user, studioId: req.params.studioId, planId: req.body?.planId, days: req.body?.days }), "Plan updated"),
   orders: list(req => admin.listOrders(req.query), "Orders"),
   enterprise: list(req => admin.listEnterprise(req.query), "Enterprise requests"),
