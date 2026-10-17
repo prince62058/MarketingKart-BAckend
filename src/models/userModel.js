@@ -81,6 +81,14 @@ const userModel = mongoose.Schema(
       type: Number,
       default: 0,
     },
+    // AI video orders paid from `wallet`. Written in the same update as the debit, so a retry
+    // can tell "already charged" from "not charged yet" and never debits an order twice.
+    // Only the most recent entries are kept.
+    aiVideoWalletDebits: {
+      type: [String],
+      default: undefined,
+      select: false,
+    },
 	uninstalled: {
       type: Boolean,
       default: false,
