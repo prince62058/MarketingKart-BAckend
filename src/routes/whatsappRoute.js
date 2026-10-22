@@ -26,6 +26,9 @@ router.get("/whatsapp/meta/signup", metaOAuthController.signupPage);
 router.post("/whatsapp/meta/complete", metaOAuthController.completeSignup);
 router.get("/whatsapp/meta/callback", metaOAuthController.handleCallback);
 router.get("/whatsapp/meta/status", authUser, metaOAuthController.checkStatus);
+// Facebook SDK login for people who already have a WhatsApp Business API number
+router.post("/whatsapp/meta/sdk/discover", authUser, metaOAuthController.sdkDiscover);
+router.post("/whatsapp/meta/sdk/connect", authUser, metaOAuthController.sdkConnect);
 
 // ─── Templates ──────────────────────────────────────────────────────────────
 router.post("/whatsapp/templates/sync", authUser, templateController.syncTemplates);

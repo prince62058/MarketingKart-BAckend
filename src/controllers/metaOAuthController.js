@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const Sessions = require('../models/whatsappSignupSessionModel');
 const Accounts = require('../models/whatsappAccountModel');
-const {connectSignup} = require('../services/whatsappSignupService');
+const {connectSignup,discoverFacebookAccounts,connectFacebookAccount} = require('../services/whatsappSignupService');
 const {getSignupHtml} = require('../views/whatsappSignupPage');
 const {parseSignupMode} = require('../services/whatsappSignupFlow');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -52,4 +52,24 @@ exports.checkStatus = async (req,res) => {
   const account=session.status==='CONNECTED' ? await Accounts.findOne({userId:req.user._id,status:'CONNECTED'}) : null;
   res.set('Cache-Control','no-store').json({success:true,data:{connected:!!account,status:session.status,message:session.message}});
  }catch{res.status(500).json({success:false,message:'Could not check WhatsApp signup.'});}
+};
+
+// ─── Facebook SDK login: existing WhatsApp Business API accounts ────────────────────────────────
+const sdkReady = () => process.env.clientId && process.env.clientSecret && /^[a-f0-9]{64}$/i.test(process.env.WHATSAPP_TOKEN_ENCRYPTION_KEY || '');
+const sdkFailure = (res, error) => {
+ const message = error.response ? `Meta could not complete this (code ${error.response.data?.error?.code || 'unknown'}). Sign in with Facebook again and retry.` : error.message;
+ res.status(400).json({success:false,message:message || 'Could not connect WhatsApp. Please retry.'});
+};
+exports.sdkDiscover = async (req,res) => {
+ if(!sdkReady())return res.status(503).json({success:false,message:'WhatsApp onboarding setup is being completed. Please contact support.'});
+ try { res.set('Cache-Control','no-store').json({success:true,data:{accounts:await discoverFacebookAccounts({accessToken:req.body?.accessToken})}}); }
+ catch(error){ sdkFailure(res,error); }
+};
+exports.sdkConnect = async (req,res) => {
+ if(!sdkReady())return res.status(503).json({success:false,message:'WhatsApp onboarding setup is being completed. Please contact support.'});
+ const {accessToken,wabaId,phoneNumberId}=req.body || {};
+ try {
+  const account=await connectFacebookAccount({userId:req.user._id,accessToken,wabaId:String(wabaId || ''),phoneNumberId:String(phoneNumberId || '')});
+  res.set('Cache-Control','no-store').json({success:true,data:{connected:true,phoneNumber:account.phoneNumber,verifiedName:account.verifiedName}});
+ }catch(error){ sdkFailure(res,error); }
 };
