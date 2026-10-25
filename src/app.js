@@ -122,6 +122,9 @@ app.post(
   handleMetaDataDeletion
 );
 
+// Readiness for load balancers: 503 when MongoDB or Redis is unreachable ("/" and "/health" only prove the process is up).
+app.get("/healthz", require("./utils/readiness").readinessHandler());
+
 app.get(["/", "/health"], (req, res) => {
   // If client specifically requests JSON via format param or pure JSON header without HTML accept
   const wantsJson = req.query.format === "json" || 
