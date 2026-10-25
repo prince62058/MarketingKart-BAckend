@@ -266,3 +266,88 @@ test("password logins no longer hand the stored password back", { skip }, async 
   const bad = await h.call("POST", "/api/user/adminLogIn", { body: { email: admin.email, password: "nope" } });
   assert.equal(bad.status, 400);
 });
+
+test("fixed-OTP bridge: only the exact value true switches it on; anything else stays secure", { skip }, async () => {
+  const mobile = 9100000020;
+  for (const value of ["false", "1", "TRUE", "yes", ""]) {
+    process.env.ALLOW_FIXED_DEV_OTP = value;
+    try {
+      await h.call("POST", "/api/user/V2/mobileLogInV2", { body: { mobile } });
+      const real = lastSms(mobile).otp;
+      if (real !== "1234") {
+        const res = await h.call("POST", "/api/user/V2/verifyMobileOtpV2", { body: { mobile, otp: "1234" } });
+        assert.equal(res.status, 400, `ALLOW_FIXED_DEV_OTP=${JSON.stringify(value)} must not enable the bridge`);
+      }
+    } finally {
+      delete process.env.ALLOW_FIXED_DEV_OTP;
+    }
+  }
+});
+
+test("fixed-OTP bridge (ALLOW_FIXED_DEV_OTP=true): today's 1234 login keeps working, loudly, with no SMS and no OTP in the response", { skip }, async () => {
+  const warnings = [];
+  const realWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  process.env.ALLOW_FIXED_DEV_OTP = "true";
+  try {
+    const pairs = [
+      ["/api/user/mobileLogIn", "/api/user/verifyOtp", 9100000021],
+      ["/api/user/sendOtpForMobile", "/api/user/verifyMobileOtp", 9100000022],
+      ["/api/user/V2/mobileLogInV2", "/api/user/V2/verifyMobileOtpV2", 9100000023],
+    ];
+    for (const [send, verify, mobile] of pairs) {
+      const smsBefore = h.sent.sms.length;
+      const sent = await h.call("POST", send, { body: { mobile } });
+      assert.ok([200, 201].includes(sent.status), send);
+      assert.equal(sent.body.data, undefined, "the OTP is still never in a response");
+      assert.equal(h.sent.sms.length, smsBefore, "no SMS while the bridge is on");
+
+      const doc = await User.findOne({ mobile }).lean();
+      assert.ok(doc.otp.startsWith("v2$"), "still stored hashed");
+
+      const login = await h.call("POST", verify, { body: { mobile, otp: "1234" } });
+      assert.equal(login.status, 200, verify);
+      assert.ok(login.body.data.token);
+      assert.equal(login.body.data.password, undefined);
+    }
+    assert.ok(warnings.some(line => /SECURITY WARNING/.test(line) && /ALLOW_FIXED_DEV_OTP/.test(line)), "every use is logged loudly");
+    assert.ok(!warnings.some(line => /910000002[123]\b/.test(line)), "the full phone number is not logged");
+
+    // The bridge keeps the safety nets that do not get in a real user's way.
+    const mobile = 9100000024;
+    await h.call("POST", "/api/user/V2/mobileLogInV2", { body: { mobile } });
+    for (let i = 0; i < 3; i += 1) await h.call("POST", "/api/user/V2/verifyMobileOtpV2", { body: { mobile, otp: "0000" } });
+    assert.equal((await h.call("POST", "/api/user/V2/verifyMobileOtpV2", { body: { mobile, otp: "1234" } })).status, 400, "still three tries per OTP");
+    assert.equal((await h.call("POST", "/api/user/V2/mobileLogInV2", { body: { mobile } })).status, 201, "re-requesting is never refused for hitting the hourly SMS limit");
+
+    // Banned accounts are still banned.
+    const banned = await fixtures.makeUser({ disable: true });
+    assert.equal((await h.call("POST", "/api/user/V2/mobileLogInV2", { body: { mobile: banned.mobile } })).status, 400);
+
+    // E-mail and admin OTPs are not part of the bridge.
+    const admin = await fixtures.makeAdmin();
+    await h.call("POST", "/api/user/sendOtpForEmail", { body: { email: admin.email } });
+    const real = lastMail(admin.email).otp;
+    if (real !== "1234") {
+      const res = await h.call("POST", "/api/user/verifyAdminEmailOtp", { body: { email: admin.email, otp: "1234" } });
+      assert.equal(res.status, 400);
+    }
+
+    // A listed test number keeps its own OTP.
+    process.env.OTP_TEST_ACCOUNTS = "9100000025=4321";
+    await h.call("POST", "/api/user/V2/mobileLogInV2", { body: { mobile: 9100000025 } });
+    assert.equal((await h.call("POST", "/api/user/V2/verifyMobileOtpV2", { body: { mobile: 9100000025, otp: "1234" } })).status, 400);
+    assert.equal((await h.call("POST", "/api/user/V2/verifyMobileOtpV2", { body: { mobile: 9100000025, otp: "4321" } })).status, 200);
+  } finally {
+    console.warn = realWarn;
+    delete process.env.ALLOW_FIXED_DEV_OTP;
+    delete process.env.OTP_TEST_ACCOUNTS;
+  }
+
+  // Switched off again: back to real OTPs immediately.
+  const mobile = 9100000026;
+  await h.call("POST", "/api/user/V2/mobileLogInV2", { body: { mobile } });
+  const real = lastSms(mobile);
+  assert.ok(real, "an SMS goes out again");
+  if (real.otp !== "1234") assert.equal((await h.call("POST", "/api/user/V2/verifyMobileOtpV2", { body: { mobile, otp: "1234" } })).status, 400);
+});

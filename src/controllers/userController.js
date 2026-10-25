@@ -127,13 +127,13 @@ const sendMobileOtp = async (req, res) => {
     return null;
   }
 
-  const issued = await otpService.issueOtp(user, mobileNum);
+  const issued = await otpService.issueOtp(user, mobileNum, { allowFixedDev: true });
   if (!issued.ok) {
     tooManyOtpRequests(res);
     return null;
   }
 
-  // Test numbers (OTP_TEST_ACCOUNTS) never trigger a real SMS.
+  // Test numbers (OTP_TEST_ACCOUNTS) and the temporary ALLOW_FIXED_DEV_OTP bridge never trigger a real SMS.
   if (!issued.isTestAccount && sendOtp(mobileNum, issued.otp) === false) {
     tooManyOtpRequests(res);
     return null;
