@@ -4,7 +4,8 @@
   "description": "My Node.js application",
   "main": "src/server.js",
   "scripts": {
-    "start": "nodemon"
+    "start": "nodemon",
+    "test": "node --test test/*.test.js src/modules/aiVideo/aiVideo.logic.test.js"
   },
   "keywords": [],
   "author": "",

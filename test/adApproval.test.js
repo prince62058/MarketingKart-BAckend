@@ -1,3 +1,12 @@
+// Needs its own single-node replica set (transactions) on 127.0.0.1:27187 and never touches any other
+// database, so it only runs when AD_APPROVAL_TEST_URI is set explicitly:
+//   mongod --dbpath <tmp> --port 27187 --replSet rs0   (then replSetInitiate once)
+//   AD_APPROVAL_TEST_URI=mongodb://127.0.0.1:27187/codex_ad_approval_test node --test test/adApproval.test.js
+if (!process.env.AD_APPROVAL_TEST_URI) {
+  console.log('adApproval.test.js skipped: AD_APPROVAL_TEST_URI is not set');
+  return;
+}
+
 // Run only against an isolated local replica set. Never reads the application .env.
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');

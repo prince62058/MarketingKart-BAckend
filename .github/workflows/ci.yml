@@ -1,0 +1,35 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    # Pinned so the MongoDB apt repository below ("noble") always matches the runner.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Syntax check every source file
+        run: find src -name '*.js' -print0 | xargs -0 -n1 node --check
+      # The tests start their own throwaway mongod; they never use a real database.
+      - name: Install the MongoDB server binary
+        run: |
+          curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc | sudo gpg -o /usr/share/keyrings/mongodb-server-8.0.gpg --dearmor
+          echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
+          sudo apt-get update
+          sudo apt-get install -y mongodb-org-server
+      # The ad-approval tests need transactions, so they get a single-node replica set.
+      - name: Start a replica set for the ad-approval tests
+        run: |
+          mkdir -p /tmp/adrs
+          mongod --dbpath /tmp/adrs --port 27187 --bind_ip 127.0.0.1 --replSet rs0 --fork --logpath /tmp/adrs/mongod.log
+          node -e "const m=require('mongoose');(async()=>{const c=await m.createConnection('mongodb://127.0.0.1:27187/admin?directConnection=true').asPromise();await c.db.admin().command({replSetInitiate:{_id:'rs0',members:[{_id:0,host:'127.0.0.1:27187'}]}});await c.close()})().catch(e=>{console.error(e);process.exit(1)})"
+          sleep 5
+      - run: npm test
+        env:
+          AD_APPROVAL_TEST_URI: mongodb://127.0.0.1:27187/codex_ad_approval_test
