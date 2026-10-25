@@ -10,6 +10,7 @@ const { seedCompanySettingsIfMissing } = require("./seedCompanySettings");
 const { seedFaqsIfEmpty } = require("./seedFaqs");
 const { seedContactUsIfEmpty } = require("./seedContactUs");
 const { seedWhatsAppPlansIfEmpty } = require("./seedWhatsAppPlans");
+const { seedAiVideoPricingIfMissing } = require("./seedAiVideoPricing");
 
 async function initializeBackgroundTasks() {
     console.log("🚀 Initializing background tasks...");
@@ -33,6 +34,13 @@ async function initializeBackgroundTasks() {
         await seedFaqsIfEmpty();
         await seedContactUsIfEmpty();
         await seedWhatsAppPlansIfEmpty();
+
+        // First start only: the AI Video price list (never overwrites what an admin saved).
+        try {
+            await seedAiVideoPricingIfMissing();
+        } catch (error) {
+            console.error("❌ Failed to seed AI Video pricing:", error.message);
+        }
 
         // Start the manual campaign manager (starts its own 5s loop)
         manageCampaigns();
