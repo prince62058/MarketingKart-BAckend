@@ -25,6 +25,7 @@ router.get(
 );
 router.post(
   "/ai",
+  asyncHandler(authUser),
   controller.ai
 );
   router.put(
@@ -44,6 +45,7 @@ router.put(
 );
 router.post(
   "/imageVideoUpload",
+   asyncHandler(authUser),
    upload.fields([{ name: "thumbnail" }, { name: "files" }]),
   controller.imageVideoUpload
 );

@@ -10,20 +10,24 @@ const {
   getInvoiceHTML
 } = require('../controllers/invoiceController');
 
+const { authUser, adminOnly } = require('../middlewares/authMidd');
+const asyncHandler = require('../utils/asyncHandler');
+
 const router = express.Router();
 
 // Get invoices
-router.get('/invoices', getInvoiceDetails);
-router.get('/getInvoiceDetails', getInvoiceDetails);
-router.get('/getInvoiceDetails/:invoiceId', getInvoiceDetails);
-router.get('/getInvoiceByBusinessId', getInvoiceByBusinessId);
-router.get('/getInvoiceByBusinessIdByAdmin', getInvoiceByBusinessIdByAdmin);
-router.get('/getInvoiceByBusinessIdByAdmins', getInvoiceByBusinessIdByAdmins);
+router.get('/invoices', asyncHandler(authUser), getInvoiceDetails);
+router.get('/getInvoiceDetails', asyncHandler(authUser), getInvoiceDetails);
+router.get('/getInvoiceDetails/:invoiceId', asyncHandler(authUser), getInvoiceDetails);
+router.get('/getInvoiceByBusinessId', asyncHandler(authUser), getInvoiceByBusinessId);
+router.get('/getInvoiceByBusinessIdByAdmin', adminOnly, getInvoiceByBusinessIdByAdmin);
+router.get('/getInvoiceByBusinessIdByAdmins', adminOnly, getInvoiceByBusinessIdByAdmins);
 
 // Dynamic Invoice Generation & Management
-router.post('/createInvoice', createInvoice);
-router.put('/updateInvoice/:id', updateInvoice);
-router.delete('/deleteInvoice/:id', deleteInvoice);
+router.post('/createInvoice', adminOnly, createInvoice);
+router.put('/updateInvoice/:id', adminOnly, updateInvoice);
+router.delete('/deleteInvoice/:id', adminOnly, deleteInvoice);
+// Opened from the app's browser/webview, which cannot send the login header; the invoice id is the key.
 router.get('/getInvoiceHTML', getInvoiceHTML);
 
 module.exports = router;

@@ -45,6 +45,11 @@ const userModel = mongoose.Schema(
     },
     password: { type: String, default: null, trim: true },
     otp: { type: String, default: null, trim: true },
+    // Login OTP bookkeeping (see helpers/otpService.js). `otp` holds a salted hash, never the code.
+    otpExpiresAt: { type: Date, default: null },
+    otpAttempts: { type: Number, default: 0 },
+    otpWindowStart: { type: Date, default: null },
+    otpWindowCount: { type: Number, default: null },
     userRole: {
       type: objectId,
       ref: "UserRole",

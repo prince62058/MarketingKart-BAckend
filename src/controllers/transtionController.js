@@ -5,10 +5,17 @@
   const Razorpay = require('razorpay');
   const crypto = require('crypto');
 
-  const razorpay = new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID,
-    key_secret: process.env.RAZORPAY_KEY_SECRET,
-  });
+  // Built when needed, from the current environment (the isolated tests point it at a local stand-in).
+  const getRazorpayClient = () => {
+    const keyId = process.env.RAZORPAY_KEY_ID;
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+    if (!keyId || !keySecret) {
+      throw new Error("Razorpay is not configured on the server");
+    }
+    const client = new Razorpay({ key_id: keyId, key_secret: keySecret });
+    if (process.env.RAZORPAY_API_BASE_URL) client.api.rq.defaults.baseURL = process.env.RAZORPAY_API_BASE_URL;
+    return client;
+  };
 
   const verifyRazorpaySignature = ({ orderId, paymentId, signature }) => {
     const keySecret = process.env.RAZORPAY_KEY_SECRET;
@@ -33,7 +40,7 @@
         return res.status(400).json({ success: false, message: "Invalid amount" });
       }
 
-      const order = await razorpay.orders.create({
+      const order = await getRazorpayClient().orders.create({
         amount: amount * 100,
         currency: "INR",
         receipt: `receipt_${Date.now()}`  
@@ -80,7 +87,7 @@ const createTransactions = async (req, res) => {
     }
 
     // Round to 2 decimal places for currency
-    const roundedAmount = parseFloat(transactionAmount.toFixed(2));
+    let roundedAmount = parseFloat(transactionAmount.toFixed(2));
 
     if (!["CREDIT", "DEBIT"].includes(type)) {
       throw new Error("Invalid transaction type (must be CREDIT or DEBIT)");
@@ -93,6 +100,7 @@ const createTransactions = async (req, res) => {
     const isAdminAction = Boolean(req.body.userId) && isAdmin;
     const targetUserId = isAdminAction ? req.body.userId : req.user._id;
 
+    let verifiedOrderId = null;
     if (type === "CREDIT" && !isAdminAction) {
       // A self-service credit must be a real, verified Razorpay payment.
       if (!orderId || !paymentId || !signature) {
@@ -101,10 +109,21 @@ const createTransactions = async (req, res) => {
       if (!verifyRazorpaySignature({ orderId, paymentId, signature })) {
         throw new Error("Payment verification failed");
       }
-      const existingPayment = await Transaction.findOne({ transactionId: paymentId }).session(session);
+      const existingPayment = await Transaction.findOne({
+        $or: [{ transactionId: paymentId }, { razorpayOrderId: orderId }],
+      }).session(session);
       if (existingPayment) {
         throw new Error("This Razorpay payment has already been processed");
       }
+
+      // Never trust the client-supplied amount: the signature only proves that this order/payment
+      // pair is real, not how much it was for. Credit what Razorpay says was paid.
+      const verifiedOrder = await getRazorpayClient().orders.fetch(orderId);
+      if (verifiedOrder.status !== "paid" || !verifiedOrder.amount_paid) {
+        throw new Error("Payment not confirmed by Razorpay");
+      }
+      roundedAmount = parseFloat((verifiedOrder.amount_paid / 100).toFixed(2));
+      verifiedOrderId = orderId;
     }
 
     // Fetch target user with session (supports ObjectId or 10-digit mobile)
@@ -150,7 +169,10 @@ const createTransactions = async (req, res) => {
       businessId,
       adsId,
       userId: user._id,
-      transactionId: paymentId || transactionId || generateTransactionId(),
+      razorpayOrderId: verifiedOrderId || undefined,
+      // The id of a verified payment is its Razorpay payment id (the ad flow looks it up by that). Nobody
+      // but an admin can pick one: ids are unique, so a chosen one could be used to block a real payment.
+      transactionId: (verifiedOrderId ? paymentId : isAdmin ? paymentId || transactionId : undefined) || generateTransactionId(),
       serviceAmount: serviceAmount ? parseFloat(serviceAmount).toFixed(2) : null,
       description: finalDescription,
       previousBalance: currentBalance,
@@ -194,10 +216,13 @@ const createTransactions = async (req, res) => {
   } catch (error) {
     await session.abortTransaction();
     console.error("Transaction error:", error);
+
+    // Two requests for the same payment at once: the unique index lets only one of them in.
+    const alreadyProcessed = error?.code === 11000;
     
     return res.status(400).json({
       success: false,
-      message: error.message || "Transaction failed",
+      message: alreadyProcessed ? "This Razorpay payment has already been processed" : (error.message || "Transaction failed"),
       error: process.env.NODE_ENV === "development" ? error.stack : undefined
     });
   } finally {

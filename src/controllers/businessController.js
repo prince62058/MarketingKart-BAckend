@@ -18,6 +18,7 @@ const { assignBusinessToStaff } = require("../services/autoAssignService");
 const internalCampaignModel = require("../models/internalCampiagnModel");
 const { uploadUrlToBucket } = require("../utils/bucketHelper");
 const { AD_KIND, findAdTypeIdByKind } = require("../helpers/adTypeHelper");
+const { canAccessBusiness } = require("../helpers/businessAccess");
 
 exports.createBusiness = async (req, res) => {
   const {
@@ -1089,6 +1090,13 @@ exports.getUsersAllBusinessList = async (req, res) => {
 exports.unLinkPage = async (req, res) => {
   try {
     const { businessId } = req.body;
+    // Unlinking wipes the page tokens, so it is the owner's (or an admin's) call, nobody else's.
+    if (!(await canAccessBusiness(req.authUser || req.user, businessId, { ownerOnly: true }))) {
+      return res.status(404).json({
+        success: false,
+        message: "Business not found",
+      });
+    }
     await businessModel.findByIdAndUpdate(
       {
         _id: businessId,

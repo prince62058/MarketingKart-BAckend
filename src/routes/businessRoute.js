@@ -48,10 +48,12 @@ router.put(
 );
 router.put(
   "/business/unLinkPage",
+  asyncHandler(authUser),
   asyncHandler(controller.unLinkPage)
 );
 router.post(
   "/business/unLinkPage",
+  asyncHandler(authUser),
   asyncHandler(controller.unLinkPage)
 );
 

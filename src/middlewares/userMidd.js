@@ -14,6 +14,15 @@ exports.userMid = async function (req, res, next) {
         )
       );
   }
+  // After authUser the caller is in req.authUser. Replacing req.user with whichever account the URL
+  // names would let any signed-in user read or change anyone else, so only the owner or an admin
+  // gets through.
+  const caller = req.authUser;
+  if (caller && String(caller._id) !== String(user._id) && caller.userType !== "ADMIN") {
+    return res
+      .status(403)
+      .json(responseBuilder(apiResponseStatusCode[401], "You can only access your own account"));
+  }
   req.user = user;
   next();
 };

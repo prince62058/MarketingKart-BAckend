@@ -15,6 +15,9 @@ const transtion = new mongoose.Schema(
     adsId: { type: objectId, ref: "internalCampiagnModel" },
     userId: { type: objectId, ref: "userModel" },
     transactionId: { type: String, trim: true },
+    // The Razorpay order a CREDIT was verified against, so one order cannot be credited twice
+    // under two different payment ids.
+    razorpayOrderId: { type: String, trim: true },
     addTypeId: { type: objectId, ref: "advertisementModel" },
     description: { type: String, trim: true },
     previousBalance: { type: Number },
@@ -29,5 +32,10 @@ transtion.index({ type: 1 });
 transtion.index({ userId: 1 });
 transtion.index({ businessId: 1 });
 transtion.index({ adsId: 1 });
+// One ledger row per transaction id / paid order. Partial, so the many rows without an id (ad debits)
+// are not in the index. If old data already holds a duplicate, the index cannot build until it is
+// resolved: run src/scripts/checkTransactionDuplicates.js first.
+transtion.index({ transactionId: 1 }, { unique: true, partialFilterExpression: { transactionId: { $type: "string" } } });
+transtion.index({ razorpayOrderId: 1 }, { unique: true, partialFilterExpression: { razorpayOrderId: { $type: "string" } } });
 
 module.exports = mongoose.model("transtionModel", transtion);

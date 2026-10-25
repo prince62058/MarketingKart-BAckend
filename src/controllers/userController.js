@@ -6,7 +6,7 @@ const axios = require("axios");
 const mongoose = require("mongoose");
 const { deleteFileFromObjectStorage } = require("../middlewares/multer");
 const { sendOtp, sendOtpInMail } = require("../helpers/sendOtpHelper");
-const otp = require("../helpers/otpHelper");
+const otpService = require("../helpers/otpService");
 const {
   statusCodes,
   apiResponseStatusCode,
@@ -72,44 +72,120 @@ const isUserInBusiness = async (userId) => {
   }
 };
 
-exports.mobileLogIn = async (req, res) => {
+// Fields that must never reach a client: the OTP state, and the stored (reversibly encrypted) password.
+const PRIVATE_USER_FIELDS = [
+  "otp",
+  "otp2",
+  "otpExpiresAt",
+  "otpAttempts",
+  "otpWindowStart",
+  "otpWindowCount",
+  "password",
+];
+
+const publicUser = (user) => {
+  const data = user?.toObject ? user.toObject() : { ...user };
+  for (const field of PRIVATE_USER_FIELDS) delete data[field];
+  return data;
+};
+
+// The OTP is bound to the e-mail it was sent to; letter case and spacing must not decide whether it matches.
+const emailIdentity = (email) => String(email).trim().toLowerCase();
+
+const badRequest = (res, message) =>
+  res
+    .status(statusCodes["Bad Request"])
+    .json(responseBuilder(apiResponseStatusCode[400], message));
+
+const tooManyOtpRequests = (res) =>
+  res.status(429).json({
+    success: false,
+    message: "OTP limit exceeded for this mobile number. Try again later.",
+  });
+
+/**
+ * Shared "send me an OTP" flow for every mobile login endpoint. The OTP is texted to the number and
+ * is never part of the response. Resolves to the account, or null once a response has been sent.
+ */
+const sendMobileOtp = async (req, res) => {
   const { mobile } = req.body;
 
   if (!mobile) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(responseBuilder(apiResponseStatusCode[400], "mobile is required"));
+    badRequest(res, "mobile is required");
+    return null;
   }
-
-  if (!validateMobileNumber(mobile, res)) return;
+  if (!validateMobileNumber(mobile, res)) return null;
 
   const mobileNum = normalizeMobileNumber(mobile);
-  let Otp = otp();
-
-  console.log(`[AUTH] Generated OTP for ${mobileNum}: ${Otp}`);
-
-  const cyperOtp = CryptoJS.AES.encrypt(Otp.toString(), "CRYPTOKEY").toString();
 
   // One atomic upsert: an existing number always resolves to its existing
   // account, a genuinely new number gets exactly one.
-  const user = await findOrCreateUserByMobile(mobileNum, {
-    otp: cyperOtp,
-    otp2: Otp,
-  });
+  const user = await findOrCreateUserByMobile(mobileNum, {});
 
   if (user?.disable) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(responseBuilder(apiResponseStatusCode[400], "Ban Your Acount"));
+    badRequest(res, "Ban Your Acount");
+    return null;
   }
 
-  let data = sendOtp(mobile, Otp);
-  if (data == false) {
-    return res.status(400).send({
-      succes: false,
-      message: "OTP limit exceeded for this mobile number. Try again later.",
-    });
+  const issued = await otpService.issueOtp(user, mobileNum);
+  if (!issued.ok) {
+    tooManyOtpRequests(res);
+    return null;
   }
+
+  // Test numbers (OTP_TEST_ACCOUNTS) never trigger a real SMS.
+  if (!issued.isTestAccount && sendOtp(mobileNum, issued.otp) === false) {
+    tooManyOtpRequests(res);
+    return null;
+  }
+  return user;
+};
+
+/**
+ * Shared "here is the OTP" check. Resolves to the account once the OTP is accepted (and spent), or
+ * null once a response has been sent.
+ */
+const checkMobileOtp = async (req, res) => {
+  const { mobile, otp: entered } = req.body;
+  if (!mobile) {
+    badRequest(res, "mobile is required");
+    return null;
+  }
+  if (!validateMobileNumber(mobile, res)) return null;
+  if (!entered) {
+    badRequest(res, "otp is required");
+    return null;
+  }
+
+  const mobileNum = normalizeMobileNumber(mobile);
+  const user = await userModel.findOne({ mobile: mobileNum });
+  if (!user) {
+    badRequest(res, "Register You Mobile Number");
+    return null;
+  }
+  if (user.disable) {
+    badRequest(res, "Ban Your Acount");
+    return null;
+  }
+
+  const result = await otpService.verifyOtp(user, mobileNum, entered);
+  if (!result.ok) {
+    badRequest(res, otpService.verifyFailureMessage(result.reason));
+    return null;
+  }
+  return user;
+};
+
+const signLoginToken = (user, expiresIn) =>
+  jwt.sign(
+    { User: user._id, userId: user._id },
+    process.env.JWT_SECRET || process.env.TOKEN_KEY || "SECRETEKEY",
+    { expiresIn },
+  );
+
+exports.mobileLogIn = async (req, res) => {
+  const user = await sendMobileOtp(req, res);
+  if (!user) return;
 
   return res
     .status(statusCodes.Created)
@@ -117,77 +193,26 @@ exports.mobileLogIn = async (req, res) => {
       responseBuilder(
         apiResponseStatusCode[201],
         defaultResponseMessage.CREATED,
-        Otp,
       ),
     );
 };
 
 // Verify OTP
 exports.verifyOtp = async (req, res) => {
-  const { mobile, otp, fcm } = req.body;
-  if (!mobile) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(responseBuilder(apiResponseStatusCode[400], "mobile is required"));
-  }
-  if (!validateMobileNumber(mobile, res)) return;
-  if (!otp) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(responseBuilder(apiResponseStatusCode[400], "otp is required"));
-  }
-  const mobileNum = normalizeMobileNumber(mobile);
-  let user = await userModel.findOne({ mobile: mobileNum });
-  if (!user) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(
-        responseBuilder(
-          apiResponseStatusCode[400],
-          "Register You Mobile Number",
-        ),
-      );
-  }
+  const { fcm } = req.body;
+  const verified = await checkMobileOtp(req, res);
+  if (!verified) return;
 
-  // An account can exist without a pending OTP (created by the admin panel or
-  // the staff flow), and decrypting null used to crash the whole request.
-  if (!user.otp) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(
-        responseBuilder(
-          apiResponseStatusCode[400],
-          "No OTP was requested for this number. Please request a new OTP.",
-        ),
-      );
-  }
-
-  let bytes = CryptoJS.AES.decrypt(user.otp.toString(), "CRYPTOKEY");
-
-  let originalText = bytes.toString(CryptoJS.enc.Utf8);
-
-  if (originalText != otp) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(
-        responseBuilder(apiResponseStatusCode[400], "Please provide valid OTP"),
-      );
-  }
-
-  user = await userModel.findByIdAndUpdate(
-    user._id,
+  const user = await userModel.findByIdAndUpdate(
+    verified._id,
     { $set: { phoneVerified: true, ...(fcm ? { fcm } : {}) } },
     { new: true },
   ).populate("userRole").populate("businessId", "businessName businessImage");
 
-  const token = jwt.sign(
-    { User: user._id, userId: user._id },
-    process.env.JWT_SECRET || process.env.TOKEN_KEY || "SECRETEKEY",
-    { expiresIn: "365d" },
-  );
+  const token = signLoginToken(user, "365d");
   let Check = await isUserInBusiness(user._id);
 
-  const userData = user.toObject ? user.toObject() : { ...user };
+  const userData = publicUser(user);
   userData.token = token;
   userData.isUserBusinessExist = Check;
   return res
@@ -209,9 +234,13 @@ exports.updateProfile = async (req, res) => {
   }
   const updateData = {};
   if (name !== undefined) updateData.name = name;
-  if (email !== undefined) updateData.email = email;
-  if (mobile !== undefined) updateData.mobile = mobile;
   if (image !== undefined) updateData.image = image;
+  // Email and mobile are how an account is looked up at login, and a changed mobile would skip the
+  // OTP check. Only an admin may change them; owners change their name and picture.
+  if ((req.authUser || req.user)?.userType === "ADMIN") {
+    if (email !== undefined) updateData.email = email;
+    if (mobile !== undefined) updateData.mobile = mobile;
+  }
 
   let userFind = await userService.updateUser(req.user?._id, updateData);
   return res
@@ -346,7 +375,7 @@ exports.getByIdUser = async (req, res) => {
 
     // Prepare response data
     const responseData = {
-      ...user,
+      ...publicUser(user),
       totalSpend,
       wallet: req.user.userType === "SUBUSER" ? user?.wallet : walletBalance,
       businessId: business?._id || null,
@@ -495,123 +524,73 @@ exports.permissionListApiForBusiness = async (req, res) => {
 
 exports.sendOtpForEmail = async (req, res) => {
   const { email } = req.body;
-  const token = req.headers["authorization"];
-  let requestedPermissions = [
-    { "Roles&Permission": ["write"] },
-    // { "Leads": [ "write"] },
-    // { "Ads": ["read"] }
-  ];
-  // let checkPermission =   await checkPermissions(requestedPermissions,token)
-  // if(!checkPermission){
-  //   return res
-  //   .status(400)
-  //   .send({ success: false, message: "Access denied"});
-  // }
   if (!email) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(responseBuilder(apiResponseStatusCode[400], "email is required"));
+    return badRequest(res, "email is required");
+  }
+  if (validateEmail(email, res)) return;
+
+  let user = await userService.checkData({ email: email });
+  if (!user) {
+    user = await userService.mobileLogIn({ email: email });
+  }
+  if (user.disable) {
+    return badRequest(res, "Ban Your Acount");
   }
 
-  validateEmail(email, res);
-
-  let Otp = otp();
-  sendOtpInMail(email, Otp);
-  // let Otp = 1234;
-  const cyperOtp = CryptoJS.AES.encrypt(Otp.toString(), "CRYPTOKEY").toString();
-
-  let user = await userService.finOne({ email: email }, { otp: cyperOtp });
-  if (user) {
-    return res
-      .status(statusCodes.OK)
-      .json(
-        responseBuilder(
-          apiResponseStatusCode[200],
-          "Otp Send Successfully",
-          Otp,
-        ),
-      );
+  const issued = await otpService.issueOtp(user, emailIdentity(email));
+  if (!issued.ok) {
+    return res.status(429).json({
+      success: false,
+      message: "OTP limit exceeded for this email. Try again later.",
+    });
   }
-
-  user = await userService.mobileLogIn({ email: email, otp: cyperOtp });
-
-  sendOtp(email, Otp);
+  sendOtpInMail(email, issued.otp);
 
   return res
     .status(statusCodes.OK)
-    .json(
-      responseBuilder(apiResponseStatusCode[200], "Otp Send Successfully", Otp),
-    );
+    .json(responseBuilder(apiResponseStatusCode[200], "Otp Send Successfully"));
 };
 
 // Verify OTP
 exports.verifyEmailOtp = async (req, res) => {
-  const { email, otp, businessId } = req.body;
-  const token = req.headers["authorization"];
-  let requestedPermissions = [
-    { "Roles&Permission": ["write"] },
-    // { "Leads": [ "write"] },
-    // { "Ads": ["read"] }
-  ];
-  // let checkPermission =   await checkPermissions(requestedPermissions,token)
-  // if(!checkPermission){
-  //   return res
-  //   .status(400)
-  //   .send({ success: false, message: "Access denied"});
-  // }
+  const { email, otp: entered } = req.body;
   if (!email) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(responseBuilder(apiResponseStatusCode[400], "email is required"));
+    return badRequest(res, "email is required");
   }
-  validateEmail(email, res);
-  if (!otp) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(responseBuilder(apiResponseStatusCode[400], "otp is required"));
+  if (validateEmail(email, res)) return;
+  if (!entered) {
+    return badRequest(res, "otp is required");
   }
   let user = await userService.checkData({ email: email });
   if (!user) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(responseBuilder(apiResponseStatusCode[400], "Register You Email"));
+    return badRequest(res, "Register You Email");
+  }
+  // Admin accounts sign in through the admin endpoints; this one must not be able to retype them.
+  if (user.userType === "ADMIN") {
+    return badRequest(res, "Please use the admin login for this account");
+  }
+  if (user.disable) {
+    return badRequest(res, "Ban Your Acount");
   }
 
-  // An account can exist without a pending OTP, and decrypting null used to
-  // crash the whole request.
-  if (!user.otp) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(
-        responseBuilder(
-          apiResponseStatusCode[400],
-          "No OTP was requested for this email. Please request a new OTP.",
-        ),
-      );
+  const result = await otpService.verifyOtp(user, emailIdentity(email), entered);
+  if (!result.ok) {
+    return badRequest(res, otpService.verifyFailureMessage(result.reason));
   }
 
-  let bytes = CryptoJS.AES.decrypt(user.otp.toString(), "CRYPTOKEY");
-
-  let originalText = bytes.toString(CryptoJS.enc.Utf8);
-
-  if (originalText != otp) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(
-        responseBuilder(apiResponseStatusCode[400], "Please provide valid OTP"),
-      );
-  }
-
+  // The caller used to name the business to attach to here, which let anyone with an email address
+  // claim any business by id. Attaching to a business is the owner's job.
   user = await userService.finOne(
     { email: email },
-    { emailVerified: true, userType: "SUBUSER", businessId: businessId },
+    { emailVerified: true, userType: "SUBUSER" },
   );
 
   const generate = await jwt.sign({ User: user._id }, process.env.JWT_SECRET || "SECRETEKEY", {
     expiresIn: "60d",
   });
 
-  user._doc.token = generate;
+  const userData = publicUser(user);
+  userData.token = generate;
 
   return res
     .status(statusCodes.OK)
@@ -619,7 +598,7 @@ exports.verifyEmailOtp = async (req, res) => {
       responseBuilder(
         apiResponseStatusCode[200],
         "Otp Verify Successfully",
-        user,
+        userData,
       ),
     );
 };
@@ -778,11 +757,12 @@ exports.LogIn = async (req, res) => {
     expiresIn: "365d",
   });
 
-  user._doc.token = generate;
+  const userData = publicUser(user);
+  userData.token = generate;
   return res
     .status(statusCodes.OK)
     .json(
-      responseBuilder(apiResponseStatusCode[200], "LogIn Successfully", user),
+      responseBuilder(apiResponseStatusCode[200], "LogIn Successfully", userData),
     );
 };
 
@@ -843,9 +823,10 @@ exports.adminLogIn = async (req, res) => {
     },
   );
   let permission = await staffModel.findOne({ userId: user?._id });
-  user._doc.token = generate;
-  user._doc.permission = permission?.permissions || ["ALL"];
-  user._doc.staffId = permission?._id || "";
+  const userData = publicUser(user);
+  userData.token = generate;
+  userData.permission = permission?.permissions || ["ALL"];
+  userData.staffId = permission?._id || "";
 
   if (fcm) {
     await userModel.updateOne(
@@ -857,60 +838,36 @@ exports.adminLogIn = async (req, res) => {
   return res
     .status(statusCodes.OK)
     .json(
-      responseBuilder(apiResponseStatusCode[200], "LogIn Successfully", user),
+      responseBuilder(apiResponseStatusCode[200], "LogIn Successfully", userData),
     );
 };
 // Verify Admin OTP
 exports.verifyAdminEmailOtp = async (req, res) => {
-  const { email, otp } = req.body;
+  const { email, otp: entered } = req.body;
   if (!email) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(responseBuilder(apiResponseStatusCode[400], "email is required"));
+    return badRequest(res, "email is required");
   }
-  validateEmail(email, res);
-  if (!otp) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(responseBuilder(apiResponseStatusCode[400], "otp is required"));
+  if (validateEmail(email, res)) return;
+  if (!entered) {
+    return badRequest(res, "otp is required");
   }
   let user = await userService.checkData({ email: email });
   if (!user) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(responseBuilder(apiResponseStatusCode[400], "Register You Email"));
+    return badRequest(res, "Register You Email");
+  }
+  // Only an admin account may sign in here. Without this any customer with an email address could
+  // collect an admin-signed token.
+  if (user.userType !== "ADMIN") {
+    return badRequest(res, "You Are Not Valied Admin");
+  }
+  if (user.disable) {
+    return badRequest(res, "Ban Your Acount");
   }
 
-  // An account can exist without a pending OTP, and decrypting null used to
-  // crash the whole request.
-  if (!user.otp) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(
-        responseBuilder(
-          apiResponseStatusCode[400],
-          "No OTP was requested for this email. Please request a new OTP.",
-        ),
-      );
+  const result = await otpService.verifyOtp(user, emailIdentity(email), entered);
+  if (!result.ok) {
+    return badRequest(res, otpService.verifyFailureMessage(result.reason));
   }
-
-  let bytes = CryptoJS.AES.decrypt(user.otp.toString(), "CRYPTOKEY");
-
-  let originalText = bytes.toString(CryptoJS.enc.Utf8);
-
-  console.log(`[ADMIN AUTH] Received OTP: "${otp}", Comparing with "1234"`);
-  if ("1234" != otp) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(
-        responseBuilder(apiResponseStatusCode[400], "Please provide valid OTP"),
-      );
-  }
-
-  // user = await userService.finOne(
-  //   { email: email },
-  //   { emailVerified: true, userType: "SUBUSER", businessId: businessId }
-  // );
 
   const generate = await jwt.sign(
     { User: user._id, userType: "ADMIN" },
@@ -920,13 +877,16 @@ exports.verifyAdminEmailOtp = async (req, res) => {
     },
   );
 
-  user._doc.token = generate;
-  user._doc.permission = ["ALL"];
-  user._doc.staffId = "";
+  // Same permissions the password login would give this account.
+  const staff = await staffModel.findOne({ userId: user._id });
+  const userData = publicUser(user);
+  userData.token = generate;
+  userData.permission = staff?.permissions || ["ALL"];
+  userData.staffId = staff?._id || "";
   return res
     .status(statusCodes.OK)
     .json(
-      responseBuilder(apiResponseStatusCode[200], "LogIn Successfully", user),
+      responseBuilder(apiResponseStatusCode[200], "LogIn Successfully", userData),
     );
 };
 
@@ -982,109 +942,31 @@ exports.CreateAdminSubAdmin = async (req, res) => {
 };
 
 exports.sendOtpForMobileV2 = async (req, res) => {
-  const { mobile } = req.body;
-  if (!mobile) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(responseBuilder(apiResponseStatusCode[400], "mobile is required"));
-  }
-
-  if (!validateMobileNumber(mobile, res)) return;
-
-  const mobileNum = normalizeMobileNumber(mobile);
-  let Otp = otp();
-  let data = sendOtp(mobile, Otp);
-  if (data == false) {
-    return res.status(400).send({
-      succes: false,
-      message: "OTP limit exceeded for this mobile number. Try again later.",
-    });
-  }
-  const cyperOtp = CryptoJS.AES.encrypt(Otp.toString(), "CRYPTOKEY").toString();
-
-  // Same number always lands on the same account, on every device.
-  await findOrCreateUserByMobile(mobileNum, { otp: cyperOtp, otp2: Otp });
+  const user = await sendMobileOtp(req, res);
+  if (!user) return;
 
   return res
     .status(statusCodes.OK)
-    .json(
-      responseBuilder(apiResponseStatusCode[200], "Otp Send Successfully", Otp),
-    );
+    .json(responseBuilder(apiResponseStatusCode[200], "Otp Send Successfully"));
 };
 
 // Verify OTP
 exports.verifyMobileOtpV2 = async (req, res) => {
-  const { mobile, otp } = req.body;
-
-  if (!mobile) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(responseBuilder(apiResponseStatusCode[400], "mobile is required"));
-  }
-
-  if (!validateMobileNumber(mobile, res)) return;
-
-  if (!otp) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(responseBuilder(apiResponseStatusCode[400], "otp is required"));
-  }
-  const mobileNum = normalizeMobileNumber(mobile);
-  let user = await userModel.findOne({ mobile: mobileNum });
-  if (!user) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(
-        responseBuilder(
-          apiResponseStatusCode[400],
-          "Register You Mobile Number",
-        ),
-      );
-  }
-
-  // An account can exist without a pending OTP (created by the admin panel or
-  // the staff flow), and decrypting null used to crash the whole request.
-  if (!user.otp) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(
-        responseBuilder(
-          apiResponseStatusCode[400],
-          "No OTP was requested for this number. Please request a new OTP.",
-        ),
-      );
-  }
-
-  let bytes = CryptoJS.AES.decrypt(user.otp.toString(), "CRYPTOKEY");
-
-  let originalText = bytes.toString(CryptoJS.enc.Utf8);
-
-  if (originalText != otp) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(
-        responseBuilder(apiResponseStatusCode[400], "Please provide valid OTP"),
-      );
-  }
+  const verified = await checkMobileOtp(req, res);
+  if (!verified) return;
 
   const updateFields = { phoneVerified: true };
-  if (user.userType === "SUBUSER") {
+  if (verified.userType === "SUBUSER") {
     updateFields.userType = "SUBUSER";
   }
-  user = await userModel.findByIdAndUpdate(
-    user._id,
+  const user = await userModel.findByIdAndUpdate(
+    verified._id,
     { $set: updateFields },
     { new: true },
   ).populate("userRole").populate("businessId", "businessName businessImage");
 
-  const token = jwt.sign(
-    { User: user._id, userId: user._id },
-    process.env.JWT_SECRET || process.env.TOKEN_KEY || "SECRETEKEY",
-    { expiresIn: "365d" },
-  );
-
-  const userData = user.toObject ? user.toObject() : { ...user };
-  userData.token = token;
+  const userData = publicUser(user);
+  userData.token = signLoginToken(user, "365d");
 
   return res
     .status(statusCodes.OK)
@@ -1155,36 +1037,8 @@ exports.CreateSubUserV2 = async (req, res) => {
 // Mobile login
 
 exports.mobileLogInV2 = async (req, res) => {
-  const { mobile } = req.body;
-
-  if (!mobile) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(responseBuilder(apiResponseStatusCode[400], "mobile is required"));
-  }
-
-  if (!validateMobileNumber(mobile, res)) return;
-
-  const mobileNum = normalizeMobileNumber(mobile);
-  // TEMP: fixed dev OTP per user request — revert to otp() + sendOtp() below before production
-  let Otp = 1234;
-
-  const cyperOtp = CryptoJS.AES.encrypt(Otp.toString(), "CRYPTOKEY").toString();
-
-  // Existing number → existing account (whatever device asked). New number →
-  // exactly one new account. Never a duplicate, even on concurrent requests.
-  const user = await findOrCreateUserByMobile(mobileNum, {
-    otp: cyperOtp,
-    otp2: Otp,
-  });
-
-  if (user?.disable) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(responseBuilder(apiResponseStatusCode[400], "Ban Your Acount"));
-  }
-
-  console.log(`[dev] OTP for ${mobileNum}: ${Otp} (real SMS send skipped)`);
+  const user = await sendMobileOtp(req, res);
+  if (!user) return;
 
   return res
     .status(statusCodes.Created)
@@ -1192,77 +1046,23 @@ exports.mobileLogInV2 = async (req, res) => {
       responseBuilder(
         apiResponseStatusCode[201],
         defaultResponseMessage.CREATED,
-        Otp,
       ),
     );
 };
 
 // Verify OTP
 exports.verifyOtpV2 = async (req, res) => {
-  const { mobile, otp } = req.body;
-  if (!mobile) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(responseBuilder(apiResponseStatusCode[400], "mobile is required"));
-  }
-  if (!validateMobileNumber(mobile, res)) return;
-  if (!otp) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(responseBuilder(apiResponseStatusCode[400], "otp is required"));
-  }
-  const mobileNum = normalizeMobileNumber(mobile);
-  let user = await userModel.findOne({ mobile: mobileNum });
-  if (!user) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(
-        responseBuilder(
-          apiResponseStatusCode[400],
-          "Register You Mobile Number",
-        ),
-      );
-  }
+  const verified = await checkMobileOtp(req, res);
+  if (!verified) return;
 
-  // An account can exist without a pending OTP (created by the admin panel or
-  // the staff flow), and decrypting null used to crash the whole request.
-  if (!user.otp) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(
-        responseBuilder(
-          apiResponseStatusCode[400],
-          "No OTP was requested for this number. Please request a new OTP.",
-        ),
-      );
-  }
-
-  let bytes = CryptoJS.AES.decrypt(user.otp.toString(), "CRYPTOKEY");
-
-  let originalText = bytes.toString(CryptoJS.enc.Utf8);
-
-  if (originalText != otp) {
-    return res
-      .status(statusCodes["Bad Request"])
-      .json(
-        responseBuilder(apiResponseStatusCode[400], "Please provide valid OTP"),
-      );
-  }
-
-  user = await userModel.findByIdAndUpdate(
-    user._id,
+  const user = await userModel.findByIdAndUpdate(
+    verified._id,
     { $set: { phoneVerified: true } },
     { new: true },
   ).populate("userRole").populate("businessId", "businessName businessImage");
 
-  const generate = jwt.sign(
-    { User: user._id, userId: user._id },
-    process.env.JWT_SECRET || process.env.TOKEN_KEY || "SECRETEKEY",
-    { expiresIn: "60d" },
-  );
-
-  const userData = user.toObject ? user.toObject() : { ...user };
-  userData.token = generate;
+  const userData = publicUser(user);
+  userData.token = signLoginToken(user, "60d");
 
   return res
     .status(statusCodes.OK)

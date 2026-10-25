@@ -24,6 +24,7 @@ const PORT = process.env.PORT || 9898;
 
         // 5. Initialize Socket.io
         const { Server } = require("socket.io");
+        const { authenticateSocket, registerSocketHandlers } = require("./socket/socketAuth");
         const io = new Server(server, {
             cors: {
                 origin: "*",
@@ -35,64 +36,10 @@ const PORT = process.env.PORT || 9898;
         // Make io accessible globally for use in controllers (e.g., WhatsApp webhooks)
         global.io = io;
 
-        io.on("connection", (socket) => {
-            console.log("A user connected:", socket.id);
-
-            // WhatsApp campaign real-time room
-            socket.on("joinCampaignRoom", (campaignId) => {
-                socket.join(`campaign:${campaignId}`);
-                console.log(`Socket ${socket.id} joined campaign:${campaignId}`);
-            });
-
-            socket.on("leaveCampaignRoom", (campaignId) => {
-                socket.leave(`campaign:${campaignId}`);
-            });
-
-            // WhatsApp business real-time room (for Inbox updates)
-            socket.on("joinBusinessRoom", (businessId) => {
-                socket.join(`business:${businessId}`);
-                console.log(`Socket ${socket.id} joined business:${businessId}`);
-            });
-
-            socket.on("leaveBusinessRoom", (businessId) => {
-                socket.leave(`business:${businessId}`);
-            });
-
-            // Help & Support real-time room (per user)
-            socket.on("joinUserRoom", (userId) => {
-                socket.join(`user:${userId}`);
-                console.log(`Socket ${socket.id} joined user:${userId}`);
-            });
-
-            socket.on("leaveUserRoom", (userId) => {
-                socket.leave(`user:${userId}`);
-            });
-
-            // WhatsApp Conversation real-time room (for active chat view)
-            socket.on("joinConversationRoom", (conversationId) => {
-                socket.join(`conversation:${conversationId}`);
-                console.log(`Socket ${socket.id} joined conversation:${conversationId}`);
-            });
-
-            socket.on("leaveConversationRoom", (conversationId) => {
-                socket.leave(`conversation:${conversationId}`);
-            });
-
-            // Chat relay event for client-to-client or simulator
-            socket.on("sendMessage", (data) => {
-                if (!data) return;
-                if (data.conversationId) {
-                    io.to(`conversation:${data.conversationId}`).emit("newWhatsAppMessage", data);
-                }
-                if (data.businessId) {
-                    io.to(`business:${data.businessId}`).emit("newWhatsAppMessage", data);
-                }
-            });
-
-            socket.on("disconnect", () => {
-                console.log("User disconnected:", socket.id);
-            });
-        });
+        // Connections must carry a valid login token (socket.handshake.auth.token); rooms are
+        // authorized per join. See socket/socketAuth.js.
+        io.use(authenticateSocket);
+        io.on("connection", (socket) => registerSocketHandlers(io, socket));
 
         server.listen(PORT, '0.0.0.0', () => {
             console.log(defaultResponseMessage?.PORT, PORT);

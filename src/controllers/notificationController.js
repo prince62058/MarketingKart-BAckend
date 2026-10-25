@@ -601,10 +601,16 @@ const sendNotificationToAllUsersWithCondition = async (req, res) => {
 };
 
 
+// Admins may look at any user's notifications (or everyone's); everybody else only at their own.
+const callerOf = (req) => req.authUser || req.user;
+const isAdminCaller = (req) => callerOf(req)?.userType === "ADMIN";
+const scopedUserId = (req, requested) => (isAdminCaller(req) ? requested : String(callerOf(req)._id));
+
 // Function to get notifications by userId and businessId (optional)
 const getNotificationsByUserIdBusinessId = async (req, res) => {
   try {
-    const { userId, businessId, markRead } = req.query;
+    const { businessId, markRead } = req.query;
+    const userId = scopedUserId(req, req.query.userId);
     const query = {};
 
     if (userId) {
@@ -633,7 +639,8 @@ const getNotificationsByUserIdBusinessId = async (req, res) => {
 // Function to get unread notifications count by businessId and userId (optional)
 const getUnreadNotificationsCount = async (req, res) => {
   try {
-    const { businessId, userId } = req.query;
+    const { businessId } = req.query;
+    const userId = scopedUserId(req, req.query.userId);
     const query = { read: false };
 
     if (businessId) {
@@ -654,14 +661,17 @@ const getUnreadNotificationsCount = async (req, res) => {
 // Function to mark notification(s) as read
 const markNotificationAsRead = async (req, res) => {
   try {
-    const { notificationId, all, userId } = req.body;
+    const { notificationId, all } = req.body;
+    const userId = scopedUserId(req, req.body.userId);
     if (all) {
       const query = userId ? { userId } : {};
       await Notification.updateMany(query, { $set: { read: true } });
       return res.status(200).json({ success: true, message: "All notifications marked as read" });
     }
     if (notificationId) {
-      await Notification.findByIdAndUpdate(notificationId, { $set: { read: true } });
+      // For a customer the notification must be theirs; an admin may mark any.
+      const filter = isAdminCaller(req) ? { _id: notificationId } : { _id: notificationId, userId };
+      await Notification.findOneAndUpdate(filter, { $set: { read: true } });
       return res.status(200).json({ success: true, message: "Notification marked as read" });
     }
     return res.status(400).json({ success: false, message: "notificationId or all flag required" });
@@ -673,7 +683,7 @@ const markNotificationAsRead = async (req, res) => {
 // Function to clear notifications
 const clearNotifications = async (req, res) => {
   try {
-    const { userId } = req.body;
+    const userId = scopedUserId(req, req.body?.userId);
     const query = userId ? { userId } : {};
     await Notification.deleteMany(query);
     res.status(200).json({ success: true, message: "Notifications cleared successfully" });

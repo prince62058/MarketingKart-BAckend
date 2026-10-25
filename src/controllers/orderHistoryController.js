@@ -82,7 +82,9 @@ exports.createOrderHistory = async (req, res) => {
 // Read all order histories
 exports.getOrderHistories = async (req, res) => {
   try {
-    const { userId } = req.query;
+    // A customer only ever gets their own orders, whatever userId they ask for.
+    const caller = req.authUser || req.user;
+    const userId = caller?.userType === "ADMIN" ? req.query.userId : String(caller._id);
     let obj = {};
     if (userId) {
       obj.userId = userId;
@@ -102,7 +104,8 @@ exports.getOrderHistories = async (req, res) => {
 exports.getOrderHistoryById = async (req, res) => {
   try {
     const history = await OrderHistory.findById(req.query.orderId);
-    if (!history)
+    const caller = req.authUser || req.user;
+    if (!history || (caller?.userType !== "ADMIN" && String(history.userId) !== String(caller?._id)))
       return res
         .status(404)
         .json({ success: false, message: "Order history not found" });

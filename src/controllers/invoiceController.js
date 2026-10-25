@@ -438,7 +438,10 @@ exports.generateInvoice = async (
 // module.exports = { generateInvoice };
 exports.getInvoiceByBusinessId = async (req, res) => {
   try {
-    const { businessId,userId, page = 1, limit = 20 } = req.query;
+    const { businessId, page = 1, limit = 20 } = req.query;
+    // A customer only ever gets their own invoices, whatever userId they ask for.
+    const caller = req.authUser || req.user;
+    const userId = caller?.userType === "ADMIN" ? req.query.userId : String(caller._id);
 
     if (!userId) {
       return res.status(400).json({
@@ -469,7 +472,15 @@ exports.getInvoiceDetails = async (req, res) => {
   try {
     const invoiceId = req.query.invoiceId || req.params.invoiceId;
     const invoice = await invoiceModel.findById(invoiceId);
+    const caller = req.authUser || req.user;
 
+    if (invoice && caller?.userType !== "ADMIN" && String(invoice.userId) !== String(caller?._id)) {
+      // Same answer as a missing invoice, so ids cannot be probed.
+      return res.status(404).json({
+        success: false,
+        message: "Invoice not found",
+      });
+    }
 
     if (!invoice) {
       return res.status(404).json({

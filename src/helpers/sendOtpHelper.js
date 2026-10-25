@@ -51,6 +51,11 @@ exports.sendOtp = (mobile, otp) => {
     });
   });
 
+  // A failed request has no other listener, and an unhandled 'error' event takes the whole server down.
+  req.on("error", function (error) {
+    console.error("Error sending OTP SMS:", error.message);
+  });
+
   req.write(
     `{\n  \"flow_id\": \"63614b3dabf10640e61fa856\",\n  \"sender\": \"DSMONL\",\n  \"mobiles\": \"91${mobile}\",\n  \"otp\": \"${otp}\"\n}`,
   );

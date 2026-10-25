@@ -3,9 +3,16 @@ const controller = require("../controllers/commpanyController");
 const {getCompany,updateCompany,toggleMaintenance,updateAppVersion} = require("../controllers/companyControllerV2");
 const router = express.Router();
 const { upload } = require("../middlewares/multer");
+const { adminOnly } = require("../middlewares/authMidd");
+const { requirePermission } = require("../middlewares/adminPermission");
+
+// Company settings, maintenance mode and the forced app version drive every phone, so changing them
+// takes the COMPANY permission. Reading the company details stays public: the app needs them before login.
+const manageCompany = [adminOnly, requirePermission("COMPANY")];
 
 router.post(
   "/createOrUpdateCompany",
+  manageCompany,
   upload.fields([
     { name: "logo" },
     { name: "banner" }
@@ -18,6 +25,7 @@ router.get('/getCompany',controller.getCompany)
 
 router.post(
   "/updateCompany",
+  manageCompany,
   upload.fields([
     { name: "favicon" },
     { name: "logo" },
@@ -29,8 +37,8 @@ router.post(
 );
 router.get('/getNewCompany',getCompany)
 router.get('/company',getCompany)
-router.put('/company',updateCompany)
-router.put('/toggleMaintenance',toggleMaintenance)
-router.put('/updateAppVersion',updateAppVersion)
+router.put('/company',manageCompany,updateCompany)
+router.put('/toggleMaintenance',manageCompany,toggleMaintenance)
+router.put('/updateAppVersion',manageCompany,updateAppVersion)
 module.exports = router;
 

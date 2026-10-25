@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const otpGenerator = require("otp-generator");
 const {
   statusCodes,
@@ -7,7 +8,7 @@ const {
 const responseBuilder = require("../utils/responseBuilder");
 
 function otp() {
-  return Math.floor(1000 + Math.random() * 9000);
+  return crypto.randomInt(1000, 10000);
 }
 
 module.exports = otp;

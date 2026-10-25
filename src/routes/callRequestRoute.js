@@ -15,7 +15,7 @@ const router = express.Router();
 
 const asyncHandler = require("../utils/asyncHandler");
 
-router.post("/createCall/:userId", userMid, createCall);
+router.post("/createCall/:userId", asyncHandler(authUser), asyncHandler(userMid), createCall);
 router.get("/listCallRequest", listCallRequest);
 router.put("/updateCallRequestStatus", asyncHandler(authUser), updateCallRequestStatus);
 router.put("/pushFollowUp", asyncHandler(authUser), pushFollowUp);
