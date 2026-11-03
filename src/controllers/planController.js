@@ -7,6 +7,40 @@ const {
 } = require("../Message/defaultMessage");
 const responseBuilder = require("../utils/responseBuilder");
 const offeringsModel = require("../models/offeringsModel");
+const advertisementModel = require("../models/advertisementModel");
+const mongoose = require("mongoose");
+
+const refuse = (res, message) =>
+  res.status(statusCodes["Bad Request"]).json(responseBuilder(apiResponseStatusCode[400], message));
+
+// Checks what the admin form sent. With `partial` only the fields present are checked (an edit).
+// Resolves to an error message, or null when the input is fine.
+async function planInputProblem(body, { partial }) {
+  const has = key => body[key] !== undefined && body[key] !== null && body[key] !== "";
+  if (!partial || has("title")) {
+    const title = typeof body.title === "string" ? body.title.trim() : "";
+    if (!title) return "Give the package a name.";
+    if (title.length > 80) return "The package name can be up to 80 characters.";
+  }
+  if (!partial || has("price")) {
+    const price = Number(body.price);
+    if (!Number.isFinite(price) || price <= 0 || price > 10000000) return "Enter the total price in rupees (more than 0).";
+  }
+  if (!partial || has("duretion")) {
+    const days = Number(body.duretion);
+    if (!Number.isInteger(days) || days < 1 || days > 365) return "Duration must be a whole number of days from 1 to 365.";
+  }
+  if (has("aiImageCount")) {
+    const count = Number(body.aiImageCount);
+    if (!Number.isInteger(count) || count < 0 || count > 100) return "AI images must be a whole number from 0 to 100.";
+  }
+  if (!partial || has("advertisementTypeId")) {
+    const id = String(body.advertisementTypeId || "");
+    if (!/^[0-9a-f]{24}$/i.test(id) || !mongoose.isValidObjectId(id)) return "Choose which ad objective this package is for.";
+    if (!(await advertisementModel.exists({ _id: id }))) return "That ad objective does not exist.";
+  }
+  return null;
+}
 //  Create
 exports.getAdvertisementTypeIdByPlan = async (req, res) => {
     // Step 1: Find all plans based on advertisementTypeId
@@ -85,6 +119,8 @@ exports.getAdvertisementTypeIdByPlan = async (req, res) => {
 };
 
 exports.createPlan = async (req, res) => {
+  const problem = await planInputProblem(req.body || {}, { partial: false });
+  if (problem) return refuse(res, problem);
   const {
     advertisementTypeId,
     title,
@@ -134,6 +170,8 @@ exports.createPlan = async (req, res) => {
 //  update
 
 exports.updatePlan = async (req, res) => {
+  const problem = await planInputProblem(req.body || {}, { partial: true });
+  if (problem) return refuse(res, problem);
   const planData = req.plan;
   const {
     advertisementTypeId,
@@ -195,28 +233,17 @@ exports.getAllPlan = async (req, res) => {
   //   reach: null,
   //   leads: null,
   // }));
-  if (!findAll.length) {
-    res
-      .status(statusCodes["Not Found"])
-      .json(
-        responseBuilder(
-          apiResponseStatusCode[404],
-          defaultResponseMessage.NOT_FOUND,
-          findAll
-        )
-      );
-  } else {
-    res
-      .status(statusCodes.OK)
-      .json(
-        responseBuilder(
-          apiResponseStatusCode[200],
-          defaultResponseMessage.FETCHED,
-          findAll,
-          pageCount
-        )
-      );
-  }
+  // No packages yet (or all deleted) is a normal answer: the admin page and the app both show an empty list.
+  res
+    .status(statusCodes.OK)
+    .json(
+      responseBuilder(
+        apiResponseStatusCode[200],
+        defaultResponseMessage.FETCHED,
+        findAll,
+        pageCount
+      )
+    );
 };
 
 //  getSingle

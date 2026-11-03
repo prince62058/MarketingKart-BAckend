@@ -2,15 +2,18 @@ const express = require("express");
 const controller = require("../controllers/planController");
 const router = express.Router();
 const { planMid } = require("../middlewares/planMidd");
-const { authUser } = require("../middlewares/authMidd");
+const { authUser, adminOnly } = require("../middlewares/authMidd");
+const { requirePermission } = require("../middlewares/adminPermission");
 const asyncHandler = require("../utils/asyncHandler");
 router.get(
   "/plan/getAdvertisementTypeIdByPlan",
   asyncHandler(controller.getAdvertisementTypeIdByPlan)
 );
+// Packages are what customers are charged for, so only the admin panel may create, change or remove them.
+const managePlans = [adminOnly, requirePermission("PLAN")];
 router.post(
   "/plan/createPlan",
-  asyncHandler(authUser),
+  managePlans,
   asyncHandler(controller.createPlan)
 );
 router.get(
@@ -27,19 +30,19 @@ router.get(
 );
 router.put(
   "/plan/updatePlan/:planId",
-  asyncHandler(authUser),
+  managePlans,
   asyncHandler(planMid),
   asyncHandler(controller.updatePlan)
 );
 router.put(
   "/plan/disablePlan/:planId",
-  asyncHandler(authUser),
+  managePlans,
   asyncHandler(planMid),
   asyncHandler(controller.disablePlan)
 );
 router.delete(
   "/plan/deletePlan/:planId",
-  asyncHandler(authUser),
+  managePlans,
   asyncHandler(planMid),
   asyncHandler(controller.deletePlan)
 );
