@@ -3,6 +3,7 @@ const multer = require("multer");
 const { authUser, isAdmin } = require("../../middlewares/authMidd");
 const asyncHandler = require("../../utils/asyncHandler");
 const controller = require("./aiVideo.controller");
+const { MAX_UPLOAD_BYTES: MAX_VOICE_BYTES } = require("./aiVideo.audio");
 
 const router = express.Router();
 const guard = asyncHandler(authUser);
@@ -29,10 +30,26 @@ function photoUpload(req, res, next) {
   });
 }
 
+// A customer's own voice note, held in memory only: it is converted and sent to the video provider,
+// never saved. JSON requests (a stock voice) pass straight through this parser.
+const voiceParser = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_VOICE_BYTES, files: 1 },
+}).single("voice");
+
+function voiceUpload(req, res, next) {
+  voiceParser(req, res, error => {
+    if (!error) return next();
+    const message =
+      error.code === "LIMIT_FILE_SIZE" ? "That voice note is too large. Use one under 10 MB (30 seconds is plenty)." : error.message || "Voice note upload failed.";
+    return controller.fail(res, Object.assign(new Error(message), { status: 400 }));
+  });
+}
+
 router.get("/ai-video/studio", guard, controller.studio);
 router.patch("/ai-video/goal", guard, controller.goal);
 router.post("/ai-video/scripts", guard, controller.script);
-router.post("/ai-video/projects", guard, controller.createProject);
+router.post("/ai-video/projects", guard, voiceUpload, controller.createProject);
 router.get("/ai-video/projects/:id", guard, controller.project);
 router.delete("/ai-video/projects/:id", guard, controller.deleteProject);
 router.get("/ai-video/voice-preview", guard, controller.voicePreview);

@@ -46,7 +46,7 @@ function computePricing(input = {}) {
   const videoCost = Math.round(o.videoSeconds);
   const packs = o.packCredits.map(credits => ({ id: `pack_${credits}`, credits, price: Math.round(credits * pricePerCredit), active: true }));
   const names = { pro: "Pro", business: "Business" };
-  const plans = [{ id: "free", name: "Free", price: 0, yearlyPrice: 0, monthlyCredits: videoCost, active: true }];
+  const plans = [{ id: "free", name: "Free", price: 0, yearlyPrice: 0, monthlyCredits: 0, active: true }];
   for (const [id, credits] of Object.entries(o.planCredits)) {
     const price = Math.round(credits * pricePerCredit);
     plans.push({ id, name: names[id] || id, price, yearlyPrice: Math.round(price * 12 * (1 - o.yearlyDiscount)), monthlyCredits: credits, active: true });
@@ -55,7 +55,7 @@ function computePricing(input = {}) {
   const settings = {
     videoCost,
     voiceoverCost: o.voiceoverCredits,
-    freeCredits: videoCost, // one free video, which costs us about as much as the profit on 4 sales
+    freeCredits: 0, // nothing is given away: every video is paid for
     maxScriptChars: o.maxScriptChars,
     packs,
     plans,
@@ -100,7 +100,7 @@ function main(argv) {
   for (const p of settings.plans.filter(x => x.price)) {
     console.log(`Plan ${p.name}: ${p.monthlyCredits} credits/month Rs ${p.price}/month, Rs ${p.yearlyPrice}/year`);
   }
-  console.log(`New users get ${settings.freeCredits} free credits (one free video, about Rs ${report.freeVideoCostInr} of cost). Script limit ${settings.maxScriptChars} characters.`);
+  console.log(`New users get ${settings.freeCredits} free credits. Script limit ${settings.maxScriptChars} characters.`);
   console.log("\nSettings to enter on the admin panel (or send with PUT /api/admin/ai-video/settings):");
   console.log(JSON.stringify(settings, null, 2));
 }

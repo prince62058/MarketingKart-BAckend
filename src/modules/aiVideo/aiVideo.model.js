@@ -20,6 +20,9 @@ const projectSchema = new mongoose.Schema(
     heygenVideoId: String,
     avatarLookId: String,
     voiceId: String,
+    // Set when the customer supplied their own recording instead of a stock voice (voice === "own").
+    audioAssetId: String,
+    audioSeconds: Number,
     videoUrl: String,
     thumbnailUrl: String,
     // HeyGen links expire after 7 days; this marks when a provider-hosted url was fetched.

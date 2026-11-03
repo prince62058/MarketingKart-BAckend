@@ -37,10 +37,10 @@ test("on a database with no saved settings the 30% profit price list is saved an
 
   const config = await store.get({ fresh: true });
   assert.equal(config.videoCost, 30);
-  assert.equal(config.freeCredits, 30);
+  assert.equal(config.freeCredits, 0, "nothing is given away");
   assert.equal(config.maxScriptChars, 400);
   assert.deepEqual(config.packs.map(pack => [pack.credits, pack.price]), [[100, 600], [500, 3000], [1200, 7200]]);
-  assert.deepEqual(config.plans.map(plan => [plan.id, plan.price, plan.yearlyPrice, plan.monthlyCredits]), [["free", 0, 0, 30], ["pro", 1800, 21600, 300], ["business", 6000, 72000, 1000]]);
+  assert.deepEqual(config.plans.map(plan => [plan.id, plan.price, plan.yearlyPrice, plan.monthlyCredits]), [["free", 0, 0, 0], ["pro", 1800, 21600, 300], ["business", 6000, 72000, 1000]]);
   // Everything the preset does not set keeps its shipped default.
   assert.equal(config.enabled, true);
   assert.equal(config.maxConcurrentRenders, 3);
@@ -49,12 +49,12 @@ test("on a database with no saved settings the 30% profit price list is saved an
   assert.match(entry.summary, /30 credits per video/);
 });
 
-test("a new customer's studio starts with the new free credits and the app is offered the new prices", opts, async () => {
+test("a new customer's studio starts empty and the app is offered the new prices", opts, async () => {
   await reset();
   await seed();
   const uid = new h.mongoose.Types.ObjectId();
   const studio = service.present(await service.getStudio(uid, null), await store.get({ fresh: true }));
-  assert.equal(studio.credits, 30);
+  assert.equal(studio.credits, 0, "no free credits");
   assert.equal(studio.videoCost, 30);
   assert.deepEqual(studio.packs.map(pack => pack.price), [600, 3000, 7200]);
 });

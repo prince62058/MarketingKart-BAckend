@@ -14,7 +14,8 @@ test("default prices: Rs 6 per credit (GST included), 30 credits per video, 30% 
   assert.deepEqual(settings.packs.map(p => [p.credits, p.price]), [[100, 600], [500, 3000], [1200, 7200]]);
   const pro = settings.plans.find(p => p.id === "pro");
   assert.deepEqual([pro.monthlyCredits, pro.price, pro.yearlyPrice], [300, 1800, 21600]);
-  assert.equal(settings.freeCredits, 30);
+  assert.equal(settings.freeCredits, 0, "nothing is given away");
+  assert.equal(settings.plans.find(p => p.id === "free").monthlyCredits, 0);
   assert.ok(report.video.profitOverCost >= 0.3, `profit ${report.video.profitOverCost}`);
 });
 

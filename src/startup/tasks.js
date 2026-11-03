@@ -11,6 +11,7 @@ const { seedFaqsIfEmpty } = require("./seedFaqs");
 const { seedContactUsIfEmpty } = require("./seedContactUs");
 const { seedWhatsAppPlansIfEmpty } = require("./seedWhatsAppPlans");
 const { seedAiVideoPricingIfMissing } = require("./seedAiVideoPricing");
+const { removeAiVideoFreeCreditsOnce } = require("./removeAiVideoFreeCredits");
 
 async function initializeBackgroundTasks() {
     console.log("🚀 Initializing background tasks...");
@@ -40,6 +41,13 @@ async function initializeBackgroundTasks() {
             await seedAiVideoPricingIfMissing();
         } catch (error) {
             console.error("❌ Failed to seed AI Video pricing:", error.message);
+        }
+
+        // Once: AI videos are never free, so clear any starting balance saved before that decision.
+        try {
+            await removeAiVideoFreeCreditsOnce();
+        } catch (error) {
+            console.error("❌ Failed to switch off AI Video free credits:", error.message);
         }
 
         // Start the manual campaign manager (starts its own 5s loop)

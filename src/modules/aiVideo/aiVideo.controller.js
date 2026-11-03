@@ -3,9 +3,10 @@ const { apiResponseStatusCode } = require("../../Message/defaultMessage");
 const service = require("./aiVideo.service");
 const settings = require("./aiVideo.settings");
 
+// The business this request works in. `handler` fills req.business once it has checked that the
+// business really belongs to the signed-in customer; nothing reads the raw header any more.
 function businessId(req) {
-  const header = req.headers["x-business-id"];
-  return typeof header === "string" && header.trim() ? header.trim() : null;
+  return req.business ?? null;
 }
 
 function send(res, message, data, status = 200) {
@@ -19,9 +20,12 @@ function fail(res, error) {
   return res.status(status).json({ ...body, success: false });
 }
 
-function handler(run, { message, status }) {
+// `scoped: false` is for calls that never touch a studio (voice lists, scripts, payment
+// confirmation), so a stale business id in the header cannot get in their way.
+function handler(run, { message, status, scoped = true }) {
   return async (req, res) => {
     try {
+      if (scoped) req.business = await service.resolveBusiness(req.user, req.headers["x-business-id"]);
       const data = await run(req);
       return send(res, typeof message === "function" ? message(data) : message, data, status);
     } catch (error) {
@@ -40,8 +44,9 @@ const studio = handler(
   { message: "Studio" },
 );
 const goal = handler(req => service.saveGoal(user(req), businessId(req), req.body?.goal), { message: "Goal saved" });
-const script = handler(req => service.writeScript(user(req), req.body || {}), { message: "Script ready" });
-const createProject = handler(req => service.createProject(user(req), businessId(req), req.body || {}), {
+const script = handler(req => service.writeScript(user(req), req.body || {}), { message: "Script ready", scoped: false });
+// req.file is the customer's own voice note when the app sent one (multipart), otherwise undefined.
+const createProject = handler(req => service.createProject(user(req), businessId(req), req.body || {}, req.file || null), {
   message: "Video queued",
   status: 201,
 });
@@ -59,9 +64,11 @@ const createAvatar = handler(req => service.saveAvatar(user(req), businessId(req
 });
 const voicePreview = handler(req => service.voicePreview({ voice: req.query.voice, language: req.query.language }), {
   message: "Voice sample",
+  scoped: false,
 });
 const listVoices = handler(req => service.listVoices({ language: req.query.language, gender: req.query.gender, search: req.query.search }), {
   message: "Voices",
+  scoped: false,
 });
 const initVideoAvatar = handler(req => service.initVideoAvatar(user(req), businessId(req), req.body || {}), {
   message: "Upload ready",
@@ -85,8 +92,9 @@ const order = handler(req => service.createOrder(user(req), businessId(req), req
 });
 const confirmOrder = handler(req => service.confirmPayment(user(req), req.body || {}), {
   message: data => (data.granted ? "Payment confirmed" : "Payment pending"),
+  scoped: false,
 });
-const walletOrder = handler(req => service.payWithWallet(user(req), req.params.id), { message: "Paid from wallet" });
+const walletOrder = handler(req => service.payWithWallet(user(req), req.params.id), { message: "Paid from wallet", scoped: false });
 const enterprise = handler(req => service.requestEnterprise(user(req), businessId(req), req.body || {}), {
   message: "Enterprise request saved",
   status: 201,
@@ -106,7 +114,7 @@ async function razorpayWebhook(req, res) {
   }
 }
 
-const providerStatus = handler(() => service.providerStatus(), { message: "AI video provider status" });
+const providerStatus = handler(() => service.providerStatus(), { message: "AI video provider status", scoped: false });
 
 module.exports = {
   fail,

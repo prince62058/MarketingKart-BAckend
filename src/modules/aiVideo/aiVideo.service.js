@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const Studio = require("./aiVideo.model");
 const User = require("../../models/userModel");
+const Business = require("../../models/businessModel");
 const Transaction = require("../../models/transtionModel");
 const logic = require("./aiVideo.logic");
 const payments = require("./aiVideo.payments");
@@ -8,6 +9,7 @@ const heygen = require("./heygen.client");
 const catalog = require("./heygen.catalog");
 const scriptWriter = require("./aiVideo.script");
 const storage = require("./aiVideo.storage");
+const audio = require("./aiVideo.audio");
 const settings = require("./aiVideo.settings");
 const avatars = require("./aiVideo.avatars");
 const { httpError, providerError, requireProvider } = require("./aiVideo.errors");
@@ -30,6 +32,21 @@ async function activeSettings() {
 // ---------------------------------------------------------------------------
 // Studio
 // ---------------------------------------------------------------------------
+
+// The app says which of the customer's businesses it is working in with the x-business-id header.
+// That header is only the caller's word, so it is honoured for a business that is on their own
+// account and refused for anything else. Otherwise a customer could invent ids and get a studio
+// (and whatever it starts with) for each one, or point the app at somebody else's business.
+async function resolveBusiness(user, header) {
+  const id = typeof header === "string" ? header.trim() : "";
+  if (!id) return null;
+  if (!/^[0-9a-f]{24}$/i.test(id)) throw httpError(400, "That business could not be found.");
+  const listed = (user.businessId || []).some(entry => String(entry) === id);
+  if (!listed && !(await Business.exists({ _id: id, userId: user._id }))) {
+    throw httpError(403, "That business is not on your account.");
+  }
+  return id;
+}
 
 async function loadStudio(userId, businessId) {
   const scope = { userId, businessId: businessId || null };
@@ -278,13 +295,16 @@ function parseSpeed(value) {
   return Math.min(1.5, Math.max(0.5, speed));
 }
 
-async function createProject(userId, businessId, input) {
+// `voiceFile` is the customer's own recording (multer file). With it the video is lip-synced to
+// their voice and no script is needed; without it the script is spoken by a stock voice.
+async function createProject(userId, businessId, input, voiceFile = null) {
   requireProvider();
   const config = await activeSettings();
   const studio = await loadStudio(userId, businessId);
 
+  const ownVoice = Boolean(voiceFile);
   let script = String(input.script || "").trim();
-  if (!script) script = (await scriptWriter.write(input)).script;
+  if (!script && !ownVoice) script = (await scriptWriter.write(input)).script;
   if (script.length > config.maxScriptChars) {
     throw httpError(400, `Keep the script under ${config.maxScriptChars} characters so the video stays short.`);
   }
@@ -298,9 +318,17 @@ async function createProject(userId, businessId, input) {
     throw httpError(400, "You already have videos rendering. Wait for one to finish before starting another.");
   }
 
+  // Everything that can fail without costing anything happens before the credits are taken.
+  let recording = null;
+  if (ownVoice) {
+    if (studio.credits < config.videoCost) throw httpError(400, `You need ${config.videoCost} credits to render a video.`);
+    recording = await audio.prepareVoiceNote({ buffer: voiceFile.buffer, filename: voiceFile.originalname, mimetype: voiceFile.mimetype });
+  }
+
   // Read-only lookups first, so nothing is charged when a presenter or voice is unavailable.
   let presenter;
   let voiceId;
+  let audioAssetId;
   try {
     const custom = studio.avatars.find(avatar => avatar.id === input.presenter && avatar.heygenLookId);
     if (custom && custom.status !== "Ready") {
@@ -309,15 +337,20 @@ async function createProject(userId, businessId, input) {
     presenter = await catalog.resolvePresenter(input.presenter === "raj" ? "raj" : "priya", {
       lookId: custom && custom.heygenLookId,
     });
-    // A video avatar speaks in the voice cloned from its footage unless a stock voice is picked.
-    const ownVoice = input.voice === "cloned" ? (custom && custom.defaultVoiceId) || presenter.defaultVoiceId : null;
-    voiceId =
-      ownVoice ||
-      (await catalog.resolveVoice({
-        voice: input.voice === "cloned" ? "priya" : input.voice,
-        language,
-        fallbackVoiceId: presenter.defaultVoiceId,
-      }));
+    if (ownVoice) {
+      const asset = await heygen.uploadAsset({ buffer: recording.buffer, filename: recording.filename, mimetype: recording.mimetype });
+      audioAssetId = asset.asset_id;
+    } else {
+      // A video avatar speaks in the voice cloned from its footage unless a stock voice is picked.
+      const cloned = input.voice === "cloned" ? (custom && custom.defaultVoiceId) || presenter.defaultVoiceId : null;
+      voiceId =
+        cloned ||
+        (await catalog.resolveVoice({
+          voice: input.voice === "cloned" ? "priya" : input.voice,
+          language,
+          fallbackVoiceId: presenter.defaultVoiceId,
+        }));
+    }
   } catch (error) {
     throw providerError(error);
   }
@@ -332,19 +365,21 @@ async function createProject(userId, businessId, input) {
     title,
     status: "Rendering",
     format,
-    duration: logic.estimateDuration(script),
-    durationSeconds: logic.scriptSeconds(script),
+    duration: ownVoice ? logic.formatClock(Math.round(recording.seconds)) : logic.estimateDuration(script),
+    durationSeconds: ownVoice ? recording.seconds : logic.scriptSeconds(script),
     presenter: input.presenter || "priya",
     progress: 3,
     script,
     badgeText: format,
-    voice: input.voice || "priya",
+    voice: ownVoice ? "own" : input.voice || "priya",
     language,
     speed,
     music: input.music || "none",
     captions,
     avatarLookId: presenter.avatarId,
     voiceId,
+    audioAssetId,
+    audioSeconds: ownVoice ? recording.seconds : undefined,
     cost: config.videoCost,
     renderStartedAt: new Date(),
     createdAt: new Date(),
@@ -363,12 +398,13 @@ async function createProject(userId, businessId, input) {
       {
         type: "avatar",
         avatar_id: presenter.avatarId,
-        script,
-        voice_id: voiceId,
+        // The customer's recording replaces script + voice: the provider lip-syncs the audio as it is.
+        ...(ownVoice
+          ? { audio_asset_id: audioAssetId }
+          : { script, voice_id: voiceId, voice_settings: pitch ? { speed, pitch } : { speed } }),
         title,
         aspect_ratio: format,
         resolution: config.resolution,
-        voice_settings: pitch ? { speed, pitch } : { speed },
         caption: captionsOn ? { file_format: "srt", style: "default" } : undefined,
         engine: presenter.engine,
       },
@@ -973,6 +1009,7 @@ async function providerStatus() {
 
 module.exports = {
   present,
+  resolveBusiness,
   getStudio,
   saveGoal,
   writeScript,

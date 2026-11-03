@@ -7,6 +7,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 
+// Production starts every studio with nothing (aiVideo.logic FREE_CREDITS). These suites were written
+// around a funded studio, so they ask for the same starting balance they always had.
+process.env.AI_VIDEO_FREE_CREDITS = "120";
+
 const hasMongod = spawnSync("mongod", ["--version"]).status === 0;
 
 const freePort = () =>
@@ -134,7 +138,16 @@ async function startMockHeyGen(workDir) {
       const key = req.headers["idempotency-key"];
       if (key && state.idempotent.has(key)) return send(200, state.idempotent.get(key));
       if (/FAIL402/.test(json.script)) return error(402, "insufficient_credit", "Insufficient credits. Upgrade to continue.");
-      if (/FAIL400/.test(json.script)) return error(400, "invalid_parameter", "script is invalid");
+      if (/FAIL400/.test(json.script) || /FAIL400/.test(json.title)) return error(400, "invalid_parameter", "script is invalid");
+      // HeyGen's published rules for avatar videos: speech comes from a script with a voice, or from
+      // one uploaded audio file, never both.
+      if (json.audio_asset_id !== undefined) {
+        if (json.script !== undefined || json.voice_id !== undefined) return error(400, "invalid_parameter", "audio_asset_id cannot be combined with script or voice_id");
+        const asset = state.assets.get(json.audio_asset_id);
+        if (!asset || !/^audio\//.test(asset.mime || "")) return error(400, "invalid_parameter", "audio_asset_id is not an audio asset");
+      } else if (json.script !== undefined && !json.voice_id) {
+        return error(400, "invalid_parameter", "voice_id is required with script");
+      }
       const id = `vid_${++state.seq}`;
       state.videos.set(id, { id, status: "processing", title: json.title, duration: 4.2 });
       const reply = { data: { video_id: id, status: "pending", output_format: "mp4" } };
@@ -162,8 +175,11 @@ async function startMockHeyGen(workDir) {
     if (route === "POST /v3/assets") {
       if (!contentType.startsWith("multipart/form-data") || raw.length === 0) return error(400, "invalid_parameter", "file required");
       const id = `asset_${++state.seq}`;
-      state.assets.set(id, { id, size_bytes: raw.length, uploaded: true, completed: true });
-      return send(200, { data: { asset_id: id, url: `${base}/files/a.jpg`, mime_type: "image/jpeg", size_bytes: raw.length } });
+      // What the uploaded part says it is, so a test can tell a photo from a voice note.
+      const head = raw.subarray(0, 600).toString("latin1");
+      const mime = (head.match(/Content-Type: ([^\r\n]+)/i) || [])[1] || "image/jpeg";
+      state.assets.set(id, { id, size_bytes: raw.length, mime, filename: (head.match(/filename="([^"]*)"/) || [])[1], uploaded: true, completed: true });
+      return send(200, { data: { asset_id: id, url: `${base}/files/a.jpg`, mime_type: mime, size_bytes: raw.length } });
     }
     if (route === "POST /v3/assets/direct-uploads") {
       if (!json.filename || !json.content_type || !Number.isInteger(json.size_bytes)) return error(400, "invalid_parameter", "filename, content_type and size_bytes are required");

@@ -2,7 +2,9 @@ const crypto = require("crypto");
 
 const VIDEO_COST = 20;
 const VOICEOVER_COST = 8;
-const FREE_CREDITS = Number(process.env.AI_VIDEO_FREE_CREDITS) || 120;
+// A new studio starts empty: every video is paid for. The admin page (or this variable) can still
+// grant a starting balance, but nothing is given away by default.
+const FREE_CREDITS = Math.max(0, Math.floor(Number(process.env.AI_VIDEO_FREE_CREDITS) || 0));
 const MAX_SCRIPT_CHARS = Number(process.env.AI_VIDEO_MAX_SCRIPT_CHARS) || 1200;
 const MAX_CONCURRENT_RENDERS = Number(process.env.AI_VIDEO_MAX_CONCURRENT_RENDERS) || 3;
 // A render that has not finished by now is treated as lost and refunded.
@@ -23,7 +25,7 @@ const PACKS = [
 // Mirrors the Upgrade screen: Pro is 50 videos a month and Business 200, at 20 credits each.
 // Yearly is half the price of twelve months, as the "Save 50%" badge promises.
 const PLANS = [
-  { id: "free", name: "Free", price: 0, yearlyPrice: 0, monthlyCredits: 120 },
+  { id: "free", name: "Free", price: 0, yearlyPrice: 0, monthlyCredits: 0 },
   { id: "pro", name: "Pro", price: 499, yearlyPrice: 2994, monthlyCredits: 1000 },
   { id: "business", name: "Business", price: 1499, yearlyPrice: 8994, monthlyCredits: 4000 },
 ];

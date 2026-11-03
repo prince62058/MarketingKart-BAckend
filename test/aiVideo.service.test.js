@@ -9,6 +9,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 
+// Production starts a studio with nothing; this suite is written around a funded one.
+process.env.AI_VIDEO_FREE_CREDITS = "120";
+
 const hasMongod = spawnSync("mongod", ["--version"]).status === 0;
 
 let mongod;
