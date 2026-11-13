@@ -22,7 +22,11 @@ const mapMessage = (m) => {
   if (!obj.mediaUrl && obj.mediaId) obj.mediaUrl = `${publicBase()}/api/whatsapp/chat/media/${obj._id}`;
   obj.mediaUrl = obj.mediaUrl || null;
   obj.mediaType = obj.mediaType || null;
-  obj.senderType = obj.direction === "OUTBOUND" ? "USER" : "CONTACT";
+  if (obj.direction === "OUTBOUND" && String(obj.source || "").toUpperCase() === "BOT") {
+    obj.senderType = "BOT";
+  } else {
+    obj.senderType = obj.direction === "OUTBOUND" ? "USER" : "CONTACT";
+  }
   return obj;
 };
 
@@ -257,6 +261,33 @@ exports.setBotMode = async (req, res) => {
 
     conversation.isBotActive = isBotActive;
     await conversation.save();
+
+    if (global.io) {
+      const convObj = {
+        _id: String(conversation._id),
+        businessId: conversation.businessId,
+        customerPhone: conversation.customerPhone,
+        customerName:
+          conversation.customerName && conversation.customerName !== "Unknown"
+            ? conversation.customerName
+            : conversation.customerPhone,
+        contactPhone: conversation.customerPhone,
+        contactName:
+          conversation.customerName && conversation.customerName !== "Unknown"
+            ? conversation.customerName
+            : conversation.customerPhone,
+        lastMessage: conversation.lastMessage,
+        lastMessageAt: conversation.lastMessageAt,
+        unreadCount: conversation.unreadCount || 0,
+        status: conversation.status || "OPEN",
+        isBotActive: conversation.isBotActive,
+      };
+      if (conversation.businessId) {
+        global.io.to(`business:${conversation.businessId}`).emit("conversationUpdated", convObj);
+      }
+      global.io.to(`user:${req.user._id}`).emit("conversationUpdated", convObj);
+      global.io.to(`conversation:${conversation._id}`).emit("conversationUpdated", convObj);
+    }
 
     return res.status(200).json({ success: true, data: conversation });
   } catch (error) {

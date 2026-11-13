@@ -21,6 +21,7 @@ const User = require("../models/userModel");
 const { sendNotificationToMultipleToken } = require("./notificationController");
 const { sendLeadNotification } = require("../helpers/appNotificationHelper");
 const { syncLeadsForBusiness } = require("../services/leadSyncService");
+const whatsappBotService = require("../services/whatsappBotService");
 
 const getPhoneVariants = (rawPhone) => {
   const digits = String(rawPhone || "").replace(/\D/g, "");
@@ -651,6 +652,16 @@ exports.postWhatsAppWebhook = async (req, res) => {
               // Emit to conversation room (for live chat screen)
               global.io.to(`conversation:${conversation._id}`).emit("newWhatsAppMessage", messagePayload);
               global.io.to(`conversation:${conversation._id}`).emit("chatMessage", messagePayload);
+            }
+
+            // AI chatbot: FAQ first → OpenAI fallback (fire-and-forget; keep Meta ACK fast)
+            if ((conversation.isBotActive ?? true) && msgType === "TEXT" && textBody) {
+              void whatsappBotService.handleInbound({
+                conversation,
+                textBody,
+                phoneNumberId,
+                msgType,
+              });
             }
           }
         }

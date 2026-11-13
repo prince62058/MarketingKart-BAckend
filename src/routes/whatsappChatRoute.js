@@ -1,12 +1,15 @@
 const express = require("express");
 const router = express.Router();
 const whatsappChatController = require("../controllers/whatsappChatController");
+const whatsappBotController = require("../controllers/whatsappBotController");
 const { authUser: auth } = require("../middlewares/authMidd");
 
 const { uploadWhatsAppMedia } = require("../middlewares/multer");
 const templateController = require("../controllers/whatsappTemplateController");
 
 router.get("/sync-status", auth, whatsappChatController.getSyncStatus);
+router.get("/bot-config", auth, whatsappBotController.getBotConfig);
+router.put("/bot-config", auth, whatsappBotController.updateBotConfig);
 router.get("/media/:messageId", auth, whatsappChatController.getMedia);
 router.get("/conversations", auth, whatsappChatController.getConversations);
 router.get("/conversations/:conversationId", auth, whatsappChatController.getMessages);
