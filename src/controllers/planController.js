@@ -138,7 +138,11 @@ exports.createPlan = async (req, res) => {
 
   const numPrice = Number(price) || 0;
   const numDuration = Number(duretion) || 1;
-  const computedDaily = dailySpendBudget || Math.round(numPrice / numDuration);
+  // All-inclusive price → net Meta ad spend after 35% (platform + GST + gateway)
+  const netAdSpend = Math.round(numPrice * 0.65);
+  const computedDaily =
+    dailySpendBudget ||
+    Math.round(numDuration > 0 ? netAdSpend / numDuration : netAdSpend);
   const computedInsta = instaBudget !== undefined && instaBudget !== null ? Number(instaBudget) : Math.round(computedDaily / 2);
   const computedFb = facebookBudget !== undefined && facebookBudget !== null ? Number(facebookBudget) : Math.round(computedDaily / 2);
 
@@ -187,16 +191,32 @@ exports.updatePlan = async (req, res) => {
     reach,
     leads,
   } = req.body;
+  const nextPrice = price !== undefined ? Number(price) : Number(planData?.price) || 0;
+  const nextDuration = duretion !== undefined ? Number(duretion) : Number(planData?.duretion) || 1;
+  const netAdSpend = Math.round(nextPrice * 0.65);
+  const nextDaily =
+    dailySpendBudget !== undefined && dailySpendBudget !== null && dailySpendBudget !== ""
+      ? Number(dailySpendBudget)
+      : Math.round(nextDuration > 0 ? netAdSpend / nextDuration : netAdSpend);
+  const nextInsta =
+    instaBudget !== undefined && instaBudget !== null
+      ? Number(instaBudget)
+      : Math.round(nextDaily / 2);
+  const nextFb =
+    facebookBudget !== undefined && facebookBudget !== null
+      ? Number(facebookBudget)
+      : Math.round(nextDaily / 2);
+
   const updateData = await planService.updatePlan(planData?._id, {
     advertisementTypeId,
     title,
     price,
     duretion,
-    dailySpendBudget,
+    dailySpendBudget: nextDaily,
     aiImageCount,
-    instaBudget,
+    instaBudget: nextInsta,
     googleBudget,
-    facebookBudget,
+    facebookBudget: nextFb,
     views,
     reach,
     leads,
