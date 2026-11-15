@@ -3,6 +3,7 @@ const { randomInt } = require('crypto');
 const { encryptText, decryptText } = require('../utils/cryptoUtils');
 const Account = require('../models/whatsappAccountModel');
 const Claim = require('../models/whatsappPhoneClaimModel');
+const whatsappTemplateService = require('./whatsappTemplateService');
 const version = () => process.env.META_GRAPH_API_VERSION || 'v22.0';
 const requiredScopes = ['whatsapp_business_management','whatsapp_business_messaging'];
 function validateGrant(grant, appId, wabaId, now = Date.now()) {
@@ -75,6 +76,7 @@ async function connectSignup({userId, code, wabaId, phoneNumberId, mode = 'NEW_O
   const subscribed = await api.post(`${base}/${wabaId}/subscribed_apps`, {}, {headers,timeout:15000});
   if (!subscribed.data?.success) throw new Error('WhatsApp webhook subscription failed. Retry signup.');
   const grant = debug.data.data;
+  const previousAccount = await Accounts.findOne({userId}).select('wabaId phoneNumberId').lean();
   const account = await Accounts.findOneAndUpdate({userId}, {$set:{
     wabaId,phoneNumberId,accessToken:token,phoneNumber:phone.display_phone_number,
     verifiedName:phone.verified_name || null,qualityRating:phone.quality_rating || null,
@@ -82,6 +84,18 @@ async function connectSignup({userId, code, wabaId, phoneNumberId, mode = 'NEW_O
     connectedVia:'EMBEDDED_SIGNUP',status:'CONNECTED',
     tokenExpiresAt:grant.expires_at ? new Date(grant.expires_at*1000) : null,
   }}, {upsert:true,new:true,runValidators:true});
+  try {
+    await whatsappTemplateService.syncTemplatesForConnectedAccount({
+      userId,
+      wabaId,
+      phoneNumberId,
+      accessToken: token,
+      previousWabaId: previousAccount?.wabaId || null,
+      previousPhoneNumberId: previousAccount?.phoneNumberId || null,
+    });
+  } catch (syncErr) {
+    console.warn('[Embedded Signup] Template sync failed:', syncErr.message);
+  }
   if(coexistence){
     // These are one-shot requests. Persist intent before sending so a timeout is not blindly replayed.
     for(const [syncType,key] of [['smb_app_state_sync','contacts'],['history','history']]){
@@ -190,12 +204,26 @@ async function connectFacebookAccount({userId, accessToken, wabaId, phoneNumberI
   if (String(claim?.userId) !== String(userId)) throw new Error('This number is already linked to another MarketingKart account.');
   const subscribed = await api.post(`${base}/${wabaId}/subscribed_apps`, {}, {headers,timeout:15000});
   if (!subscribed.data?.success) throw new Error('WhatsApp webhook subscription failed. Retry.');
-  return Accounts.findOneAndUpdate({userId}, {$set:{
+  const previousAccount = await Accounts.findOne({userId}).select('wabaId phoneNumberId').lean();
+  const account = await Accounts.findOneAndUpdate({userId}, {$set:{
     wabaId,phoneNumberId,accessToken:token,phoneNumber:phone.display_phone_number,
     verifiedName:phone.verified_name || null,qualityRating:phone.quality_rating || null,
     onboardingMode:'NEW_OR_MIGRATE',phoneStatus:phone.status,codeVerificationStatus:phone.code_verification_status,
     connectedVia:'FACEBOOK',status:'CONNECTED',
     tokenExpiresAt:grant.expires_at ? new Date(grant.expires_at*1000) : null,
   }}, {upsert:true,new:true,runValidators:true});
+  try {
+    await whatsappTemplateService.syncTemplatesForConnectedAccount({
+      userId,
+      wabaId,
+      phoneNumberId,
+      accessToken: token,
+      previousWabaId: previousAccount?.wabaId || null,
+      previousPhoneNumberId: previousAccount?.phoneNumberId || null,
+    });
+  } catch (syncErr) {
+    console.warn('[Facebook Connect] Template sync failed:', syncErr.message);
+  }
+  return account;
 }
 module.exports = {connectSignup,validateGrant,discoverFacebookAccounts,connectFacebookAccount};

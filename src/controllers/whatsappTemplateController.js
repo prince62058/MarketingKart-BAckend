@@ -221,6 +221,8 @@ exports.createTemplate = async (req, res) => {
       status: metaStatus,
       businessId: businessId || null,
       createdBy: req.user._id,
+      wabaId: account.wabaId || null,
+      phoneNumberId: account.phoneNumberId || null,
     });
 
     // If Meta rejected, still return success (saved locally) but include warning
@@ -246,12 +248,18 @@ exports.createTemplate = async (req, res) => {
 exports.getAllTemplates = async (req, res) => {
   try {
     const { page = 1, search = "", status = "", businessId } = req.query;
+    const account = await whatsappAccountModel
+      .findOne({ userId: req.user._id, status: "CONNECTED" })
+      .select("wabaId phoneNumberId")
+      .lean();
+
     const result = await whatsappTemplateService.getAllTemplates({
       page: parseInt(page),
       search,
       status,
       businessId,
       createdBy: req.user._id,
+      wabaId: account?.wabaId || null,
       isAdmin: req.user.userType === "ADMIN",
     });
     return res.status(200).json({ success: true, ...result });
@@ -319,11 +327,14 @@ exports.syncTemplates = async (req, res) => {
     }
 
     const credentials = { accessToken: account.accessToken, wabaId: account.wabaId };
+    const syncMeta = {
+      createdBy: req.user._id,
+      wabaId: account.wabaId,
+      phoneNumberId: account.phoneNumberId,
+    };
     let updatedCount = 0;
     try {
-      updatedCount = await whatsappTemplateService.syncFromMeta(credentials, {
-        createdBy: req.user._id,
-      });
+      updatedCount = await whatsappTemplateService.syncFromMeta(credentials, syncMeta);
     } catch (userTokenErr) {
       // Expired user token — fall back to system user token when it can access this WABA.
       const systemToken = process.env.systemUserAccessToken;
@@ -334,7 +345,7 @@ exports.syncTemplates = async (req, res) => {
       );
       updatedCount = await whatsappTemplateService.syncFromMeta(
         { accessToken: systemToken, wabaId: account.wabaId },
-        { createdBy: req.user._id }
+        syncMeta
       );
     }
 

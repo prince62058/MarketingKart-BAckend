@@ -130,6 +130,11 @@ exports.connectAccount = async (req, res) => {
       });
     }
 
+    const previousAccount = await whatsappAccountModel
+      .findOne({ userId })
+      .select("wabaId phoneNumberId")
+      .lean();
+
     // Upsert the account mapping
     const account = await whatsappAccountModel.findOneAndUpdate(
       { userId },
@@ -149,11 +154,18 @@ exports.connectAccount = async (req, res) => {
     );
 
     let templatesSynced = 0;
+    let templatesCleared = 0;
     try {
-      templatesSynced = await whatsappTemplateService.syncFromMeta(
-        { accessToken, wabaId },
-        { createdBy: userId }
-      );
+      const syncResult = await whatsappTemplateService.syncTemplatesForConnectedAccount({
+        userId,
+        wabaId,
+        phoneNumberId,
+        accessToken,
+        previousWabaId: previousAccount?.wabaId || null,
+        previousPhoneNumberId: previousAccount?.phoneNumberId || null,
+      });
+      templatesSynced = syncResult.templatesSynced;
+      templatesCleared = syncResult.templatesCleared;
     } catch (syncErr) {
       console.warn("[Account Connect] Template auto-sync failed:", syncErr.message);
     }
@@ -163,6 +175,7 @@ exports.connectAccount = async (req, res) => {
       message: "WhatsApp Account Connected Successfully",
       data: buildAccountResponse(account),
       templatesSynced,
+      templatesCleared,
     });
   } catch (error) {
     console.error("[Account Connect] Error:", error.message);
@@ -349,6 +362,11 @@ exports.connectViaFacebook = async (req, res) => {
     // Use the token that was successful in discovering this account
     const tokenToStore = selectedAccount.tokenUsed || activeToken;
 
+    const previousAccount = await whatsappAccountModel
+      .findOne({ userId })
+      .select("wabaId phoneNumberId")
+      .lean();
+
     // ─── Step 4: Save to DB ──────────────────────────────────────────────
     const account = await whatsappAccountModel.findOneAndUpdate(
       { userId },
@@ -369,22 +387,30 @@ exports.connectViaFacebook = async (req, res) => {
     );
 
     let templatesSynced = 0;
+    let templatesCleared = 0;
     try {
-      templatesSynced = await whatsappTemplateService.syncFromMeta(
-        { accessToken: tokenToStore, wabaId: selectedAccount.wabaId },
-        { createdBy: userId }
-      );
+      const syncResult = await whatsappTemplateService.syncTemplatesForConnectedAccount({
+        userId,
+        wabaId: selectedAccount.wabaId,
+        phoneNumberId: selectedAccount.phoneNumberId,
+        accessToken: tokenToStore,
+        previousWabaId: previousAccount?.wabaId || null,
+        previousPhoneNumberId: previousAccount?.phoneNumberId || null,
+      });
+      templatesSynced = syncResult.templatesSynced;
+      templatesCleared = syncResult.templatesCleared;
     } catch (syncErr) {
       console.warn("[FB Auth] Template auto-sync failed:", syncErr.message);
     }
 
-    console.log(`[FB Auth] ✅ Connected! Phone: ${selectedAccount.phoneNumber}, Templates synced: ${templatesSynced}`);
+    console.log(`[FB Auth] ✅ Connected! Phone: ${selectedAccount.phoneNumber}, Templates synced: ${templatesSynced}, cleared: ${templatesCleared}`);
 
     return res.status(200).json({
       success: true,
       message: "Facebook se WhatsApp connect ho gaya! Account active hai.",
       data: buildAccountResponse(account),
       templatesSynced,
+      templatesCleared,
     });
 
   } catch (error) {

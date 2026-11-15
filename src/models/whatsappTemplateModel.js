@@ -83,6 +83,17 @@ const whatsappTemplateSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "userModel",
     },
+    // Templates belong to a Meta WABA/phone — cleared when the user connects a different number.
+    wabaId: {
+      type: String,
+      default: null,
+      index: true,
+    },
+    phoneNumberId: {
+      type: String,
+      default: null,
+      index: true,
+    },
     businessId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "business",
@@ -97,5 +108,6 @@ const whatsappTemplateSchema = new mongoose.Schema(
 
 whatsappTemplateSchema.index({ status: 1 });
 whatsappTemplateSchema.index({ businessId: 1 });
+whatsappTemplateSchema.index({ createdBy: 1, wabaId: 1 });
 
 module.exports = mongoose.model("whatsappTemplate", whatsappTemplateSchema);
