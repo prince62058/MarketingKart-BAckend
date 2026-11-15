@@ -15,7 +15,18 @@ const refuse = (res, message) =>
 
 // Checks what the admin form sent. With `partial` only the fields present are checked (an edit).
 // Resolves to an error message, or null when the input is fine.
+async function resolveAdvertisementTypeId(body) {
+  const raw = String(body.advertisementTypeId || body.adTypeId || "").trim();
+  if (/^[0-9a-f]{24}$/i.test(raw) && (await advertisementModel.exists({ _id: raw }))) return raw;
+  const title = String(body.advertisementTitle || body.ad || "").trim();
+  if (!title) return "";
+  const match = await advertisementModel.findOne({ title }).select("_id");
+  return match ? String(match._id) : "";
+}
+
 async function planInputProblem(body, { partial }) {
+  const resolvedTypeId = await resolveAdvertisementTypeId(body);
+  if (resolvedTypeId) body.advertisementTypeId = resolvedTypeId;
   const has = key => body[key] !== undefined && body[key] !== null && body[key] !== "";
   if (!partial || has("title")) {
     const title = typeof body.title === "string" ? body.title.trim() : "";
@@ -146,6 +157,7 @@ exports.createPlan = async (req, res) => {
   const computedInsta = instaBudget !== undefined && instaBudget !== null ? Number(instaBudget) : Math.round(computedDaily / 2);
   const computedFb = facebookBudget !== undefined && facebookBudget !== null ? Number(facebookBudget) : Math.round(computedDaily / 2);
 
+  const wantsHidden = req.body.on === false || req.body.on === "false" || req.body.disable === true;
   const createData = await planService.createPlan({
     advertisementTypeId,
     title,
@@ -159,6 +171,7 @@ exports.createPlan = async (req, res) => {
     views: views ? String(views) : "N/A",
     reach: reach ? String(reach) : "N/A",
     leads: leads ? String(leads) : "N/A",
+    disable: wantsHidden,
   });
   res
     .status(statusCodes.Created)
@@ -248,7 +261,8 @@ exports.getAllPlan = async (req, res) => {
   const skip = (page - 1) * limit;
   let query = {};
   if (search) {
-    query.title = new RegExp(String(search), "i");
+    const escaped = String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    query.title = new RegExp(escaped, "i");
   }
   if (disable !== undefined && disable !== "") {
     query.disable = disable === "true" || disable === true || disable === "1";

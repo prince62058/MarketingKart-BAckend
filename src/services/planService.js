@@ -9,8 +9,8 @@ exports.getAllPlan = async (query, skip, limit = 200) => {
   return await planModel
     .find(query)
     .populate("advertisementTypeId")
+    .sort({ price: 1, createdAt: 1 })
     .skip(skip || 0)
-    .sort({ price: 1 })
     .limit(safeLimit)
     .exec();
 };
