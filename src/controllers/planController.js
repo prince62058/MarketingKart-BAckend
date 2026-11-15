@@ -38,12 +38,14 @@ async function planInputProblem(body, { partial }) {
     if (!Number.isFinite(price) || price <= 0 || price > 10000000) return "Enter the total price in rupees (more than 0).";
   }
   if (!partial || has("duretion")) {
-    const days = Number(body.duretion);
-    if (!Number.isInteger(days) || days < 1 || days > 365) return "Duration must be a whole number of days from 1 to 365.";
+    const days = Math.round(Number(body.duretion));
+    if (!Number.isFinite(days) || days < 1 || days > 365) return "Duration must be a whole number of days from 1 to 365.";
+    body.duretion = days;
   }
   if (has("aiImageCount")) {
-    const count = Number(body.aiImageCount);
-    if (!Number.isInteger(count) || count < 0 || count > 100) return "AI images must be a whole number from 0 to 100.";
+    const count = Math.round(Number(body.aiImageCount));
+    if (!Number.isFinite(count) || count < 0 || count > 100) return "AI images must be a whole number from 0 to 100.";
+    body.aiImageCount = count;
   }
   if (!partial || has("advertisementTypeId")) {
     const id = String(body.advertisementTypeId || "");
@@ -157,7 +159,6 @@ exports.createPlan = async (req, res) => {
   const computedInsta = instaBudget !== undefined && instaBudget !== null ? Number(instaBudget) : Math.round(computedDaily / 2);
   const computedFb = facebookBudget !== undefined && facebookBudget !== null ? Number(facebookBudget) : Math.round(computedDaily / 2);
 
-  const wantsHidden = req.body.on === false || req.body.on === "false" || req.body.disable === true;
   const createData = await planService.createPlan({
     advertisementTypeId,
     title,
@@ -171,15 +172,16 @@ exports.createPlan = async (req, res) => {
     views: views ? String(views) : "N/A",
     reach: reach ? String(reach) : "N/A",
     leads: leads ? String(leads) : "N/A",
-    disable: wantsHidden,
+    disable: req.body.on === false || req.body.on === "false" || req.body.disable === true,
   });
+  const saved = await planModel.findById(createData._id).populate("advertisementTypeId");
   res
     .status(statusCodes.Created)
     .json(
       responseBuilder(
         apiResponseStatusCode[201],
         defaultResponseMessage.CREATED,
-        createData
+        saved || createData
       )
     );
 };
@@ -263,6 +265,11 @@ exports.getAllPlan = async (req, res) => {
   if (search) {
     const escaped = String(search).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     query.title = new RegExp(escaped, "i");
+  }
+  const adTitle = String(req.query.ad || "").trim();
+  if (adTitle) {
+    const adDoc = await advertisementModel.findOne({ title: adTitle }).select("_id");
+    query.advertisementTypeId = adDoc?._id || new mongoose.Types.ObjectId();
   }
   if (disable !== undefined && disable !== "") {
     query.disable = disable === "true" || disable === true || disable === "1";
