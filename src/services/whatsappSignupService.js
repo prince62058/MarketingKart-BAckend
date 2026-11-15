@@ -122,9 +122,18 @@ const phoneFields = 'id,display_phone_number,verified_name,quality_rating,status
 const MAX_WABAS = 10;
 
 function eligibility(phone) {
-  if (phone.is_on_biz_app === true) return 'This number is in the WhatsApp Business app. Use Connect WhatsApp Business App instead.';
-  if (phone.platform_type && phone.platform_type !== 'CLOUD_API') return 'This number is not on the WhatsApp Cloud API.';
-  if (phone.status !== 'CONNECTED') return 'This number is not active yet. Use Connect WhatsApp to add and verify a new number.';
+  // Already on Cloud API + CONNECTED → customer can re-link via Existing API / Facebook
+  // even if the number also lives in WhatsApp Business (coexistence). Forcing Embedded
+  // Signup "Add number" on these hits Meta #3441104 (marketing messages already enabled).
+  if (phone.platform_type && phone.platform_type !== 'CLOUD_API') {
+    if (phone.is_on_biz_app === true) {
+      return 'This number is in the WhatsApp Business app but not on Cloud API yet. Use Connect WhatsApp Business App.';
+    }
+    return 'This number is not on the WhatsApp Cloud API.';
+  }
+  if (phone.status !== 'CONNECTED') {
+    return 'This number is not active yet. Use New or migrate number only for unused numbers — do not re-add a number that already has marketing messages on Meta.';
+  }
   return null;
 }
 
@@ -205,10 +214,11 @@ async function connectFacebookAccount({userId, accessToken, wabaId, phoneNumberI
   const subscribed = await api.post(`${base}/${wabaId}/subscribed_apps`, {}, {headers,timeout:15000});
   if (!subscribed.data?.success) throw new Error('WhatsApp webhook subscription failed. Retry.');
   const previousAccount = await Accounts.findOne({userId}).select('wabaId phoneNumberId').lean();
+  const onboardingMode = phone.is_on_biz_app === true ? 'BUSINESS_APP' : 'NEW_OR_MIGRATE';
   const account = await Accounts.findOneAndUpdate({userId}, {$set:{
     wabaId,phoneNumberId,accessToken:token,phoneNumber:phone.display_phone_number,
     verifiedName:phone.verified_name || null,qualityRating:phone.quality_rating || null,
-    onboardingMode:'NEW_OR_MIGRATE',phoneStatus:phone.status,codeVerificationStatus:phone.code_verification_status,
+    onboardingMode,phoneStatus:phone.status,codeVerificationStatus:phone.code_verification_status,
     connectedVia:'FACEBOOK',status:'CONNECTED',
     tokenExpiresAt:grant.expires_at ? new Date(grant.expires_at*1000) : null,
   }}, {upsert:true,new:true,runValidators:true});

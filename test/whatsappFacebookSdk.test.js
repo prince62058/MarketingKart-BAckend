@@ -17,23 +17,29 @@ function mocks(overrides={}){
   if(url.endsWith('/phone_numbers'))return {data:{data:overrides.phones||[phone]}};
   return {data:{id:'123456',name:'Shop WABA'}};
  },post:async(url,body,opts)=>{calls.push(['post',url,body,opts]);return {data:{success:!overrides.postFailure}};}},
- Account:{findOne:async()=>overrides.existing||null,findOneAndUpdate:async(query,update)=>{calls.push(['save',query,update]);return update.$set;}},
+ Account:(()=>{
+  const row=()=>overrides.previous||overrides.existing||null;
+  const chain=()=>{const c={select(){return c;},lean:async()=>row(),then(resolve,reject){return Promise.resolve(row()).then(resolve,reject);}};return c;};
+  return {findOne:()=>chain(),findOneAndUpdate:async(query,update)=>{calls.push(['save',query,update]);return update.$set;}};
+ })(),
  Claim:{findOneAndUpdate:async()=>({userId:overrides.claimUser||'tenant-a'})}};
 }
 const writes=deps=>deps.calls.filter(c=>c[0]==='post'||c[0]==='save');
 
 test('discovery lists only the accounts the token was granted, and marks which numbers can be used',async()=>{
  const deps=mocks({phones:[
-  {id:'1',display_phone_number:'+911',status:'CONNECTED'},
-  {id:'2',display_phone_number:'+912',status:'PENDING'},
-  {id:'3',display_phone_number:'+913',status:'CONNECTED',is_on_biz_app:true},
+  {id:'1',display_phone_number:'+911',status:'CONNECTED',platform_type:'CLOUD_API'},
+  {id:'2',display_phone_number:'+912',status:'PENDING',platform_type:'CLOUD_API'},
+  // Coexistence Cloud API number — reconnect via Existing API (do not force Add-number).
+  {id:'3',display_phone_number:'+913',status:'CONNECTED',platform_type:'CLOUD_API',is_on_biz_app:true},
+  {id:'4',display_phone_number:'+914',status:'CONNECTED',platform_type:'ON_PREMISE',is_on_biz_app:true},
  ]});
  const accounts=await discoverFacebookAccounts({accessToken:sdkToken},deps);
  assert.equal(accounts.length,1);
  assert.equal(accounts[0].wabaId,'123456');
- assert.deepEqual(accounts[0].phones.map(p=>p.eligible),[true,false,false]);
+ assert.deepEqual(accounts[0].phones.map(p=>p.eligible),[true,false,true,false]);
  assert.match(accounts[0].phones[1].reason,/not active/);
- assert.match(accounts[0].phones[2].reason,/Business app/);
+ assert.match(accounts[0].phones[3].reason,/Cloud API|Business app/);
  assert.equal(writes(deps).length,0,'discovery never writes anything');
  assert.ok(deps.calls.filter(c=>c[1].endsWith('/phone_numbers')).every(c=>c[2].headers.Authorization===`Bearer ${sdkToken}`));
 });
@@ -60,10 +66,10 @@ test('connecting stores a long-lived token for the chosen number and subscribes 
  assert.ok(!done.some(c=>c[1]&&String(c[1]).endsWith('/register')),'an existing number is never re-registered');
 });
 
-test('numbers that are not active, in the Business app, or someone else\'s cannot be connected',async()=>{
+test('numbers that are not active, not on Cloud API, or someone else\'s cannot be connected',async()=>{
  const bad=[
   [{phone:{status:'PENDING'}},/not active/],
-  [{phone:{is_on_biz_app:true}},/Business app/],
+  [{phone:{is_on_biz_app:true,platform_type:'ON_PREMISE'}},/Cloud API|Business app/],
   [{phones:[{id:'111111'}]},/does not belong/],
   [{existing:{userId:'tenant-b'}},/already linked/],
   [{claimUser:'tenant-b'}],
@@ -76,4 +82,12 @@ test('numbers that are not active, in the Business app, or someone else\'s canno
   assert.equal(writes(deps).length,0,`no Meta or database writes for ${JSON.stringify(opts)}`);
  }
  await assert.rejects(connectFacebookAccount({...input,phoneNumberId:'abc'},mocks()),/Select a WhatsApp number/);
+});
+
+test('coexistence Cloud API numbers reconnect via Existing API without re-registering',async()=>{
+ const deps=mocks({phone:{is_on_biz_app:true,platform_type:'CLOUD_API',status:'CONNECTED'}});
+ const account=await connectFacebookAccount(input,deps);
+ assert.equal(account.status,'CONNECTED');
+ assert.equal(account.onboardingMode,'BUSINESS_APP');
+ assert.ok(!writes(deps).some(c=>c[1]&&String(c[1]).endsWith('/register')));
 });
