@@ -1,528 +1,148 @@
 const advertisementModel = require("../models/advertisementModel");
 const planModel = require("../models/planModel");
 
-const AD_TYPES_WITH_PLANS = [
-  {
-    type: {
-      title: "Lead On WhatsApp",
-      description: "Get high-intent direct customer inquiries & instant orders on WhatsApp",
-      advertisementType: "WHATSAPP_MESSAGES",
-      minimumBudget: 200,
-      isFacebook: true,
-      isInstagram: true,
-      isGoogle: false,
-    },
-    plans: [
-      {
-        title: "Starter Plan",
-        price: 500,
-        duretion: 2,
-        dailySpendBudget: 250,
-        facebookBudget: 125,
-        instaBudget: 125,
-        leads: "15 - 25",
-        reach: "2.5k - 5k",
-        views: "3k - 6k",
-        aiImageCount: 3,
-      },
-      {
-        title: "Growth Plan (Popular)",
-        price: 1999,
-        duretion: 4,
-        dailySpendBudget: 500,
-        facebookBudget: 250,
-        instaBudget: 250,
-        leads: "60 - 110",
-        reach: "9k - 15k",
-        views: "10k - 18k",
-        aiImageCount: 5,
-      },
-      {
-        title: "Pro Business Plan",
-        price: 3999,
-        duretion: 10,
-        dailySpendBudget: 400,
-        facebookBudget: 200,
-        instaBudget: 200,
-        leads: "130 - 240",
-        reach: "25k - 45k",
-        views: "30k - 50k",
-        aiImageCount: 10,
-      },
-      {
-        title: "Scale Enterprise Plan",
-        price: 7999,
-        duretion: 30,
-        dailySpendBudget: 266,
-        facebookBudget: 133,
-        instaBudget: 133,
-        leads: "280 - 500",
-        reach: "65k - 120k",
-        views: "80k - 150k",
-        aiImageCount: 20,
-      },
-    ],
+/** Meta net spend after platform fees (matches planController create/update). */
+function platformBudgets(price, days) {
+  const netAdSpend = Math.round(Number(price) * 0.65);
+  const dailySpendBudget = Math.round(netAdSpend / Number(days));
+  const half = Math.round(dailySpendBudget / 2);
+  return { dailySpendBudget, facebookBudget: half, instaBudget: half };
+}
+
+/**
+ * Live Ad Packages catalog — Lead On WhatsApp only.
+ * These four replace the old per-objective "Starter Plan" seed that wiped admin edits on every boot.
+ */
+const LEAD_ON_WHATSAPP = {
+  type: {
+    title: "Lead On WhatsApp",
+    description: "Get high-intent direct customer inquiries & instant orders on WhatsApp",
+    advertisementType: "WHATSAPP_MESSAGES",
+    minimumBudget: 200,
+    isFacebook: true,
+    isInstagram: true,
+    isGoogle: false,
   },
-  {
-    type: {
-      title: "Lead On Call",
-      description: "Receive instant phone inquiries and direct calls from prospective clients",
-      advertisementType: "CALLS",
-      minimumBudget: 200,
-      isFacebook: true,
-      isInstagram: true,
-      isGoogle: false,
+  plans: [
+    {
+      title: "Launch Package",
+      price: 1499,
+      duretion: 3,
+      ...platformBudgets(1499, 3),
+      views: "10k - 19k",
+      reach: "15k - 20k",
+      leads: "15 - 25",
+      aiImageCount: 3,
     },
-    plans: [
-      {
-        title: "Starter Plan",
-        price: 500,
-        duretion: 2,
-        dailySpendBudget: 250,
-        facebookBudget: 125,
-        instaBudget: 125,
-        leads: "8 - 15",
-        reach: "2k - 4k",
-        views: "3k - 5k",
-        aiImageCount: 3,
-      },
-      {
-        title: "Growth Plan (Popular)",
-        price: 1999,
-        duretion: 4,
-        dailySpendBudget: 500,
-        facebookBudget: 250,
-        instaBudget: 250,
-        leads: "25 - 50",
-        reach: "8k - 14k",
-        views: "10k - 16k",
-        aiImageCount: 5,
-      },
-      {
-        title: "Pro Business Plan",
-        price: 3999,
-        duretion: 10,
-        dailySpendBudget: 400,
-        facebookBudget: 200,
-        instaBudget: 200,
-        leads: "60 - 120",
-        reach: "22k - 40k",
-        views: "28k - 48k",
-        aiImageCount: 10,
-      },
-      {
-        title: "Scale Enterprise Plan",
-        price: 7999,
-        duretion: 30,
-        dailySpendBudget: 266,
-        facebookBudget: 133,
-        instaBudget: 133,
-        leads: "150 - 300",
-        reach: "60k - 110k",
-        views: "75k - 140k",
-        aiImageCount: 20,
-      },
-    ],
-  },
-  {
-    type: {
-      title: "Lead Ads",
-      description: "Collect high-volume verified leads via pre-filled native Meta Instant Forms",
-      advertisementType: "LEADS",
-      minimumBudget: 200,
-      isFacebook: true,
-      isInstagram: true,
-      isGoogle: false,
+    {
+      title: "Scale Package",
+      price: 2000,
+      duretion: 3,
+      ...platformBudgets(2000, 3),
+      views: "10k - 20k",
+      reach: "20k - 30k",
+      leads: "20 - 35",
+      aiImageCount: 5,
     },
-    plans: [
-      {
-        title: "Starter Plan",
-        price: 500,
-        duretion: 2,
-        dailySpendBudget: 250,
-        facebookBudget: 125,
-        instaBudget: 125,
-        leads: "10 - 20",
-        reach: "2.5k - 5k",
-        views: "3k - 6k",
-        aiImageCount: 3,
-      },
-      {
-        title: "Growth Plan (Popular)",
-        price: 1999,
-        duretion: 4,
-        dailySpendBudget: 500,
-        facebookBudget: 250,
-        instaBudget: 250,
-        leads: "35 - 70",
-        reach: "9k - 16k",
-        views: "11k - 19k",
-        aiImageCount: 5,
-      },
-      {
-        title: "Pro Business Plan",
-        price: 3999,
-        duretion: 10,
-        dailySpendBudget: 400,
-        facebookBudget: 200,
-        instaBudget: 200,
-        leads: "80 - 160",
-        reach: "25k - 45k",
-        views: "30k - 55k",
-        aiImageCount: 10,
-      },
-      {
-        title: "Scale Enterprise Plan",
-        price: 7999,
-        duretion: 30,
-        dailySpendBudget: 266,
-        facebookBudget: 133,
-        instaBudget: 133,
-        leads: "200 - 400",
-        reach: "70k - 130k",
-        views: "85k - 160k",
-        aiImageCount: 20,
-      },
-    ],
-  },
-  {
-    type: {
-      title: "Sales Ads",
-      description: "Drive direct e-commerce sales, catalog purchases & store checkout",
-      advertisementType: "PRODUCT_CATALOG_SALES",
-      minimumBudget: 500,
-      isFacebook: true,
-      isInstagram: true,
-      isGoogle: false,
+    {
+      title: "Pro Ads",
+      price: 3599,
+      duretion: 5,
+      ...platformBudgets(3599, 5),
+      views: "30k - 57k",
+      reach: "24k - 45k",
+      leads: "22 - 37",
+      aiImageCount: 8,
     },
-    plans: [
-      {
-        title: "Starter Plan",
-        price: 999,
-        duretion: 3,
-        dailySpendBudget: 333,
-        facebookBudget: 166,
-        instaBudget: 166,
-        leads: "5 - 12",
-        reach: "5k - 10k",
-        views: "6k - 12k",
-        aiImageCount: 3,
-      },
-      {
-        title: "Growth Plan (Popular)",
-        price: 2499,
-        duretion: 7,
-        dailySpendBudget: 357,
-        facebookBudget: 178,
-        instaBudget: 178,
-        leads: "15 - 35",
-        reach: "15k - 30k",
-        views: "20k - 40k",
-        aiImageCount: 5,
-      },
-      {
-        title: "Pro Business Plan",
-        price: 4999,
-        duretion: 15,
-        dailySpendBudget: 333,
-        facebookBudget: 166,
-        instaBudget: 166,
-        leads: "35 - 80",
-        reach: "35k - 70k",
-        views: "45k - 90k",
-        aiImageCount: 10,
-      },
-      {
-        title: "Scale Enterprise Plan",
-        price: 9999,
-        duretion: 30,
-        dailySpendBudget: 333,
-        facebookBudget: 166,
-        instaBudget: 166,
-        leads: "80 - 200",
-        reach: "80k - 160k",
-        views: "100k - 200k",
-        aiImageCount: 20,
-      },
-    ],
-  },
-  {
-    type: {
-      title: "Traffic Ads",
-      description: "Send high volumes of targeted visitors to your website or landing page",
-      advertisementType: "WEBSITE_VISITORS",
-      minimumBudget: 200,
-      isFacebook: true,
-      isInstagram: true,
-      isGoogle: false,
+    {
+      title: "Dominate Package",
+      price: 5999,
+      duretion: 7,
+      ...platformBudgets(5999, 7),
+      views: "30k - 55k",
+      reach: "40k - 75k",
+      leads: "30 - 55",
+      aiImageCount: 12,
     },
-    plans: [
-      {
-        title: "Starter Plan",
-        price: 499,
-        duretion: 2,
-        dailySpendBudget: 250,
-        facebookBudget: 125,
-        instaBudget: 125,
-        leads: "500 - 1.2k",
-        reach: "15k - 30k",
-        views: "18k - 35k",
-        aiImageCount: 3,
-      },
-      {
-        title: "Growth Plan (Popular)",
-        price: 1499,
-        duretion: 5,
-        dailySpendBudget: 300,
-        facebookBudget: 150,
-        instaBudget: 150,
-        leads: "1.8k - 4k",
-        reach: "45k - 90k",
-        views: "55k - 110k",
-        aiImageCount: 5,
-      },
-      {
-        title: "Pro Business Plan",
-        price: 2999,
-        duretion: 12,
-        dailySpendBudget: 250,
-        facebookBudget: 125,
-        instaBudget: 125,
-        leads: "4k - 9k",
-        reach: "100k - 200k",
-        views: "120k - 240k",
-        aiImageCount: 10,
-      },
-      {
-        title: "Scale Enterprise Plan",
-        price: 5999,
-        duretion: 30,
-        dailySpendBudget: 200,
-        facebookBudget: 100,
-        instaBudget: 100,
-        leads: "9k - 22k",
-        reach: "250k - 500k",
-        views: "300k - 600k",
-        aiImageCount: 20,
-      },
-    ],
-  },
-  {
-    type: {
-      title: "App Install Ads",
-      description: "Get verified mobile app installs from Google Play Store & Apple App Store",
-      advertisementType: "APP_INSTALLS",
-      minimumBudget: 500,
-      isFacebook: true,
-      isInstagram: true,
-      isGoogle: false,
-    },
-    plans: [
-      {
-        title: "Starter Plan",
-        price: 999,
-        duretion: 3,
-        dailySpendBudget: 333,
-        facebookBudget: 166,
-        instaBudget: 166,
-        leads: "30 - 70",
-        reach: "12k - 25k",
-        views: "15k - 30k",
-        aiImageCount: 3,
-      },
-      {
-        title: "Growth Plan (Popular)",
-        price: 2499,
-        duretion: 7,
-        dailySpendBudget: 357,
-        facebookBudget: 178,
-        instaBudget: 178,
-        leads: "90 - 200",
-        reach: "35k - 70k",
-        views: "45k - 90k",
-        aiImageCount: 5,
-      },
-      {
-        title: "Pro Business Plan",
-        price: 4999,
-        duretion: 15,
-        dailySpendBudget: 333,
-        facebookBudget: 166,
-        instaBudget: 166,
-        leads: "220 - 500",
-        reach: "80k - 160k",
-        views: "100k - 200k",
-        aiImageCount: 10,
-      },
-      {
-        title: "Scale Enterprise Plan",
-        price: 8999,
-        duretion: 30,
-        dailySpendBudget: 300,
-        facebookBudget: 150,
-        instaBudget: 150,
-        leads: "500 - 1.2k",
-        reach: "200k - 400k",
-        views: "250k - 500k",
-        aiImageCount: 20,
-      },
-    ],
-  },
-  {
-    type: {
-      title: "Engagement Ads",
-      description: "Boost likes, shares, comments, video views & profile visits",
-      advertisementType: "POST_ENGAGEMENT",
-      minimumBudget: 200,
-      isFacebook: true,
-      isInstagram: true,
-      isGoogle: false,
-    },
-    plans: [
-      {
-        title: "Starter Plan",
-        price: 499,
-        duretion: 2,
-        dailySpendBudget: 250,
-        facebookBudget: 125,
-        instaBudget: 125,
-        leads: "1k - 2.5k",
-        reach: "12k - 25k",
-        views: "15k - 30k",
-        aiImageCount: 3,
-      },
-      {
-        title: "Growth Plan (Popular)",
-        price: 1499,
-        duretion: 5,
-        dailySpendBudget: 300,
-        facebookBudget: 150,
-        instaBudget: 150,
-        leads: "3.5k - 8k",
-        reach: "40k - 80k",
-        views: "50k - 100k",
-        aiImageCount: 5,
-      },
-      {
-        title: "Pro Business Plan",
-        price: 2999,
-        duretion: 12,
-        dailySpendBudget: 250,
-        facebookBudget: 125,
-        instaBudget: 125,
-        leads: "8k - 20k",
-        reach: "90k - 180k",
-        views: "110k - 220k",
-        aiImageCount: 10,
-      },
-      {
-        title: "Scale Enterprise Plan",
-        price: 5999,
-        duretion: 30,
-        dailySpendBudget: 200,
-        facebookBudget: 100,
-        instaBudget: 100,
-        leads: "20k - 50k",
-        reach: "220k - 450k",
-        views: "280k - 550k",
-        aiImageCount: 20,
-      },
-    ],
-  },
-  {
-    type: {
-      title: "Awareness Ads",
-      description: "Maximize local brand reach, video views & store location awareness",
-      advertisementType: "VIDEO_VIEWS",
-      minimumBudget: 200,
-      isFacebook: true,
-      isInstagram: true,
-      isGoogle: false,
-    },
-    plans: [
-      {
-        title: "Starter Plan",
-        price: 499,
-        duretion: 2,
-        dailySpendBudget: 250,
-        facebookBudget: 125,
-        instaBudget: 125,
-        leads: "-",
-        reach: "25k - 50k",
-        views: "35k - 70k",
-        aiImageCount: 3,
-      },
-      {
-        title: "Growth Plan (Popular)",
-        price: 1499,
-        duretion: 5,
-        dailySpendBudget: 300,
-        facebookBudget: 150,
-        instaBudget: 150,
-        leads: "-",
-        reach: "80k - 160k",
-        views: "110k - 220k",
-        aiImageCount: 5,
-      },
-      {
-        title: "Pro Business Plan",
-        price: 2999,
-        duretion: 12,
-        dailySpendBudget: 250,
-        facebookBudget: 125,
-        instaBudget: 125,
-        leads: "-",
-        reach: "180k - 360k",
-        views: "250k - 500k",
-        aiImageCount: 10,
-      },
-      {
-        title: "Scale Enterprise Plan",
-        price: 5999,
-        duretion: 30,
-        dailySpendBudget: 200,
-        facebookBudget: 100,
-        instaBudget: 100,
-        leads: "-",
-        reach: "450k - 900k",
-        views: "600k - 1.2M",
-        aiImageCount: 20,
-      },
-    ],
-  },
+  ],
+};
+
+const CANONICAL_TITLES = LEAD_ON_WHATSAPP.plans.map((p) => p.title);
+
+/** Old seed titles that used to recreate on every server restart. */
+const LEGACY_SEED_TITLES = [
+  "Starter Plan",
+  "Growth Plan (Popular)",
+  "Pro Business Plan",
+  "Scale Enterprise Plan",
 ];
 
 async function seedAdTypesAndPlans() {
   try {
-    for (const group of AD_TYPES_WITH_PLANS) {
-      // 1. Upsert Advertisement Type
-      const adTypeDoc = await advertisementModel.findOneAndUpdate(
-        { title: group.type.title },
+    const adTypeDoc = await advertisementModel.findOneAndUpdate(
+      { title: LEAD_ON_WHATSAPP.type.title },
+      { $set: { ...LEAD_ON_WHATSAPP.type, disable: false } },
+      { upsert: true, new: true }
+    );
+
+    const legacyCount = await planModel.countDocuments({
+      title: { $in: LEGACY_SEED_TITLES },
+    });
+    const canonicalCount = await planModel.countDocuments({
+      advertisementTypeId: adTypeDoc._id,
+      title: { $in: CANONICAL_TITLES },
+    });
+    const otherCount = await planModel.countDocuments({
+      $or: [
+        { advertisementTypeId: { $ne: adTypeDoc._id } },
+        {
+          advertisementTypeId: adTypeDoc._id,
+          title: { $nin: CANONICAL_TITLES },
+        },
+      ],
+    });
+
+    // Catalog already correct — do not overwrite admin edits on every boot.
+    if (legacyCount === 0 && canonicalCount === CANONICAL_TITLES.length && otherCount === 0) {
+      console.log(
+        "ℹ️ Ad Packages catalog OK (Launch / Scale / Pro Ads / Dominate). Skipping seed."
+      );
+      return;
+    }
+
+    // Upsert the four packages by title (stable ids when names already exist).
+    for (const p of LEAD_ON_WHATSAPP.plans) {
+      await planModel.findOneAndUpdate(
+        { advertisementTypeId: adTypeDoc._id, title: p.title },
         {
           $set: {
-            ...group.type,
+            ...p,
+            advertisementTypeId: adTypeDoc._id,
             disable: false,
           },
         },
         { upsert: true, new: true }
       );
-
-      // 2. Delete existing plans for this adType to avoid duplicates or stale data
-      await planModel.deleteMany({ advertisementTypeId: adTypeDoc._id });
-
-      // 3. Insert fresh plans
-      for (const p of group.plans) {
-        await planModel.create({
-          ...p,
-          advertisementTypeId: adTypeDoc._id,
-          disable: false,
-        });
-      }
     }
-    console.log("✅ Seeded all Advertisement Types and distinct Dynamic Plans successfully!");
+
+    // Drop any other Lead On WhatsApp package that is not in the catalog.
+    await planModel.deleteMany({
+      advertisementTypeId: adTypeDoc._id,
+      title: { $nin: CANONICAL_TITLES },
+    });
+
+    // Only these four packages should exist anywhere in Ad Packages.
+    await planModel.deleteMany({
+      advertisementTypeId: { $ne: adTypeDoc._id },
+    });
+
+    console.log(
+      "✅ Ad Packages restored to Lead On WhatsApp:",
+      CANONICAL_TITLES.join(", ")
+    );
   } catch (error) {
     console.error("❌ Failed to seed ad types and plans:", error);
   }
 }
 
-module.exports = { seedAdTypesAndPlans };
+module.exports = { seedAdTypesAndPlans, LEAD_ON_WHATSAPP };
