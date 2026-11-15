@@ -4,13 +4,14 @@ exports.createPlan = async (data) => {
   return await planModel.create(data);
 };
 
-exports.getAllPlan = async (query, skip) => {
+exports.getAllPlan = async (query, skip, limit = 200) => {
+  const safeLimit = Math.min(500, Math.max(1, Number(limit) || 200));
   return await planModel
     .find(query)
     .populate("advertisementTypeId")
     .skip(skip || 0)
     .sort({ price: 1 })
-    .limit(200)
+    .limit(safeLimit)
     .exec();
 };
 

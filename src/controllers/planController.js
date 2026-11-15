@@ -235,25 +235,29 @@ exports.updatePlan = async (req, res) => {
 //  getAll
 
 exports.getAllPlan = async (req, res) => {
-  const { page = 1 ,search,disable} = req.query;
-  const skip = (page - 1) * 20;
-  let query = {}
-  if(search){
-    query.title = new RegExp(search, "i");
+  const { search, disable } = req.query;
+  // page omitted (mobile / legacy) → return a large first page.
+  // page present (admin pagination) → honor limit (default 10).
+  const pageSpecified = req.query.page !== undefined && req.query.page !== "";
+  const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
+  const defaultLimit = pageSpecified ? 10 : 200;
+  const limit = Math.min(
+    500,
+    Math.max(1, parseInt(String(req.query.limit ?? defaultLimit), 10) || defaultLimit)
+  );
+  const skip = (page - 1) * limit;
+  let query = {};
+  if (search) {
+    query.title = new RegExp(String(search), "i");
   }
-  if(disable){
-    query.disable = disable
+  if (disable !== undefined && disable !== "") {
+    query.disable = disable === "true" || disable === true || disable === "1";
   }
-  const findAll = await planService.getAllPlan(query,skip);
-  const totalCount = await planModel.countDocuments(query)
-  const pageCount = Math.ceil(totalCount / 20);
-  // const findAllWithKeys = findAll.map((eml) => ({
-  //   ...eml._doc,
-  //   views: null,
-  //   reach: null,
-  //   leads: null,
-  // }));
-  // No packages yet (or all deleted) is a normal answer: the admin page and the app both show an empty list.
+  const findAll = await planService.getAllPlan(query, skip, limit);
+  const totalCount = await planModel.countDocuments(query);
+  const pageCount = Math.max(1, Math.ceil(totalCount / limit) || 1);
+  // responseBuilder(status, message, data, page, pageCount) maps to
+  // { page: <totalPages>, currentPage: <page> } — keep that contract.
   res
     .status(statusCodes.OK)
     .json(
@@ -261,7 +265,8 @@ exports.getAllPlan = async (req, res) => {
         apiResponseStatusCode[200],
         defaultResponseMessage.FETCHED,
         findAll,
-        pageCount
+        pageCount,
+        page
       )
     );
 };
