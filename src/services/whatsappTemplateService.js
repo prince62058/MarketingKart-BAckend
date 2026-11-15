@@ -5,15 +5,8 @@ const buildAccessQuery = ({ createdBy, isAdmin = false, businessId, wabaId } = {
   const query = { disable: false };
   if (businessId) query.businessId = businessId;
   if (createdBy && !isAdmin) query.createdBy = createdBy;
-  // Show templates for the connected WABA. Legacy rows without wabaId stay visible
-  // until the next connect/sync stamps or clears them.
-  if (wabaId && !isAdmin) {
-    query.$or = [
-      { wabaId: String(wabaId) },
-      { wabaId: null },
-      { wabaId: { $exists: false } },
-    ];
-  }
+  // Only templates for the currently connected WABA.
+  if (wabaId && !isAdmin) query.wabaId = String(wabaId);
   return query;
 };
 
@@ -127,6 +120,16 @@ const syncFromMeta = async (credentials, additionalData = {}) => {
   const phoneNumberId = additionalData.phoneNumberId
     ? String(additionalData.phoneNumberId)
     : null;
+
+  // Meta returned nothing for this WABA — drop local templates so the app doesn't
+  // keep showing leftovers from a previous Test Number / old WABA.
+  if ((!metaTemplates || metaTemplates.length === 0) && ownerId) {
+    const cleared = await whatsappTemplateModel.deleteMany({
+      createdBy: ownerId,
+      ...(wabaId ? { wabaId } : {}),
+    });
+    return cleared.deletedCount || 0;
+  }
 
   let updatedCount = 0;
   const seenMetaIds = new Set();
