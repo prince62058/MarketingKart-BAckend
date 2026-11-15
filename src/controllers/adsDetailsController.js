@@ -339,8 +339,12 @@ const metaAdAccountPath = (accountId = process.env.adAccountId) => {
   return id.startsWith("act_") ? id : `act_${id}`;
 };
 
-const getMetaAccessToken = () =>
-  process.env.systemUserAccessToken || process.env.admin_access_token;
+const {
+  getMetaAccessToken,
+  getMetaSearchToken,
+  isExpiredMetaError,
+  markConfiguredTokenInvalid,
+} = require("../helpers/metaAccessToken");
 
 /**
  * Resolve Meta optimization / destination / promoted_object for Lead Form + WhatsApp.
@@ -3300,9 +3304,17 @@ exports.targetingLocation = async (req, res) => {
     }
     const business = await businessModel.findOne({ _id: businessId, userId: req.user._id }).lean();
     if (!business) return res.status(403).json({ success: false, message: "Business access denied" });
+    const accessToken = await getMetaSearchToken();
     const response = await axios.get("https://graph.facebook.com/v22.0/search", {
-      headers: { Authorization: `Bearer ${getMetaAccessToken()}` },
-      params: { type: "adgeolocation", q: String(search).trim().slice(0, 120), location_types: JSON.stringify(["city", "region", "zip"]), country_code: "IN", limit: 25 },
+      params: {
+        access_token: accessToken,
+        type: "adgeolocation",
+        q: String(search).trim().slice(0, 120),
+        location_types: JSON.stringify(["city", "region", "zip"]),
+        country_code: "IN",
+        locale: "en_US",
+        limit: 25,
+      },
       timeout: 15000,
     });
     return res.status(200).send({
@@ -3311,6 +3323,7 @@ exports.targetingLocation = async (req, res) => {
       data: (response?.data?.data || []).filter(row => row.country_code === "IN" && ["city", "region", "zip"].includes(row.type)),
     });
   } catch (error) {
+    if (isExpiredMetaError(error)) markConfiguredTokenInvalid();
     console.error(
       "targetingLocation error:",
       error.response?.data || error.message,
@@ -3338,15 +3351,23 @@ exports.targetingInterest = async (req, res) => {
         data: [],
       });
     }
-    const q = encodeURIComponent(String(search).trim());
-    const apiUrl = `https://graph.facebook.com/v22.0/search?type=adinterest&q=${q}&access_token=${process.env.systemUserAccessToken}`;
-    let response = await axios.get(apiUrl);
+    const accessToken = await getMetaSearchToken();
+    const response = await axios.get("https://graph.facebook.com/v22.0/search", {
+      params: {
+        type: "adinterest",
+        q: String(search).trim().slice(0, 120),
+        access_token: accessToken,
+        limit: 25,
+      },
+      timeout: 15000,
+    });
     return res.status(200).send({
       success: true,
       message: "Target Search Interest Data",
       data: response?.data?.data || [],
     });
   } catch (error) {
+    if (isExpiredMetaError(error)) markConfiguredTokenInvalid();
     console.error("targetingInterest error:", error.response?.data || error.message);
     return res.status(500).send({
       success: false,

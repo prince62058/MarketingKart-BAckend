@@ -1031,22 +1031,31 @@ exports.updateMetaToken = async (req, res) => {
       });
     }
 
-    // 3. Update .env file with the long-lived token
+    // 3. Update .env — keep systemUserAccessToken + admin_access_token in sync
     const path = require("path");
     const fs = require("fs");
     const envPath = path.resolve(__dirname, "../../.env");
     let envContent = fs.readFileSync(envPath, "utf-8");
 
-    // Replace admin_access_token value
-    envContent = envContent.replace(
-      /^(admin_access_token\s*=\s*).*$/m,
-      `$1${longLivedToken}`
-    );
+    const writeEnvKey = (key, value) => {
+      const re = new RegExp(`^(${key}\\s*=\\s*).*$`, "m");
+      if (re.test(envContent)) {
+        envContent = envContent.replace(re, `$1${value}`);
+      } else {
+        envContent = `${envContent.trimEnd()}\n${key}=${value}\n`;
+      }
+    };
+    writeEnvKey("admin_access_token", longLivedToken);
+    writeEnvKey("systemUserAccessToken", longLivedToken);
 
     fs.writeFileSync(envPath, envContent, "utf-8");
 
     // 4. Update in-memory env
     process.env.admin_access_token = longLivedToken;
+    process.env.systemUserAccessToken = longLivedToken;
+    try {
+      require("../helpers/metaAccessToken").invalidateMetaTokenCache();
+    } catch (_) { /* helper optional during boot */ }
 
     const expiryDays = Math.floor((expiresIn || 0) / (3600 * 24));
 
