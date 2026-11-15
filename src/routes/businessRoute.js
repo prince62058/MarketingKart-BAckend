@@ -4,7 +4,8 @@ const router = express.Router();
 const { businessMid } = require("../middlewares/bussinessMidd");
 const { userMid } = require("../middlewares/userMidd");
 const { upload } = require("../middlewares/multer");
-const { authUser } = require("../middlewares/authMidd");
+const { authUser, adminOnly } = require("../middlewares/authMidd");
+const { requireBusinessAccess } = require("../middlewares/businessAccessMidd");
 const asyncHandler = require("../utils/asyncHandler");
 const { staffMid } = require("../middlewares/staffMidd");
 
@@ -17,7 +18,7 @@ router.post(
 
 router.get(
   "/business/getAllBussiness",
-  // asyncHandler(authUser),
+  adminOnly,
   asyncHandler(controller.getAllBusiness)
 );
 router.get(
@@ -35,7 +36,8 @@ router.get(
 );
 router.put(
   "/business/updateBussiness/:businessId",
- // asyncHandler(authUser),
+  asyncHandler(authUser),
+  requireBusinessAccess("params", "businessId"),
   asyncHandler(businessMid),
   upload.single("businessImage"),
   asyncHandler(controller.updateBusiness)

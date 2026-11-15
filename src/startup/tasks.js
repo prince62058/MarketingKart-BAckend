@@ -10,6 +10,7 @@ const { seedCompanySettingsIfMissing } = require("./seedCompanySettings");
 const { seedFaqsIfEmpty } = require("./seedFaqs");
 const { seedContactUsIfEmpty } = require("./seedContactUs");
 const { seedWhatsAppPlansIfEmpty } = require("./seedWhatsAppPlans");
+const { seedRcsPlansIfEmpty } = require("./seedRcsPlans");
 const { seedAiVideoPricingIfMissing } = require("./seedAiVideoPricing");
 const { removeAiVideoFreeCreditsOnce } = require("./removeAiVideoFreeCredits");
 
@@ -35,6 +36,7 @@ async function initializeBackgroundTasks() {
         await seedFaqsIfEmpty();
         await seedContactUsIfEmpty();
         await seedWhatsAppPlansIfEmpty();
+        await seedRcsPlansIfEmpty();
 
         // First start only: the AI Video price list (never overwrites what an admin saved).
         try {

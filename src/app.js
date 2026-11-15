@@ -177,6 +177,7 @@ app.use("/api", ImageBusinessRoute);
 app.use("/api", imageCategoryRoute);
 app.use("/api", faqRoute);
 app.use("/api", companyRoute);
+app.use("/api", require("./routes/moduleFlagsRoute"));
 app.use("/api", videoRoute);
 app.use("/api", phonePayRoute);
 app.use("/api", adminDashboard);

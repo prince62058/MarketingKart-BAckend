@@ -315,7 +315,9 @@ exports.createPlan = async (req, res) => {
 
 exports.getPlans = async (req, res) => {
   try {
-    const filter = req.query.all === 'true' ? {} : { disable: false };
+    const filter = req.query.all === 'true'
+      ? {}
+      : { disable: false, price: { $gt: 0 } };
     const plans = await WhatsAppPlan.find(filter).sort({ sortOrder: 1, price: 1 });
     return res.status(200).json({ success: true, data: plans });
   } catch (error) {
@@ -361,6 +363,7 @@ exports.purchasePlan = async (req, res) => {
 
     const plan = await WhatsAppPlan.findById(planId);
     if (!plan || plan.disable) throw new Error("Plan not found or disabled");
+    if (!(plan.price > 0)) throw new Error("Free plans are not available");
 
     const user = await User.findById(userId).session(session);
     if (!user) throw new Error("User not found");

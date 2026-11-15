@@ -3,6 +3,7 @@ const controller = require("../controllers/webhookController");
 
 const asyncHandler = require("../utils/asyncHandler");
 const { authUser } = require("../middlewares/authMidd");
+const { requireBusinessAccess, requireLeadAccess } = require("../middlewares/businessAccessMidd");
 const { upload } = require("../middlewares/multer");
 const router = express.Router();
 
@@ -13,7 +14,9 @@ router.post(
 );
 router.post(
   "/user/uploadLeadDocument",
+  asyncHandler(authUser),
   upload.single("document"),
+  requireLeadAccess("body", "leadId"),
   asyncHandler(controller.uploadLeadDocument)
 );
 
@@ -25,7 +28,8 @@ router.get(
 
 router.get(
   "/getLeadOfYourBussinessByMemberId",
-  // asyncHandler(authUser),
+  asyncHandler(authUser),
+  requireBusinessAccess("query", "businessId"),
   asyncHandler(controller.getLeadOfYourBussinessByMemberId)
 );
 
@@ -42,7 +46,8 @@ router.get(
 
 router.get(
   "/getLeadOfYourBusinessByMemberIdExcel",
-  // asyncHandler(authUser),
+  asyncHandler(authUser),
+  requireBusinessAccess("query", "businessId"),
   asyncHandler(controller.getLeadOfYourBusinessByMemberIdExcel)
 );
 
@@ -71,6 +76,8 @@ asyncHandler(controller.updateLeadDetails)
 )
 
 router.put('/updateLeadSeenStatus',
+  asyncHandler(authUser),
+  requireLeadAccess("query", "leadId"),
   asyncHandler(controller.updateLeadSeenStatus)
 )  
 
