@@ -258,17 +258,16 @@ exports.getAllPlan = async (req, res) => {
   const pageCount = Math.max(1, Math.ceil(totalCount / limit) || 1);
   // responseBuilder(status, message, data, page, pageCount) maps to
   // { page: <totalPages>, currentPage: <page> } — keep that contract.
-  res
-    .status(statusCodes.OK)
-    .json(
-      responseBuilder(
-        apiResponseStatusCode[200],
-        defaultResponseMessage.FETCHED,
-        findAll,
-        pageCount,
-        page
-      )
-    );
+  const payload = responseBuilder(
+    apiResponseStatusCode[200],
+    defaultResponseMessage.FETCHED,
+    findAll,
+    pageCount,
+    page
+  );
+  payload.total = totalCount;
+  payload.limit = limit;
+  res.status(statusCodes.OK).json(payload);
 };
 
 //  getSingle
