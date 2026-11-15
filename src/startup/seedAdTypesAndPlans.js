@@ -92,20 +92,15 @@ async function seedAdTypesAndPlans() {
       advertisementTypeId: adTypeDoc._id,
       title: { $in: CANONICAL_TITLES },
     });
-    const otherCount = await planModel.countDocuments({
-      $or: [
-        { advertisementTypeId: { $ne: adTypeDoc._id } },
-        {
-          advertisementTypeId: adTypeDoc._id,
-          title: { $nin: CANONICAL_TITLES },
-        },
-      ],
-    });
+    // Remove only the old auto-seeded titles. Packages an admin creates stay,
+    // so a full page of 10 can spill onto page 2 and survive a restart.
+    if (legacyCount > 0) {
+      await planModel.deleteMany({ title: { $in: LEGACY_SEED_TITLES } });
+    }
 
-    // Catalog already correct — do not overwrite admin edits on every boot.
-    if (legacyCount === 0 && canonicalCount === CANONICAL_TITLES.length && otherCount === 0) {
+    if (canonicalCount === CANONICAL_TITLES.length) {
       console.log(
-        "ℹ️ Ad Packages catalog OK (Launch / Scale / Pro Ads / Dominate). Skipping seed."
+        "ℹ️ Ad Packages catalog OK. Admin-created packages were left in place."
       );
       return;
     }
@@ -125,19 +120,8 @@ async function seedAdTypesAndPlans() {
       );
     }
 
-    // Drop any other Lead On WhatsApp package that is not in the catalog.
-    await planModel.deleteMany({
-      advertisementTypeId: adTypeDoc._id,
-      title: { $nin: CANONICAL_TITLES },
-    });
-
-    // Only these four packages should exist anywhere in Ad Packages.
-    await planModel.deleteMany({
-      advertisementTypeId: { $ne: adTypeDoc._id },
-    });
-
     console.log(
-      "✅ Ad Packages restored to Lead On WhatsApp:",
+      "✅ Default Ad Packages ensured. Admin-created packages were left in place:",
       CANONICAL_TITLES.join(", ")
     );
   } catch (error) {
