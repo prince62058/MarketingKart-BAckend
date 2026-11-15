@@ -79,12 +79,33 @@ exports.createCampaign = async (req, res) => {
     const connectedAccount = await whatsappAccountModel.findOne({
       userId: req.user._id,
       status: "CONNECTED",
-    }).select("_id phoneNumber phoneNumberId wabaId");
+    }).select("_id phoneNumber phoneNumberId wabaId verifiedName");
 
     if (!connectedAccount?.phoneNumberId || !connectedAccount?.wabaId) {
       return res.status(403).json({
         success: false,
         message: "WhatsApp account not connected. Please connect and verify your Meta WhatsApp number first.",
+      });
+    }
+
+    // Meta developer "Test Number" can only message up to 5 pre-approved recipients
+    // (error 131030). Block campaigns until a real business number is connected.
+    const isMetaSandboxTestNumber = (() => {
+      const name = String(connectedAccount.verifiedName || "").trim().toLowerCase();
+      const phone = String(connectedAccount.phoneNumber || "").replace(/\s+/g, "");
+      return (
+        name === "test number" ||
+        /\+?1555-?664/.test(phone) ||
+        connectedAccount.phoneNumberId === "1281600561703344"
+      );
+    })();
+
+    if (isMetaSandboxTestNumber) {
+      return res.status(400).json({
+        success: false,
+        code: "META_TEST_NUMBER",
+        message:
+          "Your WhatsApp is connected to Meta's Test Number. It can only message numbers added in Meta Developer Console → WhatsApp → API Setup → Manage phone number list. Connect your real business WhatsApp number to send campaigns.",
       });
     }
 

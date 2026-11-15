@@ -29,13 +29,35 @@ const processJob = async (job) => {
     const account = await whatsappAccountModel.findOne({ userId: campaign.createdBy, status: "CONNECTED" });
     if (!account) throw new Error("WhatsApp Account not connected for this user");
 
-    const result = await whatsappCloudApiService.sendTemplateMessage(
-      to,
-      templateName,
-      languageCode,
-      components,
-      { accessToken: account.accessToken, phoneNumberId: account.phoneNumberId }
-    );
+    const systemToken = process.env.systemUserAccessToken || process.env.SYSTEM_USER_ACCESS_TOKEN;
+    let accessToken = account.accessToken;
+    // Prefer system token when the stored user token is missing/expired (common after Meta reconnect lag).
+    if (!accessToken && systemToken) accessToken = systemToken;
+
+    let result;
+    try {
+      result = await whatsappCloudApiService.sendTemplateMessage(
+        to,
+        templateName,
+        languageCode,
+        components,
+        { accessToken, phoneNumberId: account.phoneNumberId }
+      );
+    } catch (sendErr) {
+      const code = Number(sendErr?.code || sendErr?.response?.data?.error?.code);
+      // OAuth expired → one retry with system token on the same phone number id.
+      if (systemToken && accessToken !== systemToken && (code === 190 || /expired|validating access token/i.test(String(sendErr?.message || "")))) {
+        result = await whatsappCloudApiService.sendTemplateMessage(
+          to,
+          templateName,
+          languageCode,
+          components,
+          { accessToken: systemToken, phoneNumberId: account.phoneNumberId }
+        );
+      } else {
+        throw sendErr;
+      }
+    }
 
     const wamid = result?.messages?.[0]?.id;
 
@@ -178,10 +200,21 @@ const processJob = async (job) => {
       (currentMsg.status === "QUEUED" || currentMsg.status === "SENT");
 
     if (shouldMarkFailed) {
+      const rawCode = error?.code || errData?.code || "UNKNOWN";
+      const rawMessage = error?.message || errData?.message || "Send failed";
+      const details = errData?.error_data?.details || "";
+      let friendlyMessage = rawMessage;
+      if (Number(rawCode) === 131030 || /not in allowed list/i.test(String(rawMessage))) {
+        friendlyMessage =
+          "(#131030) Recipient not in Meta Test Number allowlist. Add this number in Meta Developer Console → WhatsApp → API Setup → Manage phone number list (max 5), or reconnect a real business WhatsApp number.";
+      } else if (details) {
+        friendlyMessage = `${rawMessage} — ${details}`;
+      }
+
       await whatsappMessageModel.findByIdAndUpdate(messageId, {
         status: "FAILED",
-        errorCode: String(error?.code || errData?.code || "UNKNOWN"),
-        errorMessage: error?.message || errData?.message || "Send failed",
+        errorCode: String(rawCode),
+        errorMessage: friendlyMessage,
         failedAt: new Date(),
       });
 
