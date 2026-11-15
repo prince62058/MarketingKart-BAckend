@@ -342,6 +342,7 @@ exports.aiGenerateTemplate = async (req, res) => {
 
     const sysPrompt = `You are an expert WhatsApp marketing copywriter who creates Meta-approved templates.
 IMPORTANT: Follow Meta's WhatsApp Business API template guidelines strictly.
+The user may write their prompt in ANY language (Hindi, Hinglish, English, regional languages, etc.). Understand the prompt and write body/footer/button labels in the same language the user used (or Hinglish if mixed).
 
 Rules for Meta approval:
 1. Template names: ONLY lowercase letters, numbers, and underscores. No spaces.

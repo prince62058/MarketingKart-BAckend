@@ -54,6 +54,7 @@ router.post(
   uploadExcel.single("contacts"),
   campaignController.createCampaign
 );
+router.post("/whatsapp/campaigns/ai-fill", authUser, campaignController.aiFillCampaign);
 router.get("/whatsapp/campaigns", authUser, campaignController.getAllCampaigns);
 router.get("/whatsapp/campaigns/:campaignId", authUser, campaignController.getCampaignById);
 router.put("/whatsapp/campaigns/:campaignId/pause", authUser, campaignController.pauseCampaign);

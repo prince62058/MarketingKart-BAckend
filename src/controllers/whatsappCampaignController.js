@@ -2,6 +2,12 @@ const whatsappCampaignService = require("../services/whatsappCampaignService");
 const whatsappTemplateService = require("../services/whatsappTemplateService");
 const whatsappCampaignModel = require("../models/whatsappCampaignModel");
 const whatsappAccountModel = require("../models/whatsappAccountModel");
+const OpenAI = require("openai");
+
+function getOpenAI() {
+  if (!process.env.OPENAI_API_KEY) return null;
+  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+}
 
 exports.createCampaign = async (req, res) => {
   try {
@@ -316,5 +322,69 @@ exports.deleteCampaign = async (req, res) => {
     console.error("[Campaign] deleteCampaign error:", error.message);
     const status = error.message.includes("not found") ? 404 : error.message.includes("authorized") ? 403 : 500;
     return res.status(status).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * Prompt (any language) → autofill campaign name for New Campaign Step 1.
+ */
+exports.aiFillCampaign = async (req, res) => {
+  try {
+    const prompt = String(req.body?.prompt || "").trim();
+    if (!prompt) {
+      return res.status(400).json({ success: false, message: "Prompt is required" });
+    }
+    if (prompt.length > 500) {
+      return res.status(400).json({ success: false, message: "Prompt is too long (max 500 characters)" });
+    }
+
+    const openai = getOpenAI();
+    if (!openai) {
+      return res.status(503).json({
+        success: false,
+        message: "AI is not configured. Set OPENAI_API_KEY on the server.",
+      });
+    }
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.5,
+      max_tokens: 120,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: [
+            "You name WhatsApp marketing campaigns for MarketingKart.",
+            "The user may write the prompt in ANY language (Hindi, Hinglish, English, Tamil, etc.). Understand it and reply in JSON.",
+            'Return ONLY JSON: { "name": string }',
+            "name rules: clear campaign title, max 50 characters, Title Case or natural casing, no hashtags, no emojis, no quotes.",
+            "Prefer including festival/offer/audience when present (e.g. Diwali Flash Sale - VIP).",
+            "If the prompt is vague, invent a short professional name.",
+          ].join("\n"),
+        },
+        { role: "user", content: prompt },
+      ],
+    });
+
+    let name = "";
+    try {
+      const parsed = JSON.parse(completion.choices?.[0]?.message?.content || "{}");
+      name = String(parsed.name || "").trim();
+    } catch {
+      name = "";
+    }
+    name = name.replace(/["'‘’“”]/g, "").replace(/\s+/g, " ").trim().slice(0, 50);
+    if (!name) {
+      return res.status(500).json({ success: false, message: "AI could not generate a campaign name" });
+    }
+
+    return res.status(200).json({ success: true, data: { name } });
+  } catch (error) {
+    console.error("[Campaign] aiFillCampaign error:", error?.message || error);
+    return res.status(500).json({
+      success: false,
+      message: "AI fill failed: " + (error.message || "unknown error"),
+    });
   }
 };
