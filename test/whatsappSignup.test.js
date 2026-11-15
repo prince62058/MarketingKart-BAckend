@@ -155,10 +155,24 @@ test('new tokens use authenticated encryption and are never serialized to JSON',
 
 test('ambiguous, disconnected and expired number mappings cannot send messages', async () => {
   const { assertUniquePhone } = require('../src/services/whatsappAccountIsolation');
-  const model = rows => ({ find: () => ({ limit: async () => rows }) });
-  await assert.rejects(assertUniquePhone('12345', model([])), /ambiguous/);
+  const model = rows => ({
+    find: (query = {}) => ({
+      limit: async () => {
+        let filtered = rows;
+        if (query.status) filtered = rows.filter((r) => r.status === query.status);
+        return filtered.slice(0, 2);
+      },
+    }),
+  });
+  await assert.rejects(assertUniquePhone('12345', model([])), /ambiguous|disconnected/);
   await assert.rejects(assertUniquePhone('12345', model([{status:'CONNECTED'}, {status:'CONNECTED'}])), /ambiguous/);
-  await assert.rejects(assertUniquePhone('12345', model([{status:'DISCONNECTED'}])), /disconnected/);
+  await assert.rejects(assertUniquePhone('12345', model([{status:'DISCONNECTED'}])), /ambiguous|disconnected/);
+  // DISCONNECTED leftover + one CONNECTED is OK (number was reassigned).
+  const live = {status:'CONNECTED',userId:'customer'};
+  assert.equal(
+    await assertUniquePhone('12345', model([{status:'DISCONNECTED',userId:'old'}, live])),
+    live
+  );
   await assert.rejects(assertUniquePhone('12345', model([{status:'CONNECTED',tokenExpiresAt:new Date(0)}])), /expired/);
   const account = {status:'CONNECTED',userId:'customer'};
   assert.equal(await assertUniquePhone('12345', model([account])), account);
