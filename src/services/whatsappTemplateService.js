@@ -103,13 +103,18 @@ const syncFromMeta = async (credentials, additionalData = {}) => {
       components: components,
       bodyText,
       variables: extractVariables(combinedText),
+      disable: false,
       ...additionalData,
     };
 
+    // Prefer Meta id match (global), then same-owner name, then orphan name without owner.
     const existingTemplate = await whatsappTemplateModel.findOne({
-      ...(additionalData.createdBy ? { createdBy: additionalData.createdBy } : {}),
       $or: [
-        ...(tpl.id ? [{ metaTemplateId: tpl.id }] : []),
+        ...(tpl.id ? [{ metaTemplateId: String(tpl.id) }] : []),
+        ...(additionalData.createdBy
+          ? [{ createdBy: additionalData.createdBy, name: tpl.name }]
+          : []),
+        { name: tpl.name, createdBy: { $in: [null, undefined] } },
         { name: tpl.name },
       ],
     }).select("_id");
@@ -128,12 +133,27 @@ const syncFromMeta = async (credentials, additionalData = {}) => {
       }
     } catch (error) {
       if (error?.code === 11000) {
-        console.warn(
-          `[Template Sync] Skipping duplicate template "${tpl.name}" for user ${additionalData.createdBy || "GLOBAL"}`
-        );
-        continue;
+        // Race / unique index: force update the conflicting row.
+        const conflict = await whatsappTemplateModel.findOne({
+          $or: [
+            ...(tpl.id ? [{ metaTemplateId: String(tpl.id) }] : []),
+            { name: tpl.name },
+          ],
+        }).select("_id");
+        if (conflict) {
+          result = await whatsappTemplateModel.updateOne(
+            { _id: conflict._id },
+            { $set: updateData }
+          );
+        } else {
+          console.warn(
+            `[Template Sync] Skipping duplicate template "${tpl.name}" for user ${additionalData.createdBy || "GLOBAL"}`
+          );
+          continue;
+        }
+      } else {
+        throw error;
       }
-      throw error;
     }
 
     if (result.modifiedCount > 0 || result.upsertedCount > 0) {

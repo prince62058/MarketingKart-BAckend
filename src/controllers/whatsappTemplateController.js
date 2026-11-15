@@ -318,10 +318,26 @@ exports.syncTemplates = async (req, res) => {
       });
     }
 
-    const updatedCount = await whatsappTemplateService.syncFromMeta(
-      { accessToken: account.accessToken, wabaId: account.wabaId },
-      { createdBy: req.user._id }
-    );
+    const credentials = { accessToken: account.accessToken, wabaId: account.wabaId };
+    let updatedCount = 0;
+    try {
+      updatedCount = await whatsappTemplateService.syncFromMeta(credentials, {
+        createdBy: req.user._id,
+      });
+    } catch (userTokenErr) {
+      // Expired user token — fall back to system user token when it can access this WABA.
+      const systemToken = process.env.systemUserAccessToken;
+      if (!systemToken) throw userTokenErr;
+      console.warn(
+        "[Template] User WA token sync failed, retrying with systemUserAccessToken:",
+        userTokenErr.message
+      );
+      updatedCount = await whatsappTemplateService.syncFromMeta(
+        { accessToken: systemToken, wabaId: account.wabaId },
+        { createdBy: req.user._id }
+      );
+    }
+
     return res.status(200).json({
       success: true,
       message: `Synced from Meta — ${updatedCount} template(s) updated`,
