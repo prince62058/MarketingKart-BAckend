@@ -85,7 +85,21 @@ function mocks(overrides={}){
   if(url.endsWith('/debug_token'))return {data:{data:overrides.grant || grant}};
   return {data:{data:overrides.phones || [phone]}};
  },post:async(url,body,opts)=>{calls.push(['post',url,body,opts]);return {data:{success:!overrides.postFailure}};}},
- Account:{findOne:async()=>overrides.existing || null,findOneAndUpdate:async(query,update)=>{calls.push(['save',query,update]);return update.$set;}},
+ Account:(()=>{
+  const row=()=>overrides.previous || overrides.existing || null;
+  const chain=()=>{
+   const c={
+    select(){return c;},
+    lean:async()=>row(),
+    then(resolve,reject){return Promise.resolve(row()).then(resolve,reject);},
+   };
+   return c;
+  };
+  return {
+   findOne:()=>chain(),
+   findOneAndUpdate:async(query,update)=>{calls.push(['save',query,update]);return update.$set;},
+  };
+ })(),
  Claim:{findOneAndUpdate:async()=>({userId:overrides.claimUser || 'tenant-a'}),
  updateOne:async(query,update)=>{calls.push(['storePin',query,update]);registrationPinEncrypted ??= update.$set.registrationPinEncrypted;},
  findOne:()=>({select:async()=>({registrationPinEncrypted})})}};
