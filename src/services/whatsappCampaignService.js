@@ -221,8 +221,10 @@ const buildComponents = (variables, templateComponents = []) => {
     }
   }
 
-  // Fallback: If no components found but we have variables, assume they are all for body (legacy support)
-  if (finalComponents.length === 0 && Object.keys(variables).length > 0) {
+  // Legacy rows have variables but no stored components. A real template with a
+  // body and zero placeholders must be sent with no parameters, or Meta rejects it.
+  const bodyCompForFallback = templateComponents.find((c) => c.type === "BODY");
+  if (!bodyCompForFallback && finalComponents.length === 0 && Object.keys(variables).length > 0) {
     const params = Object.keys(variables)
       .sort((a, b) => Number(a) - Number(b))
       .map((key) => ({ type: "text", text: String(variables[key] || "Customer") }));

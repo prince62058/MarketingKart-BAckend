@@ -54,6 +54,8 @@ const buildAccountResponse = (account) => ({
   status: account.status,
   verifiedName: account.verifiedName || null,
   qualityRating: account.qualityRating || null,
+  messagingLimit: account.messagingLimit || null,
+  accountReviewStatus: account.accountReviewStatus || null,
   phoneStatus: account.phoneStatus || null,
   codeVerificationStatus: account.codeVerificationStatus || null,
   businessName: account.businessName || null,

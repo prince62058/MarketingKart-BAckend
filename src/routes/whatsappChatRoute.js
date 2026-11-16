@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const whatsappChatController = require("../controllers/whatsappChatController");
 const whatsappBotController = require("../controllers/whatsappBotController");
+const whatsappConversionController = require("../controllers/whatsappConversionController");
 const { authUser: auth } = require("../middlewares/authMidd");
 
 const { uploadWhatsAppMedia } = require("../middlewares/multer");
@@ -15,6 +16,9 @@ router.get("/conversations", auth, whatsappChatController.getConversations);
 router.get("/conversations/:conversationId", auth, whatsappChatController.getMessages);
 router.post("/conversations/:conversationId/send", auth, whatsappChatController.sendChatMessage);
 router.put("/conversations/:conversationId/bot-mode", auth, whatsappChatController.setBotMode);
+// Conversions API for Business Messaging: mark a Click-to-WhatsApp ad chat as a lead or a sale.
+router.get("/conversations/:conversationId/conversion", auth, whatsappConversionController.getConversion);
+router.post("/conversations/:conversationId/conversion", auth, whatsappConversionController.markConversion);
 router.post("/upload-media", auth, uploadWhatsAppMedia.single("media"), templateController.uploadMedia);
 
 module.exports = router;

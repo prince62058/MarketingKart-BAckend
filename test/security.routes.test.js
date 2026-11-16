@@ -120,6 +120,8 @@ const SIGNED_IN = [
   ["GET", `/api/getGstOfUseById?gstNumberId=${someId}`],
   ["GET", "/api/getGstOfUserByUserId"],
   ["PUT", `/api/updateGstOfUser?gstNumberId=${someId}`, {}],
+  ["GET", `/api/whatsapp/chat/conversations/${someId}/conversion`],
+  ["POST", `/api/whatsapp/chat/conversations/${someId}/conversion`, { event: "lead" }],
 ];
 
 // Routes the apps and the public use without an account. They must NOT ask for a login.

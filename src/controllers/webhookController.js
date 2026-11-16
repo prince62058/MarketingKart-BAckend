@@ -22,6 +22,8 @@ const { sendNotificationToMultipleToken } = require("./notificationController");
 const { sendLeadNotification } = require("../helpers/appNotificationHelper");
 const { syncLeadsForBusiness } = require("../services/leadSyncService");
 const whatsappBotService = require("../services/whatsappBotService");
+const whatsappAccountHealthService = require("../services/whatsappAccountHealthService");
+const whatsappConversionService = require("../services/whatsappConversionService");
 
 const getPhoneVariants = (rawPhone) => {
   const digits = String(rawPhone || "").replace(/\D/g, "");
@@ -321,6 +323,14 @@ exports.postWhatsAppWebhook = async (req, res) => {
   try {
     for (const entry of payload.entry || []) {
       for (const change of entry.changes || []) {
+        // --- 0. ACCOUNT HEALTH (quality, messaging limit, review decision, Meta alerts) ---
+        if (whatsappAccountHealthService.HEALTH_FIELDS.includes(change?.field)) {
+          await whatsappAccountHealthService
+            .handleHealthChange({ wabaId: String(entry.id), field: change.field, value: change.value || {} })
+            .catch((err) => console.error(`[WA Webhook] ${change.field} handling failed:`, err.message));
+          continue;
+        }
+
         // --- 1. STATUS UPDATES (Sent/Delivered/Read/Failed) ---
         const statuses = change?.value?.statuses || [];
         for (const statusObj of statuses) {
@@ -460,7 +470,8 @@ exports.postWhatsAppWebhook = async (req, res) => {
           // Never route a shared or unowned number into an arbitrary tenant inbox.
           const phoneOwners = await whatsappAccountModel.find({ phoneNumberId }).limit(2).select('userId status');
           if (phoneOwners.length !== 1 || phoneOwners[0].status !== 'CONNECTED') continue;
-          const ownerBusinesses = await businessModel.find({ userId: phoneOwners[0].userId }).select('_id');
+          const ownerUserId = phoneOwners[0].userId;
+          const ownerBusinesses = await businessModel.find({ userId: ownerUserId }).select('_id');
           const ownerBusinessIds = ownerBusinesses.map(b => b._id);
 
 
@@ -519,19 +530,17 @@ exports.postWhatsAppWebhook = async (req, res) => {
               businessId = lastOutbound.businessId;
             } else if (lastOutbound.campaignId) {
               const campaign = await whatsappCampaignModel.findById(lastOutbound.campaignId).select("businessId");
-              if (campaign) businessId = campaign.businessId;
+              const campaignOwned = campaign?.businessId && ownerBusinessIds.some(
+                (id) => String(id) === String(campaign.businessId)
+              );
+              if (campaignOwned) businessId = campaign.businessId;
             }
           }
 
           if (!businessId) {
-            // Fallback: Use the account mapping
-            const account = await whatsappAccountModel.findOne({ phoneNumberId }).select("userId");
-            if (account && account.userId) {
-              const businessModel = require("../models/businessModel");
-              const businesses = await businessModel.find({ userId: account.userId }).select("_id");
-              businessIds = businesses.map(b => b._id);
-              if (businessIds.length > 0) businessId = businessIds[0];
-            }
+            const businesses = await businessModel.find({ userId: ownerUserId }).select("_id");
+            businessIds = businesses.map(b => b._id);
+            if (businessIds.length > 0) businessId = businessIds[0];
           }
 
           // Ensure businessIds contains ALL businesses of the user for real-time notification
@@ -571,6 +580,11 @@ exports.postWhatsAppWebhook = async (req, res) => {
             await conversation.save();
           }
 
+          // Click-to-WhatsApp ad click id (first touch), needed to report leads/sales to Meta later.
+          await whatsappConversionService
+            .captureReferral({ conversationId: conversation._id, message: msg })
+            .catch((err) => console.error("[WA Webhook] CTWA referral capture failed:", err.message));
+
           const effectiveBusinessId = businessId || conversation.businessId || null;
 
           // Link any orphaned OUTBOUND messages to this conversation
@@ -578,6 +592,7 @@ exports.postWhatsAppWebhook = async (req, res) => {
           await whatsappMessageModel.updateMany(
             {
               to: { $in: phoneVariants.length ? phoneVariants : [customerPhone] },
+              phoneNumberId,
               conversationId: null,
               direction: "OUTBOUND",
             },
@@ -642,8 +657,6 @@ exports.postWhatsAppWebhook = async (req, res) => {
                 });
               }
 
-              // Also emit to the user's room if account is found
-              const ownerUserId = account?.userId;
               if (ownerUserId) {
                 global.io.to(`user:${ownerUserId}`).emit("newWhatsAppMessage", messagePayload);
                 global.io.to(`user:${ownerUserId}`).emit("conversationUpdated", convObj);

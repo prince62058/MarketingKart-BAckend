@@ -48,6 +48,17 @@ const whatsappConversationSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    // The Click-to-WhatsApp ad that started this chat: first touch, never overwritten. The click id
+    // is a personal identifier that only the Conversions API needs, so normal reads leave it out.
+    ctwa: {
+      clid: { type: String, select: false },
+      adId: String,
+      sourceType: String,
+      sourceUrl: String,
+      headline: String,
+      mediaType: String,
+      capturedAt: Date,
+    },
   },
   { timestamps: true }
 );

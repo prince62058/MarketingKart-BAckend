@@ -76,7 +76,66 @@ function matchFaq(text, faqs) {
   return bestScore >= 4 ? best : null;
 }
 
-async function generateAiReply({ textBody, config, customerName }) {
+function tidyReply(text) {
+  return String(text || "")
+    .replace(/\r/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function splitClauses(text) {
+  const clean = String(text || "").replace(/[:,\s]+$/, "").trim();
+  if (clean.length < 40) return null;
+  const parts = clean
+    .split(/,\s+/)
+    .map((part) => part.replace(/\.$/, "").trim())
+    .filter((part) => part.length > 8);
+  if (parts.length < 3) return null;
+  return parts.map((part, index) => `${index + 1}. ${part}`).join("\n");
+}
+
+function arrangeReply(text) {
+  const raw = tidyReply(text);
+  if (!raw) return raw;
+  if ((raw.match(/\n/g) || []).length >= 2) return raw;
+
+  const planRe = /(?:^|[,:]|\baur\b)\s*([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)?)\s*₹\s*([\d,]+)(?:\s*\(([^)]+)\))?/g;
+  const plans = [];
+  let match;
+  let firstIndex = -1;
+  while ((match = planRe.exec(raw))) {
+    if (firstIndex < 0) firstIndex = match.index;
+    plans.push({
+      name: match[1].trim(),
+      price: match[2],
+      detail: String(match[3] || "").trim(),
+    });
+  }
+
+  if (plans.length >= 2) {
+    const lines = [];
+    const intro = firstIndex > 0
+      ? raw.slice(0, firstIndex).replace(/(?:packages?|plans?)\s+(?:hain|hai)?\s*$/i, "").replace(/[:,.\s]+$/, "").trim()
+      : "";
+    const steps = splitClauses(intro);
+    if (steps) lines.push("*Steps*", "", steps, "");
+    lines.push("*Plans*", "");
+    for (const plan of plans) {
+      lines.push(`*${plan.name}*`);
+      lines.push(plan.detail ? `₹${plan.price} · ${plan.detail}` : `₹${plan.price}`);
+      lines.push("");
+    }
+    if (/kaunsa|inme se|koi bhi/i.test(raw)) lines.push("Kaunsa plan chahiye?");
+    return tidyReply(lines.join("\n"));
+  }
+
+  const steps = splitClauses(raw);
+  if (steps) return tidyReply(`*Details*\n\n${steps}`);
+  return raw;
+}
+
+async function generateAiReply({ textBody, config, customerName, history, matchedFaq }) {
   const client = openai();
   const fallback = config.fallbackMessage || "Thanks for your message. A team member will get back to you shortly.";
   if (!client) return fallback;
@@ -87,31 +146,52 @@ async function generateAiReply({ textBody, config, customerName }) {
     .join("\n");
 
   const system = [
-    "You are a helpful WhatsApp business assistant.",
-    "Reply in short or medium length (1–3 short sentences). Plain text only — no markdown.",
-    "Use the business knowledge and FAQs. If you do not know, say so briefly and offer human help.",
-    "Match the customer's language when possible (English or Hinglish).",
+    `You are the WhatsApp AI agent for ${config.businessName || "this business"}.`,
+    matchedFaq
+      ? "A saved FAQ matches this message. Answer from that FAQ only."
+      : "No saved FAQ matched. Answer from the business instructions and FAQs below.",
+    "Use only the business name, extra instructions, and FAQs below. Do not invent prices, timings, or offers.",
+    "If the message is outside that knowledge, or you are unsure, reply with the fallback message only. Do not answer jokes, math, or word games.",
+    "A short yes, ha, yahi, okay, or kardo means they accepted the plan already shown.",
+    "Never send the same message twice. Do not repeat the plan card. Tell only the next step: open Create Ad, choose that package, and pay.",
+    "Do not say an order has started. Chat cannot place the order.",
+    "Reply in the same language the customer wrote in. Hindi, English, Hinglish, or any other language.",
+    "Arrange the reply like a WhatsApp card from the first line. Do not write plans, steps, or options in one paragraph.",
+    "Put each plan or step on its own line. A plan name can be wrapped in *asterisks*. Keep a blank line between plans.",
+    "Example:\n*Plans*\n\n*Launch*\n₹1499 · 3 days\n\n*Scale*\n₹2000 · 3 days\n\nKaunsa plan chahiye?",
+    matchedFaq
+      ? `Saved FAQ for this question. Keep every price, time, and fact exactly, and write it in the customer's language.\nQ: ${matchedFaq.question}\nA: ${matchedFaq.answer}`
+      : "",
     config.businessName ? `Business name: ${config.businessName}.` : "",
     config.systemPrompt ? `Extra instructions: ${config.systemPrompt}` : "",
     faqBlock ? `FAQs:\n${faqBlock}` : "No FAQs configured.",
+    `Fallback message: ${fallback}`,
   ]
     .filter(Boolean)
     .join("\n");
 
+  const historyMessages = Array.isArray(history)
+    ? history
+        .filter((m) => m && (m.role === "user" || m.role === "assistant") && String(m.content || "").trim())
+        .slice(-6)
+        .map((m) => ({ role: m.role, content: String(m.content).slice(0, 500) }))
+    : [];
+
   try {
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
-      temperature: 0.4,
-      max_tokens: 220,
+      temperature: 0.2,
+      max_tokens: 420,
       messages: [
         { role: "system", content: system },
+        ...historyMessages,
         {
           role: "user",
           content: `Customer${customerName ? ` (${customerName})` : ""} said: ${textBody}`,
         },
       ],
     });
-    const reply = String(completion.choices?.[0]?.message?.content || "").trim();
+    const reply = arrangeReply(String(completion.choices?.[0]?.message?.content || "").trim());
     return reply || fallback;
   } catch (err) {
     logger.error("[whatsappBot] OpenAI failed", { message: err?.message || String(err) });
@@ -253,11 +333,14 @@ async function handleInbound({ conversation, textBody, phoneNumberId, msgType })
     const text = String(textBody || "").trim();
     if (!text) return;
 
-    const account = await whatsappAccountModel.findOne({
-      phoneNumberId: phoneNumberId || conversation.phoneNumberId,
-      status: "CONNECTED",
-    });
-    if (!account?.userId) return;
+    const accounts = await whatsappAccountModel
+      .find({
+        phoneNumberId: phoneNumberId || conversation.phoneNumberId,
+        status: "CONNECTED",
+      })
+      .limit(2);
+    if (accounts.length !== 1 || !accounts[0].userId) return;
+    const account = accounts[0];
 
     const config = await whatsappChatbotConfigModel.findOne({ userId: account.userId });
     if (config && config.enabled === false) return;
@@ -297,16 +380,41 @@ async function handleInbound({ conversation, textBody, phoneNumberId, msgType })
     }
 
     const faq = matchFaq(text, effectiveConfig.faqs);
-    if (faq?.answer) {
-      await sendBotText({ account, conversation, text: faq.answer });
-      return;
+    const recent = await whatsappMessageModel
+      .find({ conversationId: conversation._id })
+      .sort({ createdAt: -1 })
+      .limit(6)
+      .select("direction textBody")
+      .lean();
+    const history = recent
+      .reverse()
+      .map((m) => ({
+        role: m.direction === "INBOUND" ? "user" : "assistant",
+        content: String(m.textBody || "").trim(),
+      }))
+      .filter((m) => m.content && !m.content.startsWith("["));
+    if (history.length && history[history.length - 1].role === "user" && history[history.length - 1].content === text) {
+      history.pop();
     }
-
-    const aiReply = await generateAiReply({
+    let aiReply = await generateAiReply({
       textBody: text,
       config: effectiveConfig,
       customerName: conversation.customerName,
+      matchedFaq: faq,
+      history,
     });
+    const lastBot = [...history].reverse().find((m) => m.role === "assistant");
+    const compact = (value) =>
+      String(value || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9₹\u0900-\u097f]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    const previous = compact(lastBot?.content);
+    const next = compact(aiReply);
+    if (previous && next && (previous === next || previous.includes(next) || next.includes(previous))) {
+      aiReply = "Ye plan pehle bata diya hai. App me Create Ad khol kar isi package ko choose karke pay kar dijiye.";
+    }
     await sendBotText({ account, conversation, text: aiReply });
   } catch (err) {
     logger.error("[whatsappBot] handleInbound failed", { message: err?.message || String(err) });
@@ -314,8 +422,37 @@ async function handleInbound({ conversation, textBody, phoneNumberId, msgType })
   }
 }
 
+/**
+ * When the agent flips a chat to AI, answer the customer's latest message.
+ * The switch used to only save a flag, so an already-open chat never got a reply.
+ */
+async function answerPendingWithAi(conversation) {
+  if (!conversation || conversation.isBotActive === false) return null;
+
+  const last = await whatsappMessageModel
+    .findOne({ conversationId: conversation._id })
+    .sort({ createdAt: -1 })
+    .lean();
+  if (!last || last.direction !== "INBOUND") return null;
+
+  const text = String(last.textBody || "").trim();
+  if (!text || text.startsWith("[")) return null;
+
+  // Same path as a live customer message: greeting, then FAQ, then business-only AI.
+  await handleInbound({
+    conversation,
+    textBody: text,
+    phoneNumberId: conversation.phoneNumberId,
+    msgType: "TEXT",
+  });
+  return true;
+}
+
 module.exports = {
   handleInbound,
+  answerPendingWithAi,
+  generateAiReply,
+  arrangeReply,
   matchFaq,
   matchesHandoff,
 };

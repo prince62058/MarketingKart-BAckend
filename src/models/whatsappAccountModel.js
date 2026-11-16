@@ -21,6 +21,20 @@ const whatsappAccountSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    qualityEvent: { type: String, default: null },
+    messagingLimit: { type: String, default: null },
+    accountReviewStatus: { type: String, default: null },
+    healthEvents: [
+      {
+        _id: false,
+        key: String,
+        field: String,
+        event: String,
+        severity: String,
+        message: String,
+        receivedAt: Date,
+      },
+    ],
     phoneStatus: {
       type: String,
       default: null,
@@ -76,6 +90,13 @@ const whatsappAccountSchema = new mongoose.Schema(
       type: String,
       enum: ["CONNECTED", "DISCONNECTED"],
       default: "CONNECTED",
+    },
+    // Conversions API dataset of the connected WABA, saved after the first lookup. Only trusted
+    // while wabaId still matches the account's wabaId (a reconnect can switch WABA).
+    capiDataset: {
+      datasetId: String,
+      wabaId: String,
+      savedAt: Date,
     },
   },
   {

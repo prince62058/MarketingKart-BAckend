@@ -5,6 +5,7 @@ const whatsappCloudApiService = require("../services/whatsappCloudApiService");
 const businessModel = require("../models/businessModel");
 const axios = require("axios");
 const { cleanText, previewText, isGenericLabel } = require("../services/whatsappChatFormat");
+const whatsappBotService = require("../services/whatsappBotService");
 
 const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const publicBase = () => (process.env.PUBLIC_API_URL || "https://api.marketingkart.in").replace(/\/$/, "");
@@ -262,6 +263,17 @@ exports.setBotMode = async (req, res) => {
     conversation.isBotActive = isBotActive;
     await conversation.save();
 
+    let botReply = null;
+    let botError = null;
+    if (isBotActive) {
+      try {
+        botReply = await whatsappBotService.answerPendingWithAi(conversation);
+      } catch (err) {
+        botError = err?.message || "AI could not reply";
+        console.error("[Chat] AI switch reply failed:", botError);
+      }
+    }
+
     if (global.io) {
       const convObj = {
         _id: String(conversation._id),
@@ -289,7 +301,12 @@ exports.setBotMode = async (req, res) => {
       global.io.to(`conversation:${conversation._id}`).emit("conversationUpdated", convObj);
     }
 
-    return res.status(200).json({ success: true, data: conversation });
+    return res.status(200).json({
+      success: true,
+      data: conversation,
+      botReplied: Boolean(botReply),
+      botError,
+    });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
