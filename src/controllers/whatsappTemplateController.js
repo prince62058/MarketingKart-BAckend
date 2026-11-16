@@ -2,6 +2,9 @@ const whatsappTemplateService = require("../services/whatsappTemplateService");
 const whatsappCloudApiService = require("../services/whatsappCloudApiService");
 const whatsappAccountModel = require("../models/whatsappAccountModel");
 const whatsappTemplateModel = require("../models/whatsappTemplateModel");
+const whatsappFlowModel = require("../models/whatsappFlowModel");
+const templateTypes = require("../services/whatsappTemplateTypes");
+const { screenId: flowScreenId } = require("../services/whatsappFlowBuilder");
 const OpenAI = require("openai");
 
 const openai = new OpenAI({
@@ -39,10 +42,38 @@ const generateExampleValues = (text) => {
 
 exports.createTemplate = async (req, res) => {
   try {
-    const { name, category, language, bodyText, businessId, headerType, headerText, headerMediaUrl, footerText, buttons, marketingType, exampleBodyValues } = req.body;
+    const { name, category, language, businessId, headerText, headerMediaUrl, footerText, buttons, marketingType, exampleBodyValues } = req.body;
+    const { flowId, flowButtonText, catalogButtonText, addSecurityRecommendation, codeExpirationMinutes, otpButtonText } = req.body;
+
+    let templateType;
+    let otpBody = null;
+    try {
+      templateType = templateTypes.resolveType(req.body.templateType, category);
+      if (templateType === "OTP") otpBody = templateTypes.otpBodyText({ addSecurityRecommendation, codeExpirationMinutes });
+    } catch (typeErr) {
+      return res.status(400).json({ success: false, message: typeErr.message });
+    }
+    // Meta writes the body of a one-time passcode template itself; a catalogue template has no header.
+    const bodyText = otpBody || req.body.bodyText;
+    const headerType = templateType === "OTP" || templateType === "CATALOG" ? "NONE" : req.body.headerType;
 
     if (!name || !category || !bodyText) {
       return res.status(400).json({ success: false, message: "name, category, bodyText are required" });
+    }
+
+    // A Flows template opens one of the user's own published flows.
+    let flowDoc = null;
+    if (templateType === "FLOW") {
+      if (!/^[a-f0-9]{24}$/i.test(String(flowId || ""))) {
+        return res.status(400).json({ success: false, message: "Choose a published flow for the form button." });
+      }
+      flowDoc = await whatsappFlowModel.findOne({ _id: flowId, userId: req.user._id });
+      if (!flowDoc) {
+        return res.status(404).json({ success: false, message: "Flow not found." });
+      }
+      if (flowDoc.status !== "PUBLISHED") {
+        return res.status(400).json({ success: false, message: "Publish the flow first, then add it to a template." });
+      }
     }
 
     // Validate template name format (Meta requires lowercase + underscores only)
@@ -87,10 +118,20 @@ exports.createTemplate = async (req, res) => {
     // ----------------------------------------
 
     // Build Meta-compliant components payload
-    const components = [];
+    let components = [];
+    let savedButtons = buttons || [];
+
+    if (templateType === "OTP") {
+      try {
+        components = templateTypes.otpComponents({ addSecurityRecommendation, codeExpirationMinutes, otpButtonText });
+      } catch (typeErr) {
+        return res.status(400).json({ success: false, message: typeErr.message });
+      }
+      savedButtons = [{ type: "OTP", text: components[components.length - 1].buttons[0].text }];
+    }
 
     // ===== HEADER COMPONENT =====
-    if (headerType && headerType !== "NONE") {
+    if (templateType !== "OTP" && headerType && headerType !== "NONE") {
       let headerComponent = { type: "HEADER", format: headerType };
       
       if (headerType === "TEXT") {
@@ -125,10 +166,10 @@ exports.createTemplate = async (req, res) => {
     if (bodyExamples.length > 0) {
       bodyComponent.example = { body_text: [bodyExamples] };
     }
-    components.push(bodyComponent);
+    if (templateType !== "OTP") components.push(bodyComponent);
 
     // ===== FOOTER COMPONENT =====
-    if (footerText && footerText.trim()) {
+    if (templateType !== "OTP" && footerText && footerText.trim()) {
       components.push({
         type: "FOOTER",
         text: footerText.trim(),
@@ -136,7 +177,28 @@ exports.createTemplate = async (req, res) => {
     }
 
     // ===== BUTTONS COMPONENT =====
-    if (buttons && buttons.length > 0) {
+    if (templateType === "FLOW" || templateType === "CATALOG") {
+      let typed;
+      try {
+        typed = templateTypes.typedButtons(templateType, {
+          flow: flowDoc && {
+            _id: flowDoc._id,
+            metaFlowId: flowDoc.metaFlowId,
+            firstScreen: flowDoc.definition ? flowScreenId(0) : null,
+          },
+          flowButtonText,
+          catalogButtonText,
+        });
+      } catch (typeErr) {
+        return res.status(400).json({ success: false, message: typeErr.message });
+      }
+      components.push({ type: "BUTTONS", buttons: typed.meta });
+      savedButtons = typed.local;
+    } else if (templateType === "CALL_PERMISSION") {
+      // Asks the customer for permission to call them on WhatsApp; it cannot carry other buttons.
+      components.push({ type: "call_permission_request" });
+      savedButtons = [];
+    } else if (templateType === "DEFAULT" && buttons && buttons.length > 0) {
       const metaButtons = buttons.map(btn => {
         if (btn.type === "QUICK_REPLY") return { type: "QUICK_REPLY", text: btn.text };
         if (btn.type === "PHONE_NUMBER") return { type: "PHONE_NUMBER", text: btn.text, phone_number: btn.phoneNumber };
@@ -155,8 +217,28 @@ exports.createTemplate = async (req, res) => {
       }
     }
 
+    const typedFields = {
+      templateType,
+      metaFlowId: flowDoc ? String(flowDoc.metaFlowId) : null,
+      ...(templateType === "OTP"
+        ? {
+            otp: {
+              addSecurityRecommendation: addSecurityRecommendation !== false,
+              codeExpirationMinutes: components.find((c) => c.type === "FOOTER")?.code_expiration_minutes || null,
+              buttonText: savedButtons[0]?.text || "Copy code",
+            },
+          }
+        : {}),
+    };
+
     // Fetch User's WhatsApp Credentials dynamically
     const account = await whatsappAccountModel.findOne({ userId: req.user._id });
+    if (templateType !== "DEFAULT" && (!account || account.status !== "CONNECTED")) {
+      return res.status(409).json({ success: false, message: "Connect your WhatsApp number first." });
+    }
+    if (flowDoc && String(flowDoc.wabaId) !== String(account.wabaId)) {
+      return res.status(409).json({ success: false, message: "This flow belongs to a different WhatsApp account." });
+    }
     if (!account || account.status !== "CONNECTED") {
       const initialStatus = req.body.status || (req.user.userType === "ADMIN" ? "APPROVED" : "PENDING");
       const template = await whatsappTemplateService.createTemplate({
@@ -168,7 +250,8 @@ exports.createTemplate = async (req, res) => {
         headerText: headerText || "",
         headerMediaUrl: headerMediaUrl || "",
         footerText: footerText || "",
-        buttons: buttons || [],
+        buttons: savedButtons,
+        ...typedFields,
         marketingType: marketingType || "CUSTOM",
         components,
         metaTemplateId: null,
@@ -214,7 +297,8 @@ exports.createTemplate = async (req, res) => {
       headerText: headerText || "",
       headerMediaUrl: headerMediaUrl || "",
       footerText: footerText || "",
-      buttons: buttons || [],
+      buttons: savedButtons,
+      ...typedFields,
       marketingType: marketingType || "CUSTOM",
       components,
       metaTemplateId,

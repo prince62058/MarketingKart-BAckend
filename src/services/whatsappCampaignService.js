@@ -171,8 +171,23 @@ const resolveVariables = (contact, variableMapping) => {
 /**
  * Build Meta-compatible components array from resolved variables.
  */
+// A FLOW button gets a flow_token naming the flow, because the completed form (nfm_reply)
+// does not say which flow it came from. Meta's index is the button's position.
+const flowButtonComponents = (templateComponents = []) => {
+  const buttons = (templateComponents || []).find((c) => String(c?.type || "").toUpperCase() === "BUTTONS")?.buttons || [];
+  return buttons
+    .map((button, index) => ({ button, index }))
+    .filter(({ button }) => String(button?.type || "").toUpperCase() === "FLOW" && button.flow_id)
+    .map(({ button, index }) => ({
+      type: "button",
+      sub_type: "flow",
+      index: String(index),
+      parameters: [{ type: "action", action: { flow_token: `mkf_${button.flow_id}` } }],
+    }));
+};
+
 const buildComponents = (variables, templateComponents = []) => {
-  if (!variables || Object.keys(variables).length === 0) return [];
+  if (!variables || Object.keys(variables).length === 0) return flowButtonComponents(templateComponents);
 
   const finalComponents = [];
 
@@ -231,7 +246,7 @@ const buildComponents = (variables, templateComponents = []) => {
     finalComponents.push({ type: "body", parameters: params });
   }
 
-  return finalComponents;
+  return [...finalComponents, ...flowButtonComponents(templateComponents)];
 };
 
 /** Messages per minute we fall back to when a campaign does not ask for one. */

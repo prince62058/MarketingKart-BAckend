@@ -122,6 +122,18 @@ const SIGNED_IN = [
   ["PUT", `/api/updateGstOfUser?gstNumberId=${someId}`, {}],
   ["GET", `/api/whatsapp/chat/conversations/${someId}/conversion`],
   ["POST", `/api/whatsapp/chat/conversations/${someId}/conversion`, { event: "lead" }],
+  ["GET", "/api/whatsapp/flows"],
+  ["GET", "/api/whatsapp/flows/starters"],
+  ["POST", "/api/whatsapp/flows", {}],
+  ["POST", "/api/whatsapp/flows/sync", {}],
+  ["GET", `/api/whatsapp/flows/${someId}`],
+  ["PUT", `/api/whatsapp/flows/${someId}`, {}],
+  ["DELETE", `/api/whatsapp/flows/${someId}`],
+  ["POST", `/api/whatsapp/flows/${someId}/publish`, {}],
+  ["POST", `/api/whatsapp/flows/${someId}/deprecate`, {}],
+  ["GET", `/api/whatsapp/flows/${someId}/preview`],
+  ["POST", `/api/whatsapp/flows/${someId}/send`, { conversationId: someId }],
+  ["GET", `/api/whatsapp/flows/${someId}/responses`],
 ];
 
 // Routes the apps and the public use without an account. They must NOT ask for a login.

@@ -24,6 +24,7 @@ const { syncLeadsForBusiness } = require("../services/leadSyncService");
 const whatsappBotService = require("../services/whatsappBotService");
 const whatsappAccountHealthService = require("../services/whatsappAccountHealthService");
 const whatsappConversionService = require("../services/whatsappConversionService");
+const whatsappFlowService = require("../services/whatsappFlowService");
 
 const getPhoneVariants = (rawPhone) => {
   const digits = String(rawPhone || "").replace(/\D/g, "");
@@ -486,6 +487,7 @@ exports.postWhatsAppWebhook = async (req, res) => {
 
           let textBody = "";
           let msgType = "UNKNOWN";
+          let flowReply = null;
 
           if (msg.type === "text" && msg.text) {
             textBody = msg.text.body;
@@ -498,6 +500,19 @@ exports.postWhatsAppWebhook = async (req, res) => {
               textBody = msg.interactive.button_reply.title;
             } else if (msg.interactive.type === "list_reply") {
               textBody = msg.interactive.list_reply.title;
+            } else if (msg.interactive.type === "nfm_reply") {
+              // A completed WhatsApp Flow (form): show the answers as readable text.
+              flowReply = await whatsappFlowService
+                .describeReply({ userId: ownerUserId, wabaId: realWabaId, nfmReply: msg.interactive.nfm_reply })
+                .catch((err) => {
+                  console.error("[WA Webhook] flow reply parse failed:", err.message);
+                  return null;
+                });
+              textBody = flowReply?.text || "📋 Form submitted";
+            } else if (msg.interactive.type === "call_permission_reply") {
+              textBody = msg.interactive.call_permission_reply?.response === "accept"
+                ? "📞 Allowed WhatsApp calls from you"
+                : "📞 Declined WhatsApp calls";
             }
             msgType = "INTERACTIVE";
           } else if (["image", "video", "document", "audio", "sticker"].includes(msg.type)) {
@@ -615,6 +630,22 @@ exports.postWhatsAppWebhook = async (req, res) => {
               status: "DELIVERED",
               sentAt: new Date(parseInt(msg.timestamp) * 1000),
             });
+
+            if (flowReply) {
+              await whatsappFlowService
+                .recordReply(flowReply, {
+                  userId: ownerUserId,
+                  businessId,
+                  conversationId: conversation._id,
+                  wabaId: realWabaId,
+                  phoneNumberId,
+                  customerPhone,
+                  customerName: conversation.customerName || customerName,
+                  wamid,
+                  receivedAt: createdMsg.sentAt,
+                })
+                .catch((err) => console.error("[WA Webhook] flow reply save failed:", err.message));
+            }
 
             // Prepare unified payload for inbox & chat
             const convObj = {

@@ -61,14 +61,29 @@ const whatsappTemplateSchema = new mongoose.Schema(
         {
           type: {
             type: String,
-            enum: ["QUICK_REPLY", "PHONE_NUMBER", "URL"],
+            enum: ["QUICK_REPLY", "PHONE_NUMBER", "URL", "FLOW", "CATALOG", "OTP"],
           },
           text: String,
           phoneNumber: String,
           url: String,
+          flowId: { type: mongoose.Schema.Types.ObjectId, ref: "whatsappFlow" },
+          metaFlowId: String,
         },
       ],
       default: [],
+    },
+    // WhatsApp Manager's template types: DEFAULT, CATALOG and FLOW (form button),
+    // CALL_PERMISSION (calling permissions request) and OTP (authentication).
+    templateType: {
+      type: String,
+      enum: ["DEFAULT", "CATALOG", "FLOW", "CALL_PERMISSION", "OTP"],
+      default: "DEFAULT",
+    },
+    metaFlowId: { type: String, default: null },
+    otp: {
+      addSecurityRecommendation: Boolean,
+      codeExpirationMinutes: Number,
+      buttonText: String,
     },
     marketingType: {
       type: String,

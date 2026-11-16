@@ -1,5 +1,6 @@
 const whatsappTemplateModel = require("../models/whatsappTemplateModel");
 const whatsappCloudApiService = require("./whatsappCloudApiService");
+const { detectTemplateType, flowIdOf } = require("./whatsappTemplateTypes");
 
 const buildAccessQuery = ({ createdBy, isAdmin = false, businessId, wabaId } = {}) => {
   const query = { disable: false };
@@ -152,6 +153,8 @@ const syncFromMeta = async (credentials, additionalData = {}) => {
       name: tplName,
       status: tpl.status,
       metaTemplateId: metaId,
+      templateType: detectTemplateType(components, tpl.category),
+      metaFlowId: flowIdOf(components),
       category: tpl.category || "MARKETING",
       language: tpl.language || "en_US",
       components,

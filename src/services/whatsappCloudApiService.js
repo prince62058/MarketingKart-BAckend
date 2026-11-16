@@ -97,6 +97,47 @@ const sendTextMessage = async (to, body, credentials) => {
 };
 
 /**
+ * Send an interactive message (e.g. a WhatsApp Flow form) inside the 24-hour window.
+ * @param {string} to - Phone number in E.164 format
+ * @param {Object} interactive - The `interactive` object, e.g. { type: "flow", body, action }
+ * @param {Object} credentials - { accessToken, phoneNumberId } from User's Account
+ * @returns {Object} Meta API response
+ */
+const sendInteractiveMessage = async (to, interactive, credentials) => {
+  await assertUniquePhone(credentials?.phoneNumberId);
+  const { accessToken, phoneNumberId } = credentials || {};
+
+  if (!accessToken || !phoneNumberId) {
+    throw new Error("Missing WhatsApp credentials (accessToken, phoneNumberId)");
+  }
+
+  const payload = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type: "interactive",
+    interactive,
+  };
+
+  try {
+    const response = await axios.post(`${BASE_URL}/${phoneNumberId}/messages`, payload, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 10000,
+    });
+    return response.data;
+  } catch (error) {
+    const metaError = error?.response?.data?.error;
+    const structured = new Error(metaError?.message || error.message || "Meta API error");
+    structured.code = metaError?.code || error?.code || "UNKNOWN";
+    structured.response = error.response;
+    throw structured;
+  }
+};
+
+/**
  * Send a WhatsApp media message (image, video, document, audio).
  * @param {string} to - Recipient phone number in E.164 format
  * @param {string} mediaType - 'image' | 'video' | 'document' | 'audio'
@@ -278,6 +319,7 @@ const fetchPhoneNumbersFromMeta = async (credentials) => {
 module.exports = {
   sendTemplateMessage,
   sendTextMessage,
+  sendInteractiveMessage,
   sendMediaMessage,
   syncTemplatesFromMeta,
   uploadTemplateToMeta,

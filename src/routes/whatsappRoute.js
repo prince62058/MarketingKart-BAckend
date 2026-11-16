@@ -5,6 +5,7 @@ const campaignController = require("../controllers/whatsappCampaignController");
 const webhookController = require("../controllers/webhookController");
 const accountController = require("../controllers/whatsappAccountController");
 const metaOAuthController = require("../controllers/metaOAuthController");
+const flowController = require("../controllers/whatsappFlowController");
 const { authUser, isAdmin } = require("../middlewares/authMidd");
 const { uploadExcel, uploadWhatsAppMedia } = require("../middlewares/multer");
 
@@ -63,5 +64,19 @@ router.delete("/whatsapp/campaigns/:campaignId", authUser, campaignController.de
 
 // ─── Report ─────────────────────────────────────────────────────────────────
 router.get("/whatsapp/report", authUser, campaignController.getCampaignReport);
+
+// ─── Flows (WhatsApp forms) ─────────────────────────────────────────────────
+router.get("/whatsapp/flows/starters", authUser, flowController.listStarters);
+router.post("/whatsapp/flows/sync", authUser, flowController.syncFlows);
+router.get("/whatsapp/flows", authUser, flowController.listFlows);
+router.post("/whatsapp/flows", authUser, flowController.createFlow);
+router.get("/whatsapp/flows/:flowId", authUser, flowController.getFlow);
+router.put("/whatsapp/flows/:flowId", authUser, flowController.updateFlow);
+router.delete("/whatsapp/flows/:flowId", authUser, flowController.deleteFlow);
+router.post("/whatsapp/flows/:flowId/publish", authUser, flowController.publishFlow);
+router.post("/whatsapp/flows/:flowId/deprecate", authUser, flowController.deprecateFlow);
+router.get("/whatsapp/flows/:flowId/preview", authUser, flowController.previewFlow);
+router.post("/whatsapp/flows/:flowId/send", authUser, flowController.sendFlow);
+router.get("/whatsapp/flows/:flowId/responses", authUser, flowController.listResponses);
 
 module.exports = router;

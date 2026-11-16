@@ -132,6 +132,14 @@ exports.createCampaign = async (req, res) => {
       });
     }
 
+    // A one-time passcode carries a code made for one person; it is never a campaign message.
+    if (template.category === "AUTHENTICATION" || template.templateType === "OTP") {
+      return res.status(400).json({
+        success: false,
+        message: "One-time passcode templates cannot be sent as a campaign.",
+      });
+    }
+
     let parsedVariableMapping = {};
     if (variableMapping) {
       try {
