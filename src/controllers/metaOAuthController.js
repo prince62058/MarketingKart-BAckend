@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const Sessions = require('../models/whatsappSignupSessionModel');
 const Accounts = require('../models/whatsappAccountModel');
-const {connectSignup,discoverFacebookAccounts,connectFacebookAccount} = require('../services/whatsappSignupService');
+const {connectSignup,discoverFacebookAccounts,connectFacebookAccount,allowConversionEvents} = require('../services/whatsappSignupService');
 const {getSignupHtml} = require('../views/whatsappSignupPage');
 const {parseSignupMode} = require('../services/whatsappSignupFlow');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -72,4 +72,17 @@ exports.sdkConnect = async (req,res) => {
   const account=await connectFacebookAccount({userId:req.user._id,accessToken,wabaId:String(wabaId || ''),phoneNumberId:String(phoneNumberId || '')});
   res.set('Cache-Control','no-store').json({success:true,data:{connected:true,phoneNumber:account.phoneNumber,verifiedName:account.verifiedName}});
  }catch(error){ sdkFailure(res,error); }
+};
+// After a lead/sale event failed with fix "ALLOW_EVENTS": the app's separate Facebook login asked for
+// whatsapp_business_manage_events, and its token replaces the stored one of the connected number.
+exports.sdkAllowEvents = async (req,res) => {
+ if(!sdkReady())return res.status(503).json({success:false,message:'WhatsApp onboarding setup is being completed. Please contact support.'});
+ try {
+  const result=await allowConversionEvents({userId:req.authUser._id,accessToken:req.body?.accessToken});
+  res.set('Cache-Control','no-store').json({success:true,message:'MarketingKart can now report ad leads and sales',data:{allowed:true,tokenExpiresAt:result.tokenExpiresAt}});
+ }catch(error){
+  // Never a 401 here: the app signs the user out on a 401.
+  if(error.reason)return res.status(error.httpStatus).json({success:false,code:error.reason,message:error.message});
+  sdkFailure(res,error);
+ }
 };

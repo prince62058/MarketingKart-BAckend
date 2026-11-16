@@ -122,6 +122,7 @@ const SIGNED_IN = [
   ["PUT", `/api/updateGstOfUser?gstNumberId=${someId}`, {}],
   ["GET", `/api/whatsapp/chat/conversations/${someId}/conversion`],
   ["POST", `/api/whatsapp/chat/conversations/${someId}/conversion`, { event: "lead" }],
+  ["POST", "/api/whatsapp/meta/sdk/allow-events", { accessToken: "x" }],
   ["GET", "/api/whatsapp/flows"],
   ["GET", "/api/whatsapp/flows/starters"],
   ["POST", "/api/whatsapp/flows", {}],

@@ -114,7 +114,15 @@ Authorization: Bearer <business token of the WABA>
   advanced `whatsapp_business_messaging` should be approved for `whatsapp_business_manage_events`
   automatically once it applies.
 - Token: the guide recommends the Embedded Signup token, which is what `whatsappAccount.accessToken`
-  stores (encrypted).
+  stores (encrypted) for numbers connected through signup. The Embedded Signup configuration
+  (1753939735905629) already lists `whatsapp_business_manage_events`.
+- "Existing API number" accounts (`connectedVia: "FACEBOOK"`) store the long-lived token of the app's
+  Facebook SDK login, which asks only for `whatsapp_business_management` and
+  `whatsapp_business_messaging`, so Meta refuses their events. The SDK login must not ask for
+  `whatsapp_business_manage_events` while the permission has only standard access (that broke the
+  Facebook screen for people without a role before). Instead, a failed event answers with
+  `fix: "ALLOW_EVENTS"`, the app runs a separate Facebook login that also asks for the permission, and
+  `POST /api/whatsapp/meta/sdk/allow-events` swaps the stored token (see below).
 
 ## MarketingKart API
 
@@ -177,13 +185,32 @@ Body: `{ "event": "lead" }`, `{ "event": "lead", "value": 250 }` or `{ "event": 
 | 409 | `NOT_FROM_AD` | The chat has no `ctwa_clid` | Hide the action |
 | 409 | `WABA_MISMATCH` | The chat belongs to a WABA that is no longer connected | Offer "Reconnect WhatsApp" |
 | 409 | `IN_PROGRESS` | Another tap is being sent | "Try again in a minute" |
-| 502 | `EVENTS_PERMISSION_MISSING` | The token lacks `whatsapp_business_manage_events` | Offer "Reconnect WhatsApp" |
+| 502 | `EVENTS_PERMISSION_MISSING`, `fix: "ALLOW_EVENTS"` | An "Existing API number" token lacks `whatsapp_business_manage_events` | Offer "Allow": separate Facebook login, then `allow-events`, then send again |
+| 502 | `EVENTS_PERMISSION_MISSING`, `fix: "RECONNECT"` | A signup token lacks `whatsapp_business_manage_events` | Offer "Reconnect WhatsApp" |
 | 502 | `WHATSAPP_TOKEN_INVALID` | The token expired or was revoked (Meta 190) | Offer "Reconnect WhatsApp" |
 | 502 | `META_ERROR` | Meta refused the event or could not be reached; saved as `FAILED` | Show the message; allow retry |
 
 Conversation objects from `GET /api/whatsapp/chat/conversations` now also carry
 `ctwa: { adId, sourceType, sourceUrl, headline, mediaType, capturedAt }` (never the click id) for chats
 that started from an ad.
+
+### `POST /api/whatsapp/meta/sdk/allow-events`
+
+Body: `{ "accessToken": "<token from the app's separate Facebook SDK login>" }`. Only for the signed-in
+user's connected account with `connectedVia: "FACEBOOK"`. The server checks the token with
+`debug_token` (this app, valid, management + messaging + `whatsapp_business_manage_events`, and the
+connected WABA among the granted accounts), swaps it for a long-lived token, checks that again, and
+replaces only `accessToken` and `tokenExpiresAt` of that same account. The token is never sent back.
+
+| HTTP | `code` | Meaning |
+| --- | --- | --- |
+| 200 | (none) | Stored. `data: { allowed: true, tokenExpiresAt }`; send the event again |
+| 400 | `EVENTS_PERMISSION_DECLINED` | The token lacks the permission, or not for the connected WABA |
+| 400 | (none) | The token is invalid, expired, from another app, or cannot manage the connected WABA |
+| 404 | `WHATSAPP_NOT_CONNECTED` | No connected account |
+| 409 | `RECONNECT_REQUIRED` | The account came from Embedded Signup; reconnect instead |
+| 409 | `WHATSAPP_CHANGED` | The account was reconnected meanwhile; try again |
+| 503 | (none) or `NOT_CONFIGURED` | Facebook app settings are missing on the server |
 
 ## Mobile app (MarketingKartNative): what to build
 
@@ -262,12 +289,14 @@ Record on the Play Store build, after the backend is deployed and the mobile scr
 
 1. **Connect WhatsApp.** In MarketingKart open WhatsApp, tap "Connect WhatsApp", go through Meta's
    Embedded Signup and pause on the permissions screen that lists managing events for the WhatsApp
-   account. Finish and show the connected number.
+   account. Finish and show the connected number. A number that is already on the Cloud API connects
+   as "Existing API number" instead; its permission screen comes in step 3.
 2. **Customer arrives from an ad.** On a second phone, tap the Click-to-WhatsApp ad in Facebook or
    Instagram and send a message. Show the chat arriving in the MarketingKart inbox with its "From ad"
    label.
 3. **Mark as lead.** Open the chat, tap "Mark as lead" and show the "Lead reported to Meta"
-   confirmation.
+   confirmation. For an "Existing API number", the first tap shows "Allow lead and sale reports": tap
+   "Allow", pause on the Facebook screen that asks to manage events, approve, and the lead is sent.
 4. **Mark as sale.** Tap "Mark as sale", enter ₹1,499, confirm, and show that it is marked as sent and
    cannot be sent a second time.
 5. **Show it in Meta.** Open Events Manager, then the WABA's dataset, and show the `LeadSubmitted` and

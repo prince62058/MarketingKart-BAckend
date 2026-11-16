@@ -2,7 +2,7 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 process.env.clientId='app-test';process.env.clientSecret='secret-test';process.env.WHATSAPP_TOKEN_ENCRYPTION_KEY='ab'.repeat(32);
-const {discoverFacebookAccounts,connectFacebookAccount}=require('../src/services/whatsappSignupService');
+const {discoverFacebookAccounts,connectFacebookAccount,allowConversionEvents}=require('../src/services/whatsappSignupService');
 const grant={is_valid:true,app_id:'app-test',scopes:['whatsapp_business_management','whatsapp_business_messaging'],granular_scopes:[{scope:'whatsapp_business_management',target_ids:['123456']}]};
 const sdkToken='sdk-token-'.repeat(4);
 const longToken='long-lived-token-'.repeat(3);
@@ -20,7 +20,7 @@ function mocks(overrides={}){
  Account:(()=>{
   const row=()=>overrides.previous||overrides.existing||null;
   const chain=()=>{const c={select(){return c;},lean:async()=>row(),then(resolve,reject){return Promise.resolve(row()).then(resolve,reject);}};return c;};
-  return {findOne:()=>chain(),findOneAndUpdate:async(query,update)=>{calls.push(['save',query,update]);return update.$set;}};
+  return {findOne:()=>chain(),findOneAndUpdate:async(query,update)=>{calls.push(['save',query,update]);return overrides.saveMiss?null:update.$set;}};
  })(),
  Claim:{findOneAndUpdate:async()=>({userId:overrides.claimUser||'tenant-a'})}};
 }
@@ -90,4 +90,46 @@ test('coexistence Cloud API numbers reconnect via Existing API without re-regist
  assert.equal(account.status,'CONNECTED');
  assert.equal(account.onboardingMode,'BUSINESS_APP');
  assert.ok(!writes(deps).some(c=>c[1]&&String(c[1]).endsWith('/register')));
+});
+
+// "Allow" step for ad lead/sale events (whatsapp_business_manage_events) on an Existing API number.
+const eventsGrant={...grant,scopes:[...grant.scopes,'whatsapp_business_manage_events']};
+const sdkAccount={_id:'account-1',userId:'tenant-a',wabaId:'123456',connectedVia:'FACEBOOK',status:'CONNECTED'};
+const allow=deps=>allowConversionEvents({userId:'tenant-a',accessToken:sdkToken},deps);
+const saves=deps=>deps.calls.filter(c=>c[0]==='save');
+
+test('allowing ad events swaps the stored token of an Existing API number for a long-lived one with the permission',async()=>{
+ const deps=mocks({grant:{...eventsGrant,expires_at:Math.floor(Date.now()/1000)+86400},existing:sdkAccount});
+ const result=await allow(deps);
+ assert.equal(saves(deps).length,1);
+ const [,filter,update]=saves(deps)[0];
+ assert.deepEqual(filter,{_id:'account-1',userId:'tenant-a',status:'CONNECTED',connectedVia:'FACEBOOK',wabaId:'123456'});
+ assert.deepEqual(Object.keys(update.$set).sort(),['accessToken','tokenExpiresAt'],'only the token changes');
+ assert.equal(update.$set.accessToken,longToken);
+ assert.ok(update.$set.tokenExpiresAt instanceof Date);
+ assert.ok(deps.calls.some(c=>c[1].endsWith('/oauth/access_token')&&c[2].params.fb_exchange_token===sdkToken));
+ assert.equal(result.wabaId,'123456');
+ assert.ok(!JSON.stringify(result).includes(longToken),'the token never goes back to the app');
+ assert.equal(deps.calls.filter(c=>c[0]==='post').length,0,'the number is not re-subscribed or re-registered');
+});
+
+test('allowing ad events is refused without the permission, for another account, or for an Embedded Signup number',async()=>{
+ const otherWaba={...eventsGrant,granular_scopes:[...grant.granular_scopes,{scope:'whatsapp_business_manage_events',target_ids:['999999']}]};
+ const cases=[
+  [{grant,existing:sdkAccount},'EVENTS_PERMISSION_DECLINED',400],
+  [{grant:otherWaba,existing:sdkAccount},'EVENTS_PERMISSION_DECLINED',400],
+  [{grant:eventsGrant,existing:{...sdkAccount,connectedVia:'EMBEDDED_SIGNUP'}},'RECONNECT_REQUIRED',409],
+  [{grant:eventsGrant},'WHATSAPP_NOT_CONNECTED',404],
+ ];
+ for(const [opts,reason,status] of cases){
+  const deps=mocks(opts);
+  await assert.rejects(allow(deps),error=>error.reason===reason&&error.httpStatus===status,reason);
+  assert.equal(saves(deps).length,0,`nothing is saved for ${reason}`);
+ }
+ // A token that cannot manage the connected WABA is refused like any other foreign grant.
+ const foreign=mocks({grant:{...eventsGrant,granular_scopes:[{scope:'whatsapp_business_management',target_ids:['555555']}]},existing:sdkAccount});
+ await assert.rejects(allow(foreign),/not shared/);
+ assert.equal(saves(foreign).length,0);
+ // A reconnect between the lookup and the save wins: the update matches nothing and the caller is told.
+ await assert.rejects(allow(mocks({grant:eventsGrant,existing:sdkAccount,saveMiss:true})),error=>error.reason==='WHATSAPP_CHANGED');
 });

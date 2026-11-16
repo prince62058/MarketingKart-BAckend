@@ -236,4 +236,48 @@ async function connectFacebookAccount({userId, accessToken, wabaId, phoneNumberI
   }
   return account;
 }
-module.exports = {connectSignup,validateGrant,discoverFacebookAccounts,connectFacebookAccount};
+
+// An "Existing API number" account keeps the Facebook SDK token from connectFacebookAccount. That token
+// has no whatsapp_business_manage_events, so Meta refuses the account's lead and sale events. The app asks
+// for the permission in a separate Facebook login, only after an event fails (it stays out of the normal
+// login while the permission is in App Review), and this swaps the stored token for the new one.
+// Embedded Signup accounts keep their system-user token and reconnect through signup instead.
+const EVENTS_SCOPE = 'whatsapp_business_manage_events';
+const refusal = (httpStatus, reason, message) => Object.assign(new Error(message), {httpStatus, reason});
+function requireEventsGrant(grant, wabaId) {
+  if (!grant.scopes?.includes(EVENTS_SCOPE)) throw refusal(400, 'EVENTS_PERMISSION_DECLINED', 'Facebook did not allow MarketingKart to report ad leads and sales. Tap Allow again and keep event management switched on.');
+  // When Meta lists the accounts the permission covers, the connected account must be one of them.
+  const targets = grant.granular_scopes?.find(item => item.scope === EVENTS_SCOPE)?.target_ids;
+  if (Array.isArray(targets) && targets.length && !targets.map(String).includes(String(wabaId))) throw refusal(400, 'EVENTS_PERMISSION_DECLINED', 'Allow event management for the WhatsApp account that is connected to MarketingKart.');
+}
+
+async function allowConversionEvents({userId, accessToken}, deps = {}) {
+  const api = deps.api || axios;
+  const Accounts = deps.Account || Account;
+  const appId = process.env.clientId, secret = process.env.clientSecret;
+  if (!appId || !secret || !process.env.WHATSAPP_TOKEN_ENCRYPTION_KEY) throw refusal(503, 'NOT_CONFIGURED', 'WhatsApp onboarding is not configured. Contact support.');
+  const account = await Accounts.findOne({userId, status:'CONNECTED'}).select('_id wabaId connectedVia').lean();
+  if (!account) throw refusal(404, 'WHATSAPP_NOT_CONNECTED', 'Connect WhatsApp first.');
+  if (account.connectedVia !== 'FACEBOOK') throw refusal(409, 'RECONNECT_REQUIRED', 'This number was connected with Meta signup. Reconnect WhatsApp to report ad leads and sales.');
+  const wabaId = String(account.wabaId || '');
+  const base = `https://graph.facebook.com/${version()}`;
+  const first = await inspectFacebookToken(api, base, appId, secret, accessToken);
+  validateGrant(first, appId, wabaId);
+  requireEventsGrant(first, wabaId);
+  const exchanged = await api.get(`${base}/oauth/access_token`, {params:{grant_type:'fb_exchange_token',client_id:appId,client_secret:secret,fb_exchange_token:accessToken},timeout:15000});
+  const token = exchanged.data?.access_token;
+  if (!token) throw new Error('Meta did not authorize the connection. Sign in and try again.');
+  const grant = await inspectFacebookToken(api, base, appId, secret, token);
+  validateGrant(grant, appId, wabaId);
+  requireEventsGrant(grant, wabaId);
+  const tokenExpiresAt = grant.expires_at ? new Date(grant.expires_at*1000) : null;
+  // Only the same, still-connected account is changed, so a reconnect that happened meanwhile wins.
+  const saved = await Accounts.findOneAndUpdate(
+    {_id:account._id,userId,status:'CONNECTED',connectedVia:'FACEBOOK',wabaId:account.wabaId},
+    {$set:{accessToken:token,tokenExpiresAt}},
+    {new:true,runValidators:true},
+  );
+  if (!saved) throw refusal(409, 'WHATSAPP_CHANGED', 'Your WhatsApp connection changed meanwhile. Try again.');
+  return {wabaId, tokenExpiresAt};
+}
+module.exports = {connectSignup,validateGrant,discoverFacebookAccounts,connectFacebookAccount,allowConversionEvents};

@@ -288,6 +288,16 @@ async function markConversation({ userId, conversationId, event, value }, deps =
     result = await sendEvent({ datasetId, account, clid, record }, deps);
   } catch (err) {
     const problem = describeGraphError(err);
+    // How the app can get the missing permission: a number connected with the Facebook SDK ("Existing
+    // API number") allows it in the app's separate Facebook login; an Embedded Signup number reconnects.
+    let fix;
+    if (problem.code === "EVENTS_PERMISSION_MISSING") {
+      fix = account.connectedVia === "FACEBOOK" ? "ALLOW_EVENTS" : "RECONNECT";
+      if (fix === "ALLOW_EVENTS") {
+        problem.message =
+          "Allow MarketingKart to report ad leads and sales for this WhatsApp number (whatsapp_business_manage_events), then try again.";
+      }
+    }
     const failed = { status: "FAILED", errorCode: problem.code, errorMessage: problem.errorMessage };
     if (datasetId) failed.datasetId = datasetId;
     console.warn(`[WA Conversions] ${record.eventName} for conversation ${conversation._id} failed: ${problem.code} ${problem.errorMessage}`);
@@ -296,7 +306,7 @@ async function markConversation({ userId, conversationId, event, value }, deps =
     } catch (saveErr) {
       console.error(`[WA Conversions] could not record the failure for ${record._id}:`, saveErr.message);
     }
-    return fail(502, problem.code, problem.message, { data: describeEvent({ ...record, ...failed }) });
+    return fail(502, problem.code, problem.message, { data: describeEvent({ ...record, ...failed }), ...(fix ? { fix } : {}) });
   }
 
   const sent = {

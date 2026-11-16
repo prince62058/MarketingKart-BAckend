@@ -30,6 +30,7 @@ router.get("/whatsapp/meta/status", authUser, metaOAuthController.checkStatus);
 // Facebook SDK login for people who already have a WhatsApp Business API number
 router.post("/whatsapp/meta/sdk/discover", authUser, metaOAuthController.sdkDiscover);
 router.post("/whatsapp/meta/sdk/connect", authUser, metaOAuthController.sdkConnect);
+router.post("/whatsapp/meta/sdk/allow-events", authUser, metaOAuthController.sdkAllowEvents);
 
 // ─── Templates ──────────────────────────────────────────────────────────────
 router.post("/whatsapp/templates/sync", authUser, templateController.syncTemplates);

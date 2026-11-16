@@ -364,6 +364,25 @@ test("a missing permission or an expired token asks the owner to reconnect, neve
   assert.match(timeout.message, /^Could not report this to Meta/);
 });
 
+test("a missing permission tells the app how to get it: Allow for a Facebook SDK number, reconnect otherwise", async () => {
+  const denied = () => metaError(200, "Requires whatsapp_business_manage_events permission", 403);
+  const sdk = await mark(world({ account: baseAccount({ connectedVia: "FACEBOOK" }), eventsAnswer: denied() }));
+  assert.equal(sdk.status, 502);
+  assert.equal(sdk.body.code, "EVENTS_PERMISSION_MISSING");
+  assert.equal(sdk.body.fix, "ALLOW_EVENTS");
+  assert.match(sdk.body.message, /^Allow MarketingKart/);
+
+  for (const connectedVia of ["EMBEDDED_SIGNUP", undefined]) {
+    const res = await mark(world({ account: baseAccount({ connectedVia }), eventsAnswer: denied() }));
+    assert.equal(res.body.fix, "RECONNECT", String(connectedVia));
+    assert.match(res.body.message, /Reconnect WhatsApp/);
+  }
+
+  const expired = await mark(world({ account: baseAccount({ connectedVia: "FACEBOOK" }), eventsAnswer: metaError(190, "Error validating access token", 401) }));
+  assert.equal(expired.body.code, "WHATSAPP_TOKEN_INVALID");
+  assert.equal(expired.body.fix, undefined);
+});
+
 test("only the owner can mark a chat, and only a chat that came from a Click-to-WhatsApp ad", async () => {
   const w = world();
   assert.equal((await mark(w, { userId: ids.otherUser })).status, 403);
