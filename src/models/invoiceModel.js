@@ -25,6 +25,12 @@ const invoiceSchema = new mongoose.Schema({
         type:mongoose.Schema.Types.ObjectId,
         ref:"advertisementModel"
     },
+    // The ad package the customer chose (none for a custom budget), as it was named when they paid.
+    planId:{
+        type:mongoose.Schema.Types.ObjectId,
+        ref:"planModel"
+    },
+    packageName: { type: String, trim: true },
     invoiceNumber: {
         type: String,
         trim: true,

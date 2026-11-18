@@ -8,6 +8,8 @@ const internalCampiagnModel = require("../models/internalCampiagnModel.js");
 const adsDetailModel = require("../models/adsDetailModel.js");
 const advertisementModel = require("../models/advertisementModel.js");
 const invoiceModel = require("../models/invoiceModel.js");
+const planModel = require("../models/planModel.js");
+const { adInvoiceLines, legacyAdInvoiceLines, campaignDays } = require("../helpers/adInvoice.js");
 const { mkFullLogoB64, mkIconLogoB64 } = require("../utils/invoiceLogos.js");
 
 
@@ -26,20 +28,24 @@ exports.generateInvoice = async (
   transactionId,
   facebookBudget,
   instaBudget,
-  googleBudget
+  googleBudget,
+  // { adSpend, total, planId }: the Meta budget, what the customer was actually charged, and the
+  // package they chose. The invoice then shows the same lines as the app's "Review & Launch Ad".
+  charge = {}
 ) => {
-  // const { businessId, facebookBudget, instaBudget, googleBudget, addTypeId } = req.body;
-
   try {
-    let ins = intenalId[0];
+    const ins = Array.isArray(intenalId) ? intenalId[0] : intenalId;
     // Fetch data with error handling
     const companyData = await companyModel.findOne();
-    const advertismentType = await advertisementModel.findById(ins?.addTypeId);
-    const business = await businessModel.findById(ins?.businessId);
+    const advertismentType = ins?.addTypeId ? await advertisementModel.findById(ins.addTypeId) : null;
+    const business = ins?.businessId ? await businessModel.findById(ins.businessId) : null;
+    const planId = charge?.planId || ins?.planId || null;
+    const plan = planId ? await planModel.findById(planId).select("title duretion").lean() : null;
 
-    const checkUserBil = await GstOfUserModel.findOne({
-      userId: business?.userId,
-    });
+    // Only this customer's GST details: a lookup without a userId would match someone else's.
+    const checkUserBil = business?.userId
+      ? await GstOfUserModel.findOne({ userId: business.userId })
+      : null;
 
   let adata =  checkUserBil
       ? `<p style="font-weight: 900">
@@ -53,41 +59,42 @@ exports.generateInvoice = async (
               <p>Email: ${business?.businessEmail || "N/A"}</p>
               <p>Phone: ${business?.businessContact || "N/A"}</p>`;
 
-    const addType =
-      advertismentType.advertisementType == "OUTCOME_LEADS"
-        ? "Lead Ads"
-        : "OUTCOME_TRAFFIC"
-          ? "Traffic Ads"
-          : "OUTCOME_APP_INSTALLS"
-            ? "App Install Ads"
-            : "OUTCOME_SALES"
-              ? "Sales Ads"
-              : "OUTCOME_ENGAGEMENT"
-                ? "Engagement Ads"
-                : "OUTCOME_AWARENESS"
-                  ? "Awareness Ads"
-                  : "N/A";
-    const fbBudget = Number(facebookBudget) || 0;
-    const inBudget = Number(instaBudget) || 0;
-    const gBudget = Number(googleBudget) || 0;
-    const Amount =
+    const budgetSum =
       (Number(facebookBudget) || 0) +
       (Number(instaBudget) || 0) +
       (Number(googleBudget) || 0);
+    const lines = adInvoiceLines({
+      adSpend: Number(charge?.adSpend) > 0 ? Number(charge.adSpend) : budgetSum,
+      total: charge?.total,
+      days: campaignDays(ins?.startDate, ins?.endDate) || Number(plan?.duretion) || null,
+      // No package means a custom budget; a package that has since been deleted is still a package.
+      packageName: planId ? plan?.title || "Ad Package" : null,
+      adTypeTitle: advertismentType?.title,
+      fees: companyData,
+    });
 
-    const gstPercent = Number(companyData?.gstFee ?? 18);
-    const platformPercent = Number(companyData?.serviceFee ?? 15);
-    const gatewayPercent = Number(companyData?.paymentGetWayFee ?? 2);
+    // Saved before the PDF and the e-mail, so the invoice is there (admin panel and the app's
+    // invoices) even when either of them fails.
+    await invoiceModel.create({
+      adsAmount: lines.adSpend,
+      commisionAmount: lines.platformFee,
+      gstAmount: String(lines.gstAmount),
+      paymentGetWayFee: String(lines.gatewayFee),
+      userId: business?.userId,
+      businessId: business?._id,
+      adsTypeId: advertismentType?._id,
+      planId: plan?._id,
+      packageName: lines.packageName,
+      items: lines.items,
+      subTotal: lines.subTotal,
+      gstRate: lines.gstRate,
+      totalAmount: lines.totalAmount,
+    });
 
-    const GST = (Amount * gstPercent) / 100;
-    const PlatformFee = (Amount * platformPercent) / 100;
-    let amount = PlatformFee + Amount;
-    const PaymentGetwayFee = (amount * gatewayPercent) / 100;
-    const totalAmount = amount + PaymentGetwayFee;
-    // console.log(addwithgst, "addwithgst");
-    console.log(fbBudget, "fbBudget");
-    console.log(inBudget, "inBudget");
-    console.log(gBudget, "gBudget");
+    const rupees = (n) => `₹${(Number(n) || 0).toFixed(2)}`;
+    const packageLabel = advertismentType?.title
+      ? `${lines.packageName} · ${advertismentType.title}`
+      : lines.packageName;
     const date = new Date().toISOString().split("T")[0];
     const invoiceNumber = await generateInvoiceNumber();
 
@@ -244,43 +251,41 @@ exports.generateInvoice = async (
         <table class="items-table">
           <thead>
             <tr>
-              <th>Description / Campaign</th>
-              <th>Channel</th>
-              <th style="text-align: right;">Taxable Amount</th>
+              <th>Package</th>
+              <th style="text-align: right;">Ad Budget</th>
             </tr>
           </thead>
           <tbody>
             <tr>
               <td>
-                <strong>${advertismentType?.title || "Ad Campaign"}</strong>
-                <div style="font-size: 11px; color: #64748B; margin-top: 2px;">Meta Ad Placement & Lead Optimization</div>
+                <strong>${lines.packageName}</strong>
+                <div style="font-size: 11px; color: #64748B; margin-top: 2px;">${lines.items[0].subDescription}</div>
               </td>
-              <td>${addType}</td>
-              <td style="text-align: right; font-weight: 600;">₹${Amount.toFixed(2)}</td>
+              <td style="text-align: right; font-weight: 600;">${rupees(lines.adSpend)}</td>
             </tr>
           </tbody>
         </table>
 
         <table class="totals-table">
           <tr>
-            <td style="color: #64748B;">Ad Budget Spend:</td>
-            <td style="text-align: right; font-weight: 600;">₹${Amount.toFixed(2)}</td>
+            <td style="color: #64748B;">${lines.budgetLabel}:</td>
+            <td style="text-align: right; font-weight: 600;">${rupees(lines.adSpend)}</td>
           </tr>
           <tr>
-            <td style="color: #64748B;">Platform Fee (${platformPercent}%):</td>
-            <td style="text-align: right; font-weight: 600;">₹${PlatformFee.toFixed(2)}</td>
+            <td style="color: #64748B;">${lines.items[1].description}:</td>
+            <td style="text-align: right; font-weight: 600;">${rupees(lines.platformFee)}</td>
           </tr>
           <tr>
-            <td style="color: #64748B;">GST (${gstPercent}%):</td>
-            <td style="text-align: right; font-weight: 600;">₹${GST.toFixed(2)}</td>
+            <td style="color: #64748B;">GST (${lines.gstRate}%):</td>
+            <td style="text-align: right; font-weight: 600;">${rupees(lines.gstAmount)}</td>
           </tr>
           <tr>
-            <td style="color: #64748B;">Payment Gateway (${gatewayPercent}%):</td>
-            <td style="text-align: right; font-weight: 600;">₹${PaymentGetwayFee.toFixed(2)}</td>
+            <td style="color: #64748B;">${lines.items[2].description}:</td>
+            <td style="text-align: right; font-weight: 600;">${rupees(lines.gatewayFee)}</td>
           </tr>
           <tr class="total-row">
             <td>Total Paid:</td>
-            <td style="text-align: right;">₹${totalAmount.toFixed(2)}</td>
+            <td style="text-align: right;">${rupees(lines.totalAmount)}</td>
           </tr>
         </table>
 
@@ -367,8 +372,8 @@ exports.generateInvoice = async (
                 </tr>
                 <tr>
                   <td style="padding: 16px 20px; border-bottom: 1px solid #E2E8F0;">
-                    <span style="color: #64748B; font-size: 13px;">Campaign:</span>
-                    <strong style="float: right; color: #0F172A; font-size: 13px;">${advertismentType?.title || "Ad Campaign"}</strong>
+                    <span style="color: #64748B; font-size: 13px;">Package:</span>
+                    <strong style="float: right; color: #0F172A; font-size: 13px;">${packageLabel}</strong>
                   </td>
                 </tr>
                 <tr>
@@ -380,7 +385,7 @@ exports.generateInvoice = async (
                 <tr>
                   <td style="padding: 16px 20px; background-color: #FFF7ED; border-radius: 0 0 14px 14px;">
                     <span style="color: #EA580C; font-size: 14px; font-weight: 700;">Total Amount Paid:</span>
-                    <strong style="float: right; color: #EA580C; font-size: 17px; font-weight: 800;">₹${totalAmount.toFixed(2)}</strong>
+                    <strong style="float: right; color: #EA580C; font-size: 17px; font-weight: 800;">${rupees(lines.totalAmount)}</strong>
                   </td>
                 </tr>
               </table>
@@ -415,21 +420,10 @@ exports.generateInvoice = async (
       ],
     };
 
-    await transporter.sendMail(mailOptions);
-    console.log("Invoice sent successfully to", business?.businessEmail);
-
-    const data = await new invoiceModel({
-      adsAmount: parseInt(Amount),
-      commisionAmount: PlatformFee,
-      gstAmount: GST,
-      paymentGetWayFee: PaymentGetwayFee,
-      userId: business?.userId,
-      businessId: business?._id,
-      adsTypeId: advertismentType?._id,
-      invoiceURL: invoiceUrl,
-    });
-
-    await data.save();
+    if (business?.businessEmail) {
+      await transporter.sendMail(mailOptions);
+      console.log("Invoice sent successfully to", business.businessEmail);
+    }
   } catch (error) {
     console.error("Error generating invoice:", error);
   }
@@ -751,7 +745,8 @@ exports.getInvoiceHTML = async (req, res) => {
     const invoice = await invoiceModel
       .findById(invoiceId)
       .populate("userId")
-      .populate("businessId");
+      .populate("businessId")
+      .populate("adsTypeId", "title");
 
     if (!invoice) {
       return res.status(404).send("Invoice not found");
@@ -797,9 +792,14 @@ exports.getInvoiceHTML = async (req, res) => {
     const brandMotto = (invoice.brandMotto || "Let's Build\na Smarter\nTomorrow").replace(/\n/g, "<br/>");
     const bottomServicesBar = invoice.bottomServicesBar || "Social Media Marketing | Google Ads | Meta Ads | WhatsApp Marketing | AI Solutions | Lead Management";
 
+    // Ad invoices saved before they kept their own lines have only the amounts: show them as the
+    // ad budget, platform fee and gateway fee they were, not as a generic service line.
+    const isOldAdInvoice = !(invoice.items && invoice.items.length > 0) && invoice.adsAmount != null;
     const items = (invoice.items && invoice.items.length > 0)
       ? invoice.items
-      : [
+      : isOldAdInvoice
+        ? legacyAdInvoiceLines(invoice, invoice.adsTypeId?.title).items
+        : [
           {
             description: "Social Media Marketing Service",
             subDescription: "Content creation, posting & management",
@@ -1144,7 +1144,7 @@ exports.getInvoiceHTML = async (req, res) => {
       </div>
       <div class="invoice-meta-table">
         <div class="invoice-heading">INVOICE</div>
-        <div class="meta-line">Invoice No &nbsp;&nbsp;: &nbsp;<strong>${invoice.invoiceNumber || `MKAI/${dateFormatted.split(" ")[2]}/${invoice._id.slice(-4)}`}</strong></div>
+        <div class="meta-line">Invoice No &nbsp;&nbsp;: &nbsp;<strong>${invoice.invoiceNumber || `MKAI/${dateFormatted.split(" ")[2]}/${String(invoice._id).slice(-4).toUpperCase()}`}</strong></div>
         <div class="meta-line">Invoice Date : &nbsp;<strong>${dateFormatted}</strong></div>
         <div class="meta-line">Due Date &nbsp;&nbsp;&nbsp;&nbsp;: &nbsp;<strong>${dueDateFormatted}</strong></div>
         <div class="meta-line">Payment Terms: &nbsp;<strong>${invoice.paymentTerms || "Net 15 Days"}</strong></div>

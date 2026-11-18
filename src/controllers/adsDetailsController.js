@@ -2123,6 +2123,8 @@ async function processAdCreation(input, { approvedCampaignId = null } = {}) {
       facebookBudget,
       instaBudget,
       googleBudget,
+      // The invoice shows the chosen package and the same breakdown as the app, adding up to adCost.
+      { adSpend: amountWithGst, total: adCost, planId },
     );
     } catch (invoiceError) { console.error("Paid ad invoice generation failed:", invoiceError.message); }
     return { campaignId: paidCampaign._id, status: "PENDING_APPROVAL" };
@@ -4508,6 +4510,7 @@ exports.resetAd = async (req, res) => {
       facebookBudget,
       instaBudget,
       0,
+      { adSpend: amountWithGst, total: finalAmount, planId },
     );
 
     // Update user's wallet
