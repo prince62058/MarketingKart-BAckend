@@ -9,7 +9,7 @@ const router = express.Router();
 
 router.get("/reel-samples", asyncHandler(listReelSamples));
 router.put(
-  "/reel-samples/:slot",
+  "/reel-samples/:kind/:slot",
   ...adminOnly,
   requirePermission("REELS"),
   uploadReelMedia.fields([{ name: "video", maxCount: 1 }, { name: "thumbnail", maxCount: 1 }]),
