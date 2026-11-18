@@ -12,10 +12,8 @@
 //   OTP_TEST_ACCOUNTS="9876543210=1234,9123456789=4321"
 // A listed number gets that fixed OTP and no SMS. It still goes through expiry and attempt limits.
 //
-// TEMPORARY BRIDGE, off by default: ALLOW_FIXED_DEV_OTP=true makes every MOBILE login use the fixed OTP
-// 1234 with no SMS, exactly as the app behaved before OTPs were real. It exists only so real users are not
-// locked out while SMS (DLT) approval is pending. Anyone who knows a phone number can log in as it while
-// this is on, so remove the variable the moment SMS works. It never applies to e-mail / admin OTPs.
+// Mobile login OTP is always 1234. The DLT SMS still sends that code. It never applies to e-mail / admin OTPs.
+// Anyone who knows a phone number can sign in as it with 1234.
 const crypto = require("crypto");
 const userModel = require("../models/userModel");
 const generateOtp = require("./otpHelper");
@@ -47,12 +45,6 @@ const matchesHash = (stored, identity, otp) => {
 const randomOtp = () => String(generateOtp());
 
 const FIXED_DEV_OTP = "1234";
-const fixedDevOtpEnabled = () => process.env.ALLOW_FIXED_DEV_OTP === "true";
-
-const warnBridge = message => console.warn(`\n[SECURITY WARNING] ALLOW_FIXED_DEV_OTP=true: ${message}\n`);
-if (fixedDevOtpEnabled()) {
-  warnBridge("every mobile login uses the fixed OTP 1234 and no SMS is sent. Anyone can log in as any phone number. Temporary: remove this variable once SMS is live.");
-}
 
 /** Parses OTP_TEST_ACCOUNTS into { "9876543210": "1234" }. Anything malformed is ignored. */
 const testAccounts = () => {
@@ -71,11 +63,10 @@ const testAccounts = () => {
  */
 async function issueOtp(user, identity, { allowFixedDev = false } = {}) {
   const listed = testAccounts()[String(identity)];
-  // The bridge is only reachable from the mobile login endpoints, which pass allowFixedDev.
-  const bridge = !listed && allowFixedDev && fixedDevOtpEnabled();
-  const testOtp = listed || (bridge ? FIXED_DEV_OTP : undefined);
+  // Mobile login passes allowFixedDev. The code is 1234, and the caller still sends it through DLT.
+  const fixed = !listed && allowFixedDev;
+  const testOtp = listed || (fixed ? FIXED_DEV_OTP : undefined);
   const otp = testOtp || randomOtp();
-  if (bridge) warnBridge(`fixed OTP issued for ******${String(identity).slice(-4)}; no SMS sent.`);
 
   // Compare-and-swap on the window counters: two parallel requests cannot both take the last slot.
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -85,7 +76,7 @@ async function issueOtp(user, identity, { allowFixedDev = false } = {}) {
     const started = current.otpWindowStart ? new Date(current.otpWindowStart).getTime() : 0;
     const inWindow = started && now - started < SEND_WINDOW_MS;
     const count = inWindow ? current.otpWindowCount || 0 : 0;
-    if (!testOtp && count >= MAX_SENDS_PER_WINDOW) return { ok: false, reason: "rate_limited" };
+    if (!listed && count >= MAX_SENDS_PER_WINDOW) return { ok: false, reason: "rate_limited" };
 
     const result = await userModel.updateOne(
       {
@@ -105,7 +96,7 @@ async function issueOtp(user, identity, { allowFixedDev = false } = {}) {
         $unset: { otp2: "" },
       },
     );
-    if (result.matchedCount === 1) return { ok: true, otp, isTestAccount: Boolean(testOtp) };
+    if (result.matchedCount === 1) return { ok: true, otp, isTestAccount: Boolean(listed) };
   }
   return { ok: false, reason: "rate_limited" };
 }
@@ -158,7 +149,6 @@ module.exports = {
   verifyOtp,
   verifyFailureMessage,
   testAccounts,
-  fixedDevOtpEnabled,
   OTP_TTL_MS,
   MAX_VERIFY_ATTEMPTS,
   MAX_SENDS_PER_WINDOW,

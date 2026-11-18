@@ -133,7 +133,7 @@ const sendMobileOtp = async (req, res) => {
     return null;
   }
 
-  // Test numbers (OTP_TEST_ACCOUNTS) and the temporary ALLOW_FIXED_DEV_OTP bridge never trigger a real SMS.
+  // Listed test numbers skip SMS. Every other mobile login still goes out on the DLT flow, with OTP 1234.
   if (!issued.isTestAccount && sendOtp(mobileNum, issued.otp) === false) {
     tooManyOtpRequests(res);
     return null;

@@ -150,5 +150,22 @@ const uploadWhatsAppMedia = multer({
 
 exports.uploadWhatsAppMedia = uploadWhatsAppMedia;
 
+const uploadReelMedia = multer({
+  storage: new SpacesMulterStorage({ folder: "MARKETINGKART/REELS" }),
+  fileFilter: (_req, file, cb) => {
+    const allowed = ["video/mp4", "video/quicktime", "video/webm", "image/jpeg", "image/jpg", "image/png", "image/webp"];
+    if (allowed.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      const error = new Error("Use an MP4 video, or a JPG, PNG, or WEBP image.");
+      error.status = 400;
+      cb(error, false);
+    }
+  },
+  limits: { fileSize: 40 * 1024 * 1024 },
+});
+
+exports.uploadReelMedia = uploadReelMedia;
+
 // Function to Delete a File from Object Storage
 exports.deleteFileFromObjectStorage = deleteByUrl;
