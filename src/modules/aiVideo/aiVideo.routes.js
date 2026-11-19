@@ -49,6 +49,7 @@ function voiceUpload(req, res, next) {
 router.get("/ai-video/studio", guard, controller.studio);
 router.patch("/ai-video/goal", guard, controller.goal);
 router.post("/ai-video/scripts", guard, controller.script);
+router.post("/ai-video/voice-clones", guard, voiceUpload, controller.cloneVoice);
 router.post("/ai-video/projects", guard, voiceUpload, controller.createProject);
 router.get("/ai-video/projects/:id", guard, controller.project);
 router.delete("/ai-video/projects/:id", guard, controller.deleteProject);

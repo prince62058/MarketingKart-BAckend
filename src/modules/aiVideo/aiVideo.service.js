@@ -3,6 +3,7 @@ const Studio = require("./aiVideo.model");
 const User = require("../../models/userModel");
 const Business = require("../../models/businessModel");
 const Transaction = require("../../models/transtionModel");
+const serviceInvoices = require("../../services/serviceInvoiceService");
 const logic = require("./aiVideo.logic");
 const payments = require("./aiVideo.payments");
 const heygen = require("./heygen.client");
@@ -12,7 +13,8 @@ const storage = require("./aiVideo.storage");
 const audio = require("./aiVideo.audio");
 const settings = require("./aiVideo.settings");
 const avatars = require("./aiVideo.avatars");
-const { httpError, providerError, requireProvider } = require("./aiVideo.errors");
+const { httpError, insufficientCredits, providerError, requireProvider } = require("./aiVideo.errors");
+const creditsLedger = require("./aiVideo.credits");
 const logger = require("../../utils/logger");
 
 const { POLL_INTERVAL_MS, PROVIDER_URL_REFRESH_MS, newId, seedAvatars, presentProject, presentAvatar } = logic;
@@ -64,7 +66,7 @@ async function getStudio(userId, businessId) {
   let studio = await loadStudio(userId, businessId);
   const [rendered, paid] = await Promise.all([settleStudio(studio), settleOrders(studio)]);
   if (rendered || paid) studio = await Studio.findById(studio._id);
-  return studio;
+  return creditsLedger.sweep(studio);
 }
 
 // `config` is what the admin Settings page holds; callers that already loaded it pass it in.
@@ -109,10 +111,9 @@ async function patchProject(studioId, projectId, fields) {
 // Marks a render failed and returns its credits exactly once, however many pollers race.
 async function failProject(studioId, project, reason) {
   const cost = Number.isFinite(project.cost) ? project.cost : logic.VIDEO_COST;
-  await Studio.updateOne(
+  const marked = await Studio.updateOne(
     { _id: studioId, projects: { $elemMatch: { id: project.id, refunded: { $ne: true } } } },
     {
-      $inc: { credits: cost },
       $set: {
         "projects.$.status": "Failed",
         "projects.$.refunded": true,
@@ -121,16 +122,20 @@ async function failProject(studioId, project, reason) {
       },
     },
   );
+  if (marked.modifiedCount) await creditsLedger.refund(studioId, cost);
   await patchProject(studioId, project.id, { status: "Failed", error: reason });
   return true;
 }
 
 // The video never existed on the provider, so drop the draft entirely and refund.
 async function abortProject(studioId, projectId, cost) {
-  await Studio.updateOne(
+  const marked = await Studio.updateOne(
     { _id: studioId, projects: { $elemMatch: { id: projectId, refunded: { $ne: true } } } },
-    { $inc: { credits: cost }, $pull: { projects: { id: projectId } } },
+    { $set: { "projects.$.refunded": true } },
   );
+  if (!marked.modifiedCount) return;
+  await creditsLedger.refund(studioId, cost);
+  await Studio.updateOne({ _id: studioId }, { $pull: { projects: { id: projectId } } });
 }
 
 function storageFolder(studio) {
@@ -295,14 +300,75 @@ function parseSpeed(value) {
   return Math.min(1.5, Math.max(0.5, speed));
 }
 
+// Turns one saved recording into a voice the studio can reuse. The words come from a later prompt.
+async function cloneVoice(userId, businessId, input, file) {
+  requireProvider();
+  const templateId = String(input.templateId || "").trim().slice(0, 40);
+  if (!templateId) throw httpError(400, "Save the recording on this phone first.");
+  if (!file) throw httpError(400, "Record a voice first.");
+  const studio = await creditsLedger.sweep(await loadStudio(userId, businessId));
+  const name = String(input.name || "My voice").replace(/\.[a-z0-9]+$/i, "").trim().slice(0, 64) || "My voice";
+  const existing = (studio.voiceClones || []).find(item => item.id === templateId && item.heygenVoiceId);
+  if (existing) return { id: existing.id, voiceId: existing.heygenVoiceId, name: existing.name || name };
+
+  const recording = await audio.prepareVoiceNote({
+    buffer: file.buffer,
+    filename: file.originalname,
+    mimetype: file.mimetype,
+  });
+  let voiceId;
+  try {
+    const asset = await heygen.uploadAsset({
+      buffer: recording.buffer,
+      filename: recording.filename || "voice.wav",
+      mimetype: "audio/wav",
+    });
+    const created = await heygen.createInstantVoice({
+      name,
+      assetId: asset.asset_id,
+      idempotencyKey: `${studio._id}:voice:${templateId}`,
+    });
+    voiceId = created.voice_id || created.id;
+    if (!voiceId) throw httpError(503, "The voice could not be saved. Please try again.");
+    let ready = created.status ? created : { status: "PENDING" };
+    const deadline = Date.now() + 30000;
+    while (Date.now() < deadline) {
+      const status = String(ready.status || "").toUpperCase();
+      if (status === "ACTIVE") break;
+      if (status === "FAILED") throw httpError(400, "That recording could not be turned into a voice. Record again in a quiet room.");
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      ready = await heygen.getModelVoice(voiceId);
+    }
+    if (String(ready.status || "").toUpperCase() !== "ACTIVE") {
+      throw httpError(503, "Your voice is still being prepared. Please try again in a moment.");
+    }
+  } catch (error) {
+    if (error.status && !(error instanceof heygen.HeyGenError)) throw error;
+    throw providerError(error);
+  }
+
+  await Studio.updateOne({ _id: studio._id }, { $pull: { voiceClones: { id: templateId } } });
+  await Studio.updateOne(
+    { _id: studio._id },
+    { $push: { voiceClones: { $each: [{ id: templateId, name, heygenVoiceId: voiceId, createdAt: new Date() }], $slice: -20 } } },
+  );
+  return { id: templateId, voiceId, name };
+}
+
 // `voiceFile` is the customer's own recording (multer file). With it the video is lip-synced to
-// their voice and no script is needed; without it the script is spoken by a stock voice.
+// their voice and no script is needed. A saved voice (`clone:<id>`) keeps that voice but speaks
+// the prompt instead of replaying the recording.
 async function createProject(userId, businessId, input, voiceFile = null) {
   requireProvider();
   const config = await activeSettings();
-  const studio = await loadStudio(userId, businessId);
+  const studio = await creditsLedger.sweep(await loadStudio(userId, businessId));
 
-  const ownVoice = Boolean(voiceFile);
+  const cloneMatch = /^clone:(.+)$/.exec(String(input.voice || "").trim());
+  const clonedVoiceId = cloneMatch ? cloneMatch[1] : "";
+  if (clonedVoiceId && !(studio.voiceClones || []).some(item => item.heygenVoiceId === clonedVoiceId)) {
+    throw httpError(400, "Save your voice again before using it.");
+  }
+  const ownVoice = Boolean(voiceFile) && !clonedVoiceId;
   let script = String(input.script || "").trim();
   if (!script && !ownVoice) script = (await scriptWriter.write(input)).script;
   if (script.length > config.maxScriptChars) {
@@ -321,7 +387,7 @@ async function createProject(userId, businessId, input, voiceFile = null) {
   // Everything that can fail without costing anything happens before the credits are taken.
   let recording = null;
   if (ownVoice) {
-    if (studio.credits < config.videoCost) throw httpError(400, `You need ${config.videoCost} credits to render a video.`);
+    if (studio.credits < config.videoCost) throw insufficientCredits(studio.credits, config.videoCost);
     recording = await audio.prepareVoiceNote({ buffer: voiceFile.buffer, filename: voiceFile.originalname, mimetype: voiceFile.mimetype });
   }
 
@@ -340,7 +406,7 @@ async function createProject(userId, businessId, input, voiceFile = null) {
     if (ownVoice) {
       const asset = await heygen.uploadAsset({ buffer: recording.buffer, filename: recording.filename, mimetype: recording.mimetype });
       audioAssetId = asset.asset_id;
-    } else {
+    } else if (!clonedVoiceId) {
       // A video avatar speaks in the voice cloned from its footage unless a stock voice is picked.
       const cloned = input.voice === "cloned" ? (custom && custom.defaultVoiceId) || presenter.defaultVoiceId : null;
       voiceId =
@@ -353,6 +419,22 @@ async function createProject(userId, businessId, input, voiceFile = null) {
     }
   } catch (error) {
     throw providerError(error);
+  }
+
+  // The saved voice stays. The prompt (turned into a script above) is what it says this time.
+  if (clonedVoiceId) {
+    if (!script) throw httpError(400, "Write a prompt so your voice has something new to say.");
+    try {
+      const spoken = await heygen.speakCloned({ voiceId: clonedVoiceId, text: script });
+      const spokenAsset = await heygen.uploadAsset({
+        buffer: spoken.buffer,
+        filename: "speech.wav",
+        mimetype: "audio/wav",
+      });
+      audioAssetId = spokenAsset.asset_id;
+    } catch (error) {
+      throw providerError(error);
+    }
   }
 
   const title = String(input.title || input.prompt || "AI Promo Video").trim().slice(0, 48) || "AI Promo Video";
@@ -371,7 +453,7 @@ async function createProject(userId, businessId, input, voiceFile = null) {
     progress: 3,
     script,
     badgeText: format,
-    voice: ownVoice ? "own" : input.voice || "priya",
+    voice: clonedVoiceId ? "mine" : ownVoice ? "own" : input.voice || "priya",
     language,
     speed,
     music: input.music || "none",
@@ -385,21 +467,17 @@ async function createProject(userId, businessId, input, voiceFile = null) {
     createdAt: new Date(),
   };
 
-  // Charge and record in one atomic step, so two quick taps cannot overspend.
-  const reserved = await Studio.findOneAndUpdate(
-    { _id: studio._id, credits: { $gte: config.videoCost } },
-    { $inc: { credits: -config.videoCost }, $push: { projects: project } },
-    { new: true },
-  );
-  if (!reserved) throw httpError(400, `You need ${config.videoCost} credits to render a video.`);
+  // Charge first, then store the project. A failed render returns the credits.
+  const reserved = await creditsLedger.charge(studio, config.videoCost);
+  await Studio.updateOne({ _id: reserved._id }, { $push: { projects: project } });
 
   try {
     const created = await heygen.createVideo(
       {
         type: "avatar",
         avatar_id: presenter.avatarId,
-        // The customer's recording replaces script + voice: the provider lip-syncs the audio as it is.
-        ...(ownVoice
+        // A recording, or speech just made in the customer's saved voice, is lip-synced as audio.
+        ...(audioAssetId
           ? { audio_asset_id: audioAssetId }
           : { script, voice_id: voiceId, voice_settings: pitch ? { speed, pitch } : { speed } }),
         title,
@@ -445,7 +523,7 @@ async function deleteProject(userId, businessId, projectId) {
 async function createVoiceover(userId, businessId, input) {
   requireProvider();
   const config = await activeSettings();
-  const studio = await loadStudio(userId, businessId);
+  const studio = await creditsLedger.sweep(await loadStudio(userId, businessId));
   const script = String(input.script || "").trim();
   if (!script) throw httpError(400, "Write what the voice should say.");
   if (script.length > config.maxScriptChars) {
@@ -460,19 +538,14 @@ async function createVoiceover(userId, businessId, input) {
     throw providerError(error);
   }
 
-  const reserved = await Studio.findOneAndUpdate(
-    { _id: studio._id, credits: { $gte: config.voiceoverCost } },
-    { $inc: { credits: -config.voiceoverCost } },
-    { new: true },
-  );
-  if (!reserved) throw httpError(400, `You need ${config.voiceoverCost} credits for a voiceover.`);
+  const reserved = await creditsLedger.charge(studio, config.voiceoverCost);
 
   const id = newId();
   let speech;
   try {
     speech = await heygen.generateSpeech({ text: script, voice_id: voiceId, speed: parseSpeed(input.speed) });
   } catch (error) {
-    await Studio.updateOne({ _id: studio._id }, { $inc: { credits: config.voiceoverCost } });
+    await creditsLedger.refund(studio._id, config.voiceoverCost);
     throw providerError(error);
   }
   const audioUrl =
@@ -527,7 +600,7 @@ async function saveAvatar(userId, businessId, input, file) {
   if (!file) throw httpError(400, "Add a clear, front-facing photo to create your avatar.");
   requireProvider();
   const config = await activeSettings();
-  const studio = await loadStudio(userId, businessId);
+  const studio = await creditsLedger.sweep(await loadStudio(userId, businessId));
   if (studio.avatars.filter(avatar => avatar.kind !== "studio").length >= avatars.MAX_CUSTOM_AVATARS) {
     throw httpError(400, `You can keep up to ${avatars.MAX_CUSTOM_AVATARS} custom avatars. Remove one to add another.`);
   }
@@ -535,8 +608,7 @@ async function saveAvatar(userId, businessId, input, file) {
 
   const cost = config.photoAvatarCost;
   if (cost) {
-    const reserved = await Studio.findOneAndUpdate({ _id: studio._id, credits: { $gte: cost } }, { $inc: { credits: -cost } }, { new: true });
-    if (!reserved) throw httpError(400, `You need ${cost} credits to create an avatar.`);
+    await creditsLedger.charge(studio, cost);
   }
 
   let look;
@@ -555,7 +627,7 @@ async function saveAvatar(userId, businessId, input, file) {
     look = created.avatar_item;
     group = created.avatar_group;
   } catch (error) {
-    if (cost) await Studio.updateOne({ _id: studio._id }, { $inc: { credits: cost } });
+    if (cost) await creditsLedger.refund(studio._id, cost);
     throw providerError(error);
   }
 
@@ -749,8 +821,25 @@ async function createOrder(userId, businessId, input = {}) {
 }
 
 // Flips a pending order to paid and hands over the credits (and plan) in a single update.
-// Returns the updated studio, or null when the order was no longer in `fromStatus`.
-function grantOrder(studio, order, { fromStatus, paymentId, methodLabel }) {
+// Returns the updated studio, or null when the order was no longer in `fromStatus`. Only the update
+// that did the flip gets a studio back, so each paid order gets exactly one invoice.
+async function grantOrder(studio, order, options) {
+  const granted = await flipOrderToPaid(studio, order, options);
+  if (granted) {
+    serviceInvoices
+      .aiVideoOrderInvoice({
+        userId: studio.userId,
+        businessId: studio.businessId,
+        order,
+        paymentId: options.paymentId,
+        methodLabel: options.methodLabel,
+      })
+      .catch(err => logger.error(`[AI VIDEO] invoice for order ${order.id} failed: ${err.message}`));
+  }
+  return granted;
+}
+
+function flipOrderToPaid(studio, order, { fromStatus, paymentId, methodLabel }) {
   const now = new Date();
   const $set = {
     "orders.$.status": "paid",
@@ -765,9 +854,10 @@ function grantOrder(studio, order, { fromStatus, paymentId, methodLabel }) {
     $set.planBilling = order.billing;
     $set.planRenewsAt = new Date(Math.max(now.getTime(), left) + order.termDays * DAY_MS);
   }
+  const grant = creditsLedger.grantUpdate(studio, order);
   return Studio.findOneAndUpdate(
     { _id: studio._id, orders: { $elemMatch: { id: order.id, status: fromStatus } } },
-    { $inc: { credits: order.credits }, $set },
+    { ...grant, $set },
     { new: true },
   );
 }
@@ -1013,6 +1103,7 @@ module.exports = {
   getStudio,
   saveGoal,
   writeScript,
+  cloneVoice,
   createProject,
   getProject,
   deleteProject,

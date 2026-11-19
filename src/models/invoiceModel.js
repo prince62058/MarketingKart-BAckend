@@ -31,6 +31,13 @@ const invoiceSchema = new mongoose.Schema({
         ref:"planModel"
     },
     packageName: { type: String, trim: true },
+    // Which service this bills; it picks the invoice's colours. Missing on older invoices (Meta ads).
+    service: { type: String, enum: ["META_ADS", "WHATSAPP", "AI_VIDEO", "RCS"] },
+    // How it was paid and the payment's reference, shown on the invoice.
+    paymentMethod: { type: String, trim: true },
+    transactionId: { type: String, trim: true },
+    // True when the price already contains the GST shown (AI Video), false when GST was added on top.
+    gstInclusive: { type: Boolean, default: false },
     invoiceNumber: {
         type: String,
         trim: true,

@@ -17,7 +17,12 @@ function send(res, message, data, status = 200) {
 function fail(res, error) {
   const status = error.status || 500;
   const body = responseBuilder(apiResponseStatusCode[status] || status, error.message);
-  return res.status(status).json({ ...body, success: false });
+  const extra = {};
+  if (error.code) extra.code = error.code;
+  if (Number.isFinite(error.have)) extra.have = error.have;
+  if (Number.isFinite(error.need)) extra.need = error.need;
+  if (Number.isFinite(error.short)) extra.short = error.short;
+  return res.status(status).json({ ...body, success: false, ...extra });
 }
 
 // `scoped: false` is for calls that never touch a studio (voice lists, scripts, payment
@@ -46,6 +51,9 @@ const studio = handler(
 const goal = handler(req => service.saveGoal(user(req), businessId(req), req.body?.goal), { message: "Goal saved" });
 const script = handler(req => service.writeScript(user(req), req.body || {}), { message: "Script ready", scoped: false });
 // req.file is the customer's own voice note when the app sent one (multipart), otherwise undefined.
+const cloneVoice = handler(req => service.cloneVoice(user(req), businessId(req), req.body || {}, req.file || null), {
+  message: "Voice ready",
+});
 const createProject = handler(req => service.createProject(user(req), businessId(req), req.body || {}, req.file || null), {
   message: "Video queued",
   status: 201,
@@ -121,6 +129,7 @@ module.exports = {
   studio,
   goal,
   script,
+  cloneVoice,
   createProject,
   project,
   deleteProject,

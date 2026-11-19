@@ -194,6 +194,7 @@ app.use("/api", rolePermissionRoute);
 app.use("/api", vioceOverVideoRoute);
 app.use("/api", ugcVideoRoute);
 app.use("/api", require("./routes/reelSampleRoute"));
+app.use("/api", require("./routes/reelContentRoute"));
 app.use("/api", simplevideoRoute);
 app.use("/api", orderHistoryRoute);
 app.use("/api", videoYoutubeRoute);

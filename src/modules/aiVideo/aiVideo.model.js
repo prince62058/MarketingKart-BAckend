@@ -101,6 +101,21 @@ const studioSchema = new mongoose.Schema(
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "userModel", required: true, index: true },
     businessId: { type: String, default: null },
     credits: { type: Number, default: 120 },
+    // Each purchase is its own pile. Unused credits drop out when `expiresAt` passes.
+    creditLots: {
+      type: [
+        new mongoose.Schema(
+          {
+            id: String,
+            remaining: Number,
+            expiresAt: Date,
+            orderId: String,
+          },
+          { _id: false },
+        ),
+      ],
+      default: undefined,
+    },
     plan: { type: String, default: "free" },
     // When the paid term of `plan` ends; after this the studio is on the free plan again.
     planRenewsAt: Date,
@@ -119,6 +134,16 @@ const studioSchema = new mongoose.Schema(
         audioUrl: String,
         durationSeconds: Number,
         cost: Number,
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
+    // A recording kept as a voice. New prompts are spoken in this voice; the original audio is not replayed.
+    voiceClones: [
+      {
+        _id: false,
+        id: String,
+        name: String,
+        heygenVoiceId: String,
         createdAt: { type: Date, default: Date.now },
       },
     ],

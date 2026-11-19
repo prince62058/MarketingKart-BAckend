@@ -102,6 +102,60 @@ async function generateSpeech(payload) {
   return unwrap(await request("post", "/v3/voices/speech", { data: payload, timeout: 60000 }));
 }
 
+// One recording becomes a reusable voice. Later prompts are spoken in that voice.
+async function createInstantVoice({ name, assetId, idempotencyKey }) {
+  const headers = idempotencyKey ? { "Idempotency-Key": String(idempotencyKey) } : undefined;
+  return unwrap(
+    await request("post", "/v3/models/audio/voices", {
+      data: { mode: "instant", name, audio: [{ type: "asset_id", asset_id: assetId }] },
+      headers,
+      timeout: 60000,
+    }),
+  );
+}
+
+async function getModelVoice(voiceId) {
+  return unwrap(await request("get", `/v3/models/audio/voices/${encodeURIComponent(voiceId)}`));
+}
+
+// Speaks `text` in a cloned voice and returns the WAV bytes.
+async function speakCloned({ voiceId, text }) {
+  let res;
+  try {
+    res = await http().request({
+      method: "post",
+      url: "/v3/models/audio/tts",
+      data: { voice_id: voiceId, text },
+      responseType: "arraybuffer",
+      timeout: 90000,
+      headers: { Accept: "audio/wav, application/json" },
+    });
+  } catch (error) {
+    if (error instanceof HeyGenError) throw error;
+    throw new HeyGenError("Could not reach the video provider", { status: 502, code: "network_error" });
+  }
+  if (res.status < 200 || res.status >= 300) {
+    let message = `Video provider request failed (${res.status})`;
+    try {
+      const parsed = JSON.parse(Buffer.from(res.data).toString("utf8"));
+      message = (parsed.error && parsed.error.message) || parsed.message || message;
+    } catch {
+      // The body was not JSON.
+    }
+    throw new HeyGenError(message, { status: res.status, code: "provider_error" });
+  }
+  const type = String((res.headers && res.headers["content-type"]) || "");
+  if (type.includes("json") || type.startsWith("text/")) {
+    const parsed = JSON.parse(Buffer.from(res.data).toString("utf8"));
+    const data = parsed && parsed.data !== undefined ? parsed.data : parsed;
+    const audioUrl = data.audio_url || data.url || null;
+    if (!audioUrl) throw new HeyGenError("The voice did not return audio", { status: 502, code: "provider_error" });
+    const file = await axios.get(audioUrl, { responseType: "arraybuffer", timeout: 60000 });
+    return { buffer: Buffer.from(file.data), mimetype: "audio/wav" };
+  }
+  return { buffer: Buffer.from(res.data), mimetype: type.split(";")[0] || "audio/wav" };
+}
+
 async function uploadAsset({ buffer, filename, mimetype }) {
   const form = new FormData();
   form.append("file", buffer, { filename: filename || "upload", contentType: mimetype });
@@ -185,6 +239,9 @@ module.exports = {
   createVideo,
   getVideo,
   generateSpeech,
+  createInstantVoice,
+  getModelVoice,
+  speakCloned,
   uploadAsset,
   createPhotoAvatar,
   createDirectUpload,

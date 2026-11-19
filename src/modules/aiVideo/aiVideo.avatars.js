@@ -6,6 +6,7 @@ const logic = require("./aiVideo.logic");
 const heygen = require("./heygen.client");
 const logger = require("../../utils/logger");
 const { httpError, providerError, requireProvider } = require("./aiVideo.errors");
+const creditsLedger = require("./aiVideo.credits");
 
 const MAX_CUSTOM_AVATARS = 5;
 const MIN_FOOTAGE_BYTES = 256 * 1024;
@@ -55,21 +56,18 @@ async function patch(studioId, avatarId, fields) {
 
 async function chargeOnce(studio, cost) {
   if (!cost) return true;
-  const reserved = await Studio.findOneAndUpdate(
-    { _id: studio._id, credits: { $gte: cost } },
-    { $inc: { credits: -cost } },
-    { new: true },
-  );
-  return Boolean(reserved);
+  await creditsLedger.charge(studio, cost);
+  return true;
 }
 
 // Gives the credits back exactly once, however many pollers race.
 async function refundOnce(studioId, avatarId, cost) {
   if (!cost) return;
-  await Studio.updateOne(
+  const marked = await Studio.updateOne(
     { _id: studioId, avatars: { $elemMatch: { id: avatarId, refunded: { $ne: true } } } },
-    { $inc: { credits: cost }, $set: { "avatars.$.refunded": true } },
+    { $set: { "avatars.$.refunded": true } },
   );
+  if (marked.modifiedCount) await creditsLedger.refund(studioId, cost);
 }
 
 // Step 1: reserve an upload slot. The phone then PUTs the video straight to `upload.url`.
@@ -158,9 +156,7 @@ async function completeVideoAvatar({ studio, avatarId, cost = 0 }) {
     throw providerError(error);
   }
 
-  if (!(await chargeOnce(studio, cost))) {
-    throw httpError(400, `You need ${cost} credits to create a video avatar.`);
-  }
+  await chargeOnce(studio, cost);
 
   let created;
   try {
@@ -172,7 +168,7 @@ async function completeVideoAvatar({ studio, avatarId, cost = 0 }) {
   } catch (error) {
     const friendly = providerError(error);
     // Nothing was started on the provider, so the charge simply goes back.
-    if (cost) await Studio.updateOne({ _id: studio._id }, { $inc: { credits: cost } });
+    if (cost) await creditsLedger.refund(studio._id, cost);
     // Unusable footage will not get better on retry; anything else leaves the slot open to try again.
     if (friendly.status === 400) await patch(studio._id, avatar.id, { status: STATUS.FAILED, error: friendly.message });
     throw friendly;

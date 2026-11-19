@@ -10,6 +10,7 @@ const advertisementModel = require("../models/advertisementModel.js");
 const invoiceModel = require("../models/invoiceModel.js");
 const planModel = require("../models/planModel.js");
 const { adInvoiceLines, legacyAdInvoiceLines, campaignDays } = require("../helpers/adInvoice.js");
+const { invoiceTheme } = require("../helpers/invoiceThemes.js");
 const { mkFullLogoB64, mkIconLogoB64 } = require("../utils/invoiceLogos.js");
 
 
@@ -76,6 +77,9 @@ exports.generateInvoice = async (
     // Saved before the PDF and the e-mail, so the invoice is there (admin panel and the app's
     // invoices) even when either of them fails.
     await invoiceModel.create({
+      service: "META_ADS",
+      paymentMethod: /^pay_/i.test(String(transactionId || "")) ? "Razorpay" : "MarketingKart wallet",
+      transactionId: transactionId ? String(transactionId) : undefined,
       adsAmount: lines.adSpend,
       commisionAmount: lines.platformFee,
       gstAmount: String(lines.gstAmount),
@@ -752,6 +756,8 @@ exports.getInvoiceHTML = async (req, res) => {
       return res.status(404).send("Invoice not found");
     }
 
+    // The colours of the service this invoice bills (Meta Ads orange, WhatsApp green, ...).
+    const theme = invoiceTheme(invoice);
     const companyData = await companyModel.findOne();
     const userGst = await GstOfUserModel.findOne({ userId: invoice.userId?._id });
 
@@ -810,7 +816,10 @@ exports.getInvoiceHTML = async (req, res) => {
         ];
 
     const subTotal = invoice.subTotal || items.reduce((a, b) => a + (b.amount || 0), 0);
-    const gstVal = parseFloat(invoice.gstAmount) || Math.round(subTotal * 0.18);
+    // A stored GST of 0 (a WhatsApp recharge) stays 0; only an invoice with no GST stored gets 18%.
+    const storedGst = parseFloat(invoice.gstAmount);
+    const gstVal = Number.isFinite(storedGst) ? storedGst : Math.round(subTotal * 0.18);
+    const gstRate = invoice.gstRate ?? 18;
     const totalVal = invoice.totalAmount || (subTotal + gstVal);
     const dateFormatted = invoice.createdAt ? moment(invoice.createdAt).format("DD MMM YYYY") : moment().format("DD MMM YYYY");
     const dueDateFormatted = invoice.dueDate ? moment(invoice.dueDate).format("DD MMM YYYY") : moment().add(15, "days").format("DD MMM YYYY");
@@ -877,7 +886,7 @@ exports.getInvoiceHTML = async (req, res) => {
       margin-bottom: 20px;
     }
     .bill-to-title {
-      color: #f97316;
+      color: ${theme.primary};
       font-size: 15px;
       font-weight: 700;
       margin-bottom: 4px;
@@ -899,10 +908,21 @@ exports.getInvoiceHTML = async (req, res) => {
     .invoice-heading {
       font-size: 34px;
       font-weight: 900;
-      color: #ea580c;
+      color: ${theme.dark};
       letter-spacing: -0.5px;
       margin-bottom: 8px;
       line-height: 1;
+    }
+    .service-tag {
+      display: inline-block;
+      background: ${theme.soft};
+      color: ${theme.dark};
+      border: 1px solid ${theme.border};
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 999px;
+      margin-bottom: 8px;
     }
     .meta-line {
       font-size: 12px;
@@ -916,7 +936,7 @@ exports.getInvoiceHTML = async (req, res) => {
     .table-wrap {
       border-radius: 6px;
       overflow: hidden;
-      border: 1px solid #f97316;
+      border: 1px solid ${theme.primary};
       margin-bottom: 14px;
     }
     table.data-table {
@@ -924,7 +944,7 @@ exports.getInvoiceHTML = async (req, res) => {
       border-collapse: collapse;
     }
     table.data-table thead th {
-      background: #f97316;
+      background: ${theme.primary};
       color: #ffffff;
       padding: 9px 12px;
       font-size: 12px;
@@ -965,7 +985,7 @@ exports.getInvoiceHTML = async (req, res) => {
     .thank-you-script {
       font-size: 34px;
       font-family: 'Brush Script MT', cursive, sans-serif;
-      color: #f97316;
+      color: ${theme.primary};
       line-height: 1;
       transform: rotate(-3deg);
       display: inline-block;
@@ -978,10 +998,10 @@ exports.getInvoiceHTML = async (req, res) => {
     }
     .totals-card {
       width: 310px;
-      background: #fff7ed;
+      background: ${theme.soft};
       border-radius: 6px;
       overflow: hidden;
-      border: 1px solid #fdba74;
+      border: 1px solid ${theme.border};
     }
     .totals-card-row {
       display: flex;
@@ -990,10 +1010,10 @@ exports.getInvoiceHTML = async (req, res) => {
       font-size: 12px;
       font-weight: 600;
       color: #334155;
-      border-bottom: 1px solid #fed7aa;
+      border-bottom: 1px solid ${theme.line};
     }
     .totals-card-row.grand-total {
-      background: #f97316;
+      background: ${theme.primary};
       color: #ffffff;
       font-size: 14px;
       font-weight: 800;
@@ -1015,7 +1035,7 @@ exports.getInvoiceHTML = async (req, res) => {
       padding: 10px 14px;
     }
     .section-title-orange {
-      color: #ea580c;
+      color: ${theme.dark};
       font-size: 13px;
       font-weight: 700;
       margin-bottom: 6px;
@@ -1107,7 +1127,7 @@ exports.getInvoiceHTML = async (req, res) => {
 <body style="margin: 0; padding: 0;">
   <!-- Print & Download Floating Toolbar -->
   <div class="no-print" style="max-width: 820px; margin: 12px auto 6px; text-align: right; padding: 0 16px;">
-    <button onclick="window.print()" style="background: #ea580c; color: #fff; border: none; padding: 8px 18px; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 13px; box-shadow: 0 2px 6px rgba(234,88,12,0.3);">
+    <button onclick="window.print()" style="background: ${theme.dark}; color: #fff; border: none; padding: 8px 18px; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 13px; box-shadow: 0 2px 6px rgba(234,88,12,0.3);">
       🖨️ Print / Download PDF
     </button>
   </div>
@@ -1144,10 +1164,13 @@ exports.getInvoiceHTML = async (req, res) => {
       </div>
       <div class="invoice-meta-table">
         <div class="invoice-heading">INVOICE</div>
+        <div class="service-tag">${theme.label}</div>
         <div class="meta-line">Invoice No &nbsp;&nbsp;: &nbsp;<strong>${invoice.invoiceNumber || `MKAI/${dateFormatted.split(" ")[2]}/${String(invoice._id).slice(-4).toUpperCase()}`}</strong></div>
         <div class="meta-line">Invoice Date : &nbsp;<strong>${dateFormatted}</strong></div>
         <div class="meta-line">Due Date &nbsp;&nbsp;&nbsp;&nbsp;: &nbsp;<strong>${dueDateFormatted}</strong></div>
         <div class="meta-line">Payment Terms: &nbsp;<strong>${invoice.paymentTerms || "Net 15 Days"}</strong></div>
+        ${invoice.paymentMethod ? `<div class="meta-line">Paid via &nbsp;&nbsp;&nbsp;&nbsp;: &nbsp;<strong>${invoice.paymentMethod}</strong></div>` : ""}
+        ${invoice.transactionId ? `<div class="meta-line">Payment ID &nbsp;: &nbsp;<strong>${invoice.transactionId}</strong></div>` : ""}
       </div>
     </div>
 
@@ -1192,10 +1215,10 @@ exports.getInvoiceHTML = async (req, res) => {
           <span>Subtotal</span>
           <span>${subTotal.toLocaleString("en-IN")}</span>
         </div>
-        <div class="totals-card-row">
-          <span>GST (${invoice.gstRate || 18}%)</span>
+        ${gstVal > 0 || gstRate > 0 ? `<div class="totals-card-row">
+          <span>GST (${gstRate}%${invoice.gstInclusive ? ", included" : ""})</span>
           <span>${gstVal.toLocaleString("en-IN")}</span>
-        </div>
+        </div>` : ""}
         <div class="totals-card-row grand-total">
           <span>Total Amount (INR)</span>
           <span>₹ ${totalVal.toLocaleString("en-IN")}</span>

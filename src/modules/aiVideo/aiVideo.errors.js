@@ -9,6 +9,17 @@ function httpError(status, message) {
   return error;
 }
 
+// The app shows the exact gap and a Recharge button. Example: 100 on hand, 130 needed → extra 30.
+function insufficientCredits(have, need) {
+  const gap = require("./aiVideo.logic").creditShortfall(have, need);
+  const error = httpError(400, `You need extra ${gap.short} credits to generate Video.`);
+  error.code = "INSUFFICIENT_CREDITS";
+  error.have = gap.have;
+  error.need = gap.need;
+  error.short = gap.short;
+  return error;
+}
+
 // Maps a provider failure to something safe to show a customer. Billing or auth problems
 // on our HeyGen account are our concern, not theirs, so they are logged and hidden.
 function providerError(error) {
@@ -29,4 +40,4 @@ function requireProvider() {
   }
 }
 
-module.exports = { UNAVAILABLE, httpError, providerError, requireProvider };
+module.exports = { UNAVAILABLE, httpError, insufficientCredits, providerError, requireProvider };

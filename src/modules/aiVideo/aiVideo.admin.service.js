@@ -8,6 +8,8 @@ const { normalizeMobileNumber } = require("../../utils/mobileValidetionHandler")
 const heygen = require("./heygen.client");
 const catalog = require("./heygen.catalog");
 const avatars = require("./aiVideo.avatars");
+const creditsLedger = require("./aiVideo.credits");
+const logic = require("./aiVideo.logic");
 const settings = require("./aiVideo.settings");
 const logger = require("../../utils/logger");
 const { httpError } = require("./aiVideo.errors");
@@ -422,12 +424,32 @@ async function adjustCredits({ admin, studioId, amount, reason }) {
   }
   if (note.length < 3) throw httpError(400, "Add a short reason so the change can be traced later.");
   const id = objectId(studioId, "studio id");
-  // A removal can never push a balance below zero.
-  const updated = await Studio.findOneAndUpdate(delta < 0 ? { _id: id, credits: { $gte: -delta } } : { _id: id }, { $inc: { credits: delta } }, { new: true });
-  if (!updated) {
-    if (!(await Studio.exists({ _id: id }))) throw httpError(404, "Studio not found");
-    throw httpError(400, "That is more credits than this studio has.");
+  const studio = await Studio.findById(id);
+  if (!studio) throw httpError(404, "Studio not found");
+  const tracked = Array.isArray(studio.creditLots) && studio.creditLots.length > 0;
+  let updated;
+  if (!tracked) {
+    updated = await Studio.findOneAndUpdate(
+      delta < 0 ? { _id: id, credits: { $gte: -delta } } : { _id: id },
+      { $inc: { credits: delta } },
+      { new: true },
+    );
+    if (!updated) throw httpError(400, "That is more credits than this studio has.");
+  } else if (delta > 0) {
+    const lot = logic.makeLot({ credits: delta, days: 30, orderId: "admin" });
+    updated = await Studio.findByIdAndUpdate(id, { $inc: { credits: delta }, $push: { creditLots: lot } }, { new: true });
+  } else {
+    const have = logic.lotBalance(studio.creditLots);
+    if (have < -delta) throw httpError(400, "That is more credits than this studio has.");
+    const lots = logic.consumeLots(studio.creditLots, -delta);
+    updated = await Studio.findOneAndUpdate(
+      { _id: id, credits: studio.credits },
+      { $set: { credits: have + delta, creditLots: lots } },
+      { new: true },
+    );
+    if (!updated) throw httpError(409, "Please try that again.");
   }
+  if (!updated) throw httpError(404, "Studio not found");
   await settings.recordAudit(admin, "credits.adjust", {
     studioId: id,
     userId: updated.userId,
@@ -506,10 +528,13 @@ async function refundVideo({ admin, studioId, projectId, reason }) {
   if (!Number.isFinite(cost) || cost <= 0) throw httpError(400, "This video did not cost any credits.");
   const updated = await Studio.findOneAndUpdate(
     { _id: id, projects: { $elemMatch: { id: projectId, refunded: { $ne: true } } } },
-    { $inc: { credits: cost }, $set: { "projects.$.refunded": true } },
+    { $set: { "projects.$.refunded": true } },
     { new: true },
   );
   if (!updated) throw httpError(400, "This video was already refunded.");
+  await creditsLedger.refund(id, cost);
+  const refreshed = await Studio.findById(id).select("credits");
+  updated.credits = refreshed ? refreshed.credits : updated.credits + cost;
   await settings.recordAudit(admin, "video.refund", {
     studioId: id,
     userId: studio.userId,

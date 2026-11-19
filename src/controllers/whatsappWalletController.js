@@ -6,6 +6,7 @@ const WhatsAppPlan = require("../models/whatsappPlanModel");
 const WhatsAppTransaction = require("../models/whatsappTransactionModel");
 const WhatsAppSubscription = require("../models/whatsappSubscriptionModel");
 const { sendWalletNotification } = require("../helpers/walletNotificationHelper");
+const { whatsappRechargeInvoice } = require("../services/serviceInvoiceService");
 
 const isAdminUser = (user) => user?.userType === "ADMIN" || user?.role === "ADMIN" || user?.userType === "STAFF";
 
@@ -150,6 +151,18 @@ exports.addMoney = async (req, res) => {
     user.whatsappWallet = newBal;
     await user.save({ session });
     await session.commitTransaction();
+
+    // The customer's invoice for this recharge (an admin credit is not a sale). It never holds up the credit.
+    if (!isAdminCredit) {
+      whatsappRechargeInvoice({
+        userId: targetUserId,
+        amount: roundedAmount,
+        paymentId,
+        orderId,
+        previousBalance: prevBal,
+        newBalance: newBal,
+      }).catch((invoiceErr) => console.error("WhatsApp recharge invoice failed:", invoiceErr.message));
+    }
 
     // Send in-app and push notifications
     sendWalletNotification({

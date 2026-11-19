@@ -68,12 +68,14 @@ function resolvePurchase(input, catalog = { packs: PACKS, plans: PLANS }) {
   }
   const pack = catalog.packs.find(item => item.id === (input && input.packId) && item.active !== false);
   if (!pack) return null;
-  return { kind, itemId: pack.id, billing: null, price: pack.price, credits: pack.credits, termDays: 0, title: `${pack.credits} AI video credits` };
+  // A credit pack that is not used expires after a month, same as a monthly plan.
+  return { kind, itemId: pack.id, billing: null, price: pack.price, credits: pack.credits, termDays: 30, title: `${pack.credits} AI video credits` };
 }
 
 const toPaise = rupees => Math.round(rupees * 100);
 
-// A plan lapses at the end of the term that was paid for; credits already granted stay.
+// A plan lapses at the end of the term that was paid for. Unused credits from that
+// purchase lapse with it: each grant is a lot with its own expiry.
 function effectivePlan(studio, now = Date.now()) {
   if (!studio.plan || studio.plan === "free") return "free";
   if (studio.planRenewsAt && new Date(studio.planRenewsAt).getTime() <= now) return "free";
@@ -223,6 +225,50 @@ function seedAvatars() {
   ];
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function freshLots(lots, now = Date.now()) {
+  return (Array.isArray(lots) ? lots : []).filter(
+    lot => lot && Number(lot.remaining) > 0 && lot.expiresAt && new Date(lot.expiresAt).getTime() > now,
+  );
+}
+
+function lotBalance(lots, now = Date.now()) {
+  return freshLots(lots, now).reduce((sum, lot) => sum + Number(lot.remaining), 0);
+}
+
+function makeLot({ credits, days, orderId, now = Date.now() }) {
+  const life = Number(days) > 0 ? Number(days) : 30;
+  return {
+    id: newId(),
+    remaining: Math.max(0, Math.floor(Number(credits) || 0)),
+    expiresAt: new Date(now + life * DAY_MS),
+    orderId: orderId || null,
+  };
+}
+
+// Spends the credits that expire soonest. Returns the lots still left.
+function consumeLots(lots, cost, now = Date.now()) {
+  const next = freshLots(lots, now)
+    .map(lot => ({ ...lot, remaining: Number(lot.remaining) }))
+    .sort((a, b) => new Date(a.expiresAt) - new Date(b.expiresAt));
+  let left = Math.max(0, Math.floor(Number(cost) || 0));
+  for (const lot of next) {
+    if (left <= 0) break;
+    const take = Math.min(lot.remaining, left);
+    lot.remaining -= take;
+    left -= take;
+  }
+  return next.filter(lot => lot.remaining > 0);
+}
+
+function creditShortfall(have, need) {
+  const balance = Math.max(0, Math.floor(Number(have) || 0));
+  const required = Math.max(0, Math.floor(Number(need) || 0));
+  const short = Math.max(0, required - balance);
+  return { have: balance, need: required, short };
+}
+
 module.exports = {
   VIDEO_COST,
   VOICEOVER_COST,
@@ -253,4 +299,9 @@ module.exports = {
   presentProject,
   presentAvatar,
   seedAvatars,
+  freshLots,
+  lotBalance,
+  makeLot,
+  consumeLots,
+  creditShortfall,
 };

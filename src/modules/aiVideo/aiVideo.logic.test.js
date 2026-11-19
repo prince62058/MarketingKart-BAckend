@@ -52,4 +52,24 @@ assert.strictEqual(
 // No usable sentence boundary in the first half: hard cut at the limit instead of dropping most of the text.
 assert.strictEqual(clean("Short. Then a very long run on sentence without any stop at all", 30).length, 30);
 
+const pack = logic.resolvePurchase({ kind: "pack", packId: "pack_100" });
+assert.strictEqual(pack.termDays, 30);
+assert.strictEqual(logic.resolvePurchase({ kind: "plan", planId: "pro", billing: "monthly" }).termDays, 30);
+assert.strictEqual(logic.resolvePurchase({ kind: "plan", planId: "pro", billing: "yearly" }).termDays, 365);
+
+const now = Date.now();
+const soon = { id: "a", remaining: 40, expiresAt: new Date(now + 2 * 86400000), orderId: "1" };
+const later = { id: "b", remaining: 80, expiresAt: new Date(now + 20 * 86400000), orderId: "2" };
+const expired = { id: "c", remaining: 50, expiresAt: new Date(now - 1000), orderId: "3" };
+assert.strictEqual(logic.lotBalance([soon, later, expired], now), 120);
+assert.deepStrictEqual(
+  logic.consumeLots([soon, later, expired], 50, now).map(lot => lot.remaining),
+  [70],
+);
+assert.strictEqual(logic.freshLots([expired], now).length, 0);
+assert.deepStrictEqual(logic.creditShortfall(100, 130), { have: 100, need: 130, short: 30 });
+const lot = logic.makeLot({ credits: 100, days: 30, orderId: "pack", now });
+assert.strictEqual(lot.remaining, 100);
+assert.ok(new Date(lot.expiresAt).getTime() - now >= 29 * 86400000);
+
 console.log("ai video logic ok");
