@@ -194,7 +194,7 @@ test("each type is only allowed in the categories WhatsApp Manager offers it in"
 });
 
 test("an image header sample is a WhatsApp handle, not the photo link", async () => {
-  const { res, component, saved } = await create({
+  const { res, sent, component, saved } = await create({
     name: "offer_photo",
     category: "MARKETING",
     headerType: "IMAGE",
@@ -208,6 +208,7 @@ test("an image header sample is a WhatsApp handle, not the photo link", async ()
     example: { header_handle: ["handle:https://cdn.example.com/offer.jpg"] },
   });
   assert.equal(saved.headerMediaUrl, "https://cdn.example.com/offer.jpg");
+  assert.equal(sent.allow_category_change, false);
 });
 
 test("a photo template without an uploaded file is refused", async () => {
@@ -222,6 +223,28 @@ test("a photo template without an uploaded file is refused", async () => {
   assert.equal(sent, undefined);
 });
 
+test("a marketing template is rewritten so WhatsApp review can accept it", async () => {
+  const { res, sent, component, saved } = await create({
+    name: "order_ready",
+    category: "MARKETING",
+    bodyText: "{{2}} your order {{1}} is ready",
+    buttons: [
+      { type: "QUICK_REPLY", text: "Yes" },
+      { type: "URL", text: "Shop", url: "https://shop.example/{{1}}" },
+      { type: "PHONE_NUMBER", text: "Call", phoneNumber: "+91 98765 43210" },
+    ],
+  });
+  assert.equal(res.statusCode, 201);
+  assert.equal(component("BODY").text, "Hi {{1}} your order {{2}} is ready");
+  assert.deepEqual(component("BODY").example.body_text, [["Customer", "12345"]]);
+  const buttons = component("BUTTONS").buttons;
+  assert.deepEqual(buttons.map((button) => button.type), ["URL", "PHONE_NUMBER", "QUICK_REPLY"]);
+  assert.deepEqual(buttons[0].example, ["https://shop.example/sample"]);
+  assert.equal(buttons[1].phone_number, "+919876543210");
+  assert.equal(saved.buttons[1].phoneNumber, "+919876543210");
+  assert.equal(sent.allow_category_change, true);
+});
+
 test("the default template is built as before", async () => {
   const { component, saved } = await create({
     name: "promo",
@@ -229,7 +252,7 @@ test("the default template is built as before", async () => {
     bodyText: "Hello {{1}}",
     buttons: [{ type: "URL", text: "Shop", url: "https://example.com" }],
   });
-  assert.deepEqual(component("BODY"), { type: "BODY", text: "Hello {{1}}", example: { body_text: [["Customer"]] } });
+  assert.deepEqual(component("BODY"), { type: "BODY", text: "Hello {{1}}.", example: { body_text: [["Customer"]] } });
   assert.deepEqual(component("BUTTONS").buttons, [{ type: "URL", text: "Shop", url: "https://example.com" }]);
   assert.equal(saved.templateType, "DEFAULT");
 });

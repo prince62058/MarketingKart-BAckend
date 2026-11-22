@@ -214,7 +214,7 @@ const syncTemplatesFromMeta = async (credentials) => {
     const response = await axios.get(url, {
       headers: { Authorization: `Bearer ${accessToken}` },
       params: {
-        fields: "id,name,status,category,language,components",
+        fields: "id,name,status,category,language,rejected_reason,components",
         limit: 100,
       },
       timeout: 15000,
@@ -265,10 +265,12 @@ const uploadTemplateHeaderSample = async ({ accessToken, sourceUrl }) => {
   if (bytes.slice(0, 8).toString("hex").startsWith("89504e470d0a1a0a")) mime = "image/png";
   else if (bytes.slice(0, 3).toString("hex") === "ffd8ff") mime = "image/jpeg";
   else if (bytes.slice(0, 4).toString() === "%PDF") mime = "application/pdf";
-  else if (bytes.slice(4, 8).toString() === "ftyp") mime = "video/mp4";
+  else if (bytes.slice(4, 8).toString() === "ftyp") {
+    mime = bytes.slice(8, 12).toString().startsWith("3gp") ? "video/3gpp" : "video/mp4";
+  }
   else if (!mime || mime === "application/octet-stream") mime = "image/jpeg";
 
-  const allowed = ["image/jpeg", "image/png", "video/mp4", "application/pdf"];
+  const allowed = ["image/jpeg", "image/png", "video/mp4", "video/3gpp", "application/pdf"];
   if (!allowed.includes(mime)) {
     throw new Error("Use a JPG, PNG, MP4, or PDF for the template header.");
   }
@@ -332,10 +334,13 @@ const uploadTemplateToMeta = async (templateData, credentials) => {
 
   const url = `${BASE_URL}/${wabaId}/message_templates`;
 
-  // Meta recommends allow_category_change for better approval rates
+  // A photo, video or file must stay in Marketing. WhatsApp rejects that file if it moves the template to Utility.
   const payload = {
-    ...templateData,
-    allow_category_change: true,
+    name: templateData.name,
+    category: templateData.category,
+    language: templateData.language,
+    components: templateData.components,
+    allow_category_change: templateData.allow_category_change !== false,
   };
 
   console.log("[Meta API] Submitting template payload:", JSON.stringify(payload, null, 2));

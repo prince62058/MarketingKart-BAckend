@@ -446,7 +446,7 @@ exports.postWhatsAppWebhook = async (req, res) => {
           if (metaTemplateId && newStatus) {
             const template = await whatsappTemplateModel.findOneAndUpdate(
               { metaTemplateId: String(metaTemplateId) },
-              { $set: { status: newStatus, rejectedReason: reason || undefined } },
+              { $set: { status: newStatus, rejectedReason: newStatus === "REJECTED" ? (reason || "") : "" } },
               { new: true }
             );
             if (template && global.io) {

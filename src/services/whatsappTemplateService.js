@@ -1,6 +1,6 @@
 const whatsappTemplateModel = require("../models/whatsappTemplateModel");
 const whatsappCloudApiService = require("./whatsappCloudApiService");
-const { detectTemplateType, flowIdOf } = require("./whatsappTemplateTypes");
+const { detectTemplateType, flowIdOf, templateRejectText } = require("./whatsappTemplateTypes");
 
 const buildAccessQuery = ({ createdBy, isAdmin = false, businessId, wabaId } = {}) => {
   const query = { disable: false };
@@ -143,6 +143,8 @@ const syncFromMeta = async (credentials, additionalData = {}) => {
 
     const bodyText = bodyComp?.text || tpl.name;
     const combinedText = `${headerComp?.text || ""} ${bodyText}`;
+    const headerFormat = String(headerComp?.format || "").toUpperCase();
+    const headerType = ["IMAGE", "VIDEO", "DOCUMENT", "TEXT"].includes(headerFormat) ? headerFormat : "NONE";
     const metaId = tpl.id ? String(tpl.id) : null;
     const tplName = String(tpl.name || "").toLowerCase().trim();
 
@@ -159,6 +161,8 @@ const syncFromMeta = async (credentials, additionalData = {}) => {
       language: tpl.language || "en_US",
       components,
       bodyText,
+      headerType,
+      rejectedReason: templateRejectText(tpl.rejected_reason),
       variables: extractVariables(combinedText),
       disable: false,
       ...(ownerId ? { createdBy: ownerId } : {}),

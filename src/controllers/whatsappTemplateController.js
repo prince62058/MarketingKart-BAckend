@@ -61,7 +61,7 @@ exports.createTemplate = async (req, res) => {
       return res.status(400).json({ success: false, message: typeErr.message });
     }
     // Meta writes the body of a one-time passcode template itself; a catalogue template has no header.
-    const bodyText = otpBody || req.body.bodyText;
+    let bodyText = otpBody || req.body.bodyText;
     const headerType = templateType === "OTP" || templateType === "CATALOG" ? "NONE" : req.body.headerType;
     if (
       !whatsappBilling.allowsMedia(category) &&
@@ -75,6 +75,29 @@ exports.createTemplate = async (req, res) => {
 
     if (!name || !category || !bodyText) {
       return res.status(400).json({ success: false, message: "name, category, bodyText are required" });
+    }
+
+    // WhatsApp rejects a variable at the start or end, a phone number with spaces,
+    // and a quick reply stuck between two links. Fix those before the review.
+    let usableHeaderText = headerText;
+    let usableFooter = footerText;
+    let usableButtons = buttons;
+    if (templateType !== "OTP") {
+      try {
+        const normalized = templateTypes.normalizeTemplateCopy({
+          bodyText,
+          headerType,
+          headerText,
+          footerText,
+          buttons: templateType === "DEFAULT" ? buttons : [],
+        });
+        bodyText = normalized.bodyText;
+        usableHeaderText = normalized.headerText;
+        usableFooter = normalized.footerText;
+        usableButtons = templateType === "DEFAULT" ? normalized.buttons : buttons;
+      } catch (typeErr) {
+        return res.status(400).json({ success: false, message: typeErr.message });
+      }
     }
 
     // A Flows template opens one of the user's own published flows.
@@ -135,7 +158,7 @@ exports.createTemplate = async (req, res) => {
 
     // Build Meta-compliant components payload
     let components = [];
-    let savedButtons = buttons || [];
+    let savedButtons = usableButtons || [];
 
     if (templateType === "OTP") {
       try {
@@ -151,9 +174,9 @@ exports.createTemplate = async (req, res) => {
       let headerComponent = { type: "HEADER", format: headerType };
       
       if (headerType === "TEXT") {
-        headerComponent.text = headerText || "";
+        headerComponent.text = usableHeaderText || "";
         // Add example for TEXT header if it contains variables
-        const headerExamples = generateExampleValues(headerText);
+        const headerExamples = generateExampleValues(usableHeaderText);
         if (headerExamples.length > 0) {
           headerComponent.example = { header_text: headerExamples };
         }
@@ -188,10 +211,10 @@ exports.createTemplate = async (req, res) => {
     if (templateType !== "OTP") components.push(bodyComponent);
 
     // ===== FOOTER COMPONENT =====
-    if (templateType !== "OTP" && footerText && footerText.trim()) {
+    if (templateType !== "OTP" && usableFooter && String(usableFooter).trim()) {
       components.push({
         type: "FOOTER",
-        text: footerText.trim(),
+        text: String(usableFooter).trim(),
       });
     }
 
@@ -217,15 +240,15 @@ exports.createTemplate = async (req, res) => {
       // Asks the customer for permission to call them on WhatsApp; it cannot carry other buttons.
       components.push({ type: "call_permission_request" });
       savedButtons = [];
-    } else if (templateType === "DEFAULT" && buttons && buttons.length > 0) {
-      const metaButtons = buttons.map(btn => {
+    } else if (templateType === "DEFAULT" && usableButtons && usableButtons.length > 0) {
+      const metaButtons = usableButtons.map(btn => {
         if (btn.type === "QUICK_REPLY") return { type: "QUICK_REPLY", text: btn.text };
         if (btn.type === "PHONE_NUMBER") return { type: "PHONE_NUMBER", text: btn.text, phone_number: btn.phoneNumber };
         if (btn.type === "URL") {
           const urlBtn = { type: "URL", text: btn.text, url: btn.url };
-          // If URL contains a variable like {{1}}, add example
+          // The example is the full link with the variable filled, not a second website pasted in.
           if (btn.url && btn.url.includes("{{")) {
-            urlBtn.example = [btn.url.replace(/\{\{\d+\}\}/g, "https://www.example.com")];
+            urlBtn.example = [btn.url.replace(/\{\{\d+\}\}/g, "sample")];
           }
           return urlBtn;
         }
@@ -266,9 +289,9 @@ exports.createTemplate = async (req, res) => {
         language: language || "en_US",
         bodyText,
         headerType: headerType || "NONE",
-        headerText: headerText || "",
+        headerText: usableHeaderText || "",
         headerMediaUrl: headerMediaUrl || "",
-        footerText: footerText || "",
+        footerText: usableFooter || "",
         buttons: savedButtons,
         ...typedFields,
         marketingType: marketingType || "CUSTOM",
@@ -307,11 +330,16 @@ exports.createTemplate = async (req, res) => {
         });
         headerComponent.example = { header_handle: [handle] };
       }
+      const mediaHeader = components.some(
+        (component) => component.type === "HEADER" && ["IMAGE", "VIDEO", "DOCUMENT"].includes(component.format)
+      );
       const metaResult = await whatsappCloudApiService.uploadTemplateToMeta({
         name: cleanName,
         category,
         language: language || "en_US",
         components,
+        // A photo template must stay Marketing. Letting WhatsApp change it to Utility gets the photo rejected.
+        allow_category_change: !mediaHeader,
       }, { accessToken: account.accessToken, wabaId: account.wabaId });
       metaTemplateId = metaResult?.id || null;
       metaStatus = metaResult?.status || "PENDING";
@@ -338,9 +366,9 @@ exports.createTemplate = async (req, res) => {
       language: language || "en_US",
       bodyText,
       headerType: headerType || "NONE",
-      headerText: headerText || "",
+      headerText: usableHeaderText || "",
       headerMediaUrl: headerMediaUrl || "",
-      footerText: footerText || "",
+      footerText: usableFooter || "",
       buttons: savedButtons,
       ...typedFields,
       marketingType: marketingType || "CUSTOM",
@@ -366,10 +394,19 @@ exports.createTemplate = async (req, res) => {
 exports.getAllTemplates = async (req, res) => {
   try {
     const { page = 1, search = "", status = "", businessId } = req.query;
-    const account = await whatsappAccountModel
-      .findOne({ userId: req.user._id, status: "CONNECTED" })
-      .select("wabaId phoneNumberId")
-      .lean();
+    const account = await whatsappAccountModel.findOne({ userId: req.user._id, status: "CONNECTED" });
+    // Opening the list asks WhatsApp again, so a template moves from Pending to Approved
+    // without a separate Sync tap.
+    if (account?.accessToken && account?.wabaId) {
+      try {
+        await whatsappTemplateService.syncFromMeta(
+          { accessToken: account.accessToken, wabaId: account.wabaId },
+          { createdBy: req.user._id, wabaId: account.wabaId, phoneNumberId: account.phoneNumberId }
+        );
+      } catch (syncErr) {
+        console.warn("[Template] list sync skipped:", syncErr.message);
+      }
+    }
 
     const result = await whatsappTemplateService.getAllTemplates({
       page: parseInt(page),

@@ -173,6 +173,121 @@ function detectTemplateType(components = [], category = "") {
   return "DEFAULT";
 }
 
+/** Rewrite {{3}} {{1}} into {{1}} {{2}} in the order they appear. WhatsApp rejects gaps. */
+function renumberVariables(text) {
+  const seen = [];
+  return String(text || "").replace(/\{\{\s*(\d+)\s*\}\}/g, (match, digits) => {
+    const key = String(Number(digits));
+    let index = seen.indexOf(key);
+    if (index === -1) {
+      seen.push(key);
+      index = seen.length - 1;
+    }
+    return `{{${index + 1}}}`;
+  });
+}
+
+/**
+ * Shape a marketing or utility template the way WhatsApp's review accepts it.
+ * A variable at the start or end, a gapped {{1}} {{3}}, a spaced phone number,
+ * or a link example that is not a real URL are rejected before anyone reads the copy.
+ */
+function normalizeTemplateCopy({ bodyText, headerType, headerText, footerText, buttons } = {}) {
+  let body = renumberVariables(String(bodyText || "").replace(/\r\n/g, "\n").trim().replace(/\n{3,}/g, "\n\n"));
+  if (/^\{\{\d+\}\}/.test(body)) body = `Hi ${body}`;
+  if (/\{\{\d+\}\}\s*$/.test(body)) body = `${body}.`;
+  if (!body.replace(/\{\{\d+\}\}/g, "").trim()) {
+    throw new TemplateTypeError("Write the message around the variables. It cannot be only {{1}}.");
+  }
+  if (body.length > 1024) throw new TemplateTypeError("The message can be at most 1024 characters.");
+
+  let header = String(headerText || "").replace(/\s+/g, " ").trim();
+  if (String(headerType || "").toUpperCase() === "TEXT") {
+    if (!header) throw new TemplateTypeError("Enter the header text, or choose no header.");
+    header = renumberVariables(header);
+    const headerVars = header.match(/\{\{\d+\}\}/g) || [];
+    if (headerVars.length > 1) throw new TemplateTypeError("A text header can use only one variable.");
+    if (/^\{\{\d+\}\}/.test(header) || /\{\{\d+\}\}$/.test(header)) {
+      throw new TemplateTypeError("Put words before and after the header variable.");
+    }
+    if (header.length > 60) throw new TemplateTypeError("Header text can be at most 60 characters.");
+  }
+
+  let footer = String(footerText || "").replace(/\s+/g, " ").trim();
+  if (footer) {
+    if (/\{\{\d+\}\}/.test(footer)) throw new TemplateTypeError("The footer cannot contain a variable. Put {{1}} in the message instead.");
+    if (footer.length > 60) footer = footer.slice(0, 60);
+  }
+
+  return {
+    bodyText: body,
+    headerText: header,
+    footerText: footer,
+    buttons: normalizeButtons(buttons),
+  };
+}
+
+function normalizeButtons(buttons) {
+  if (!Array.isArray(buttons) || buttons.length === 0) return [];
+  if (buttons.length > 3) throw new TemplateTypeError("A template can have at most 3 buttons.");
+  const cleaned = buttons.map((btn) => {
+    const type = String(btn?.type || "").toUpperCase();
+    const text = String(btn?.text || "").replace(/\s+/g, " ").trim().slice(0, 25);
+    if (!text) throw new TemplateTypeError("Every button needs a label.");
+    if (type === "URL") {
+      let url = String(btn.url || "").trim();
+      if (!url) throw new TemplateTypeError("Enter a website for the link button.");
+      if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+      try {
+        // A variable is not a valid URL character, so check the sample address.
+        // eslint-disable-next-line no-new
+        new URL(url.replace(/\{\{\s*\d+\s*\}\}/g, "sample"));
+      } catch {
+        throw new TemplateTypeError("The link button needs a full website address, starting with https://.");
+      }
+      return { ...btn, type: "URL", text, url: renumberVariables(url) };
+    }
+    if (type === "PHONE_NUMBER") {
+      let phone = String(btn.phoneNumber || "").replace(/[^\d+]/g, "");
+      if (phone.startsWith("00")) phone = `+${phone.slice(2)}`;
+      if (/^\d{10}$/.test(phone)) phone = `+91${phone}`;
+      if (!phone.startsWith("+")) phone = `+${phone}`;
+      if (!/^\+\d{8,15}$/.test(phone)) {
+        throw new TemplateTypeError("Enter the call button with a country code, for example +919876543210.");
+      }
+      return { ...btn, type: "PHONE_NUMBER", text, phoneNumber: phone };
+    }
+    if (type === "QUICK_REPLY") return { ...btn, type: "QUICK_REPLY", text };
+    return null;
+  }).filter(Boolean);
+
+  const labels = new Set();
+  for (const button of cleaned) {
+    const label = button.text.toLowerCase();
+    if (labels.has(label)) throw new TemplateTypeError("Two buttons cannot have the same label.");
+    labels.add(label);
+  }
+  // WhatsApp rejects a quick reply sitting between two link or call buttons.
+  const callsToAction = cleaned.filter((button) => button.type !== "QUICK_REPLY");
+  const replies = cleaned.filter((button) => button.type === "QUICK_REPLY");
+  return [...callsToAction, ...replies];
+}
+
+const TEMPLATE_REJECT_TEXT = {
+  INVALID_FORMAT: "WhatsApp rejected the format. Check the header, the buttons and the variables, then submit it again.",
+  TAG_CONTENT_MISMATCH: "WhatsApp said this message does not match the category you chose.",
+  INCORRECT_CATEGORY: "WhatsApp said this message belongs in a different category.",
+  ABUSIVE_CONTENT: "WhatsApp rejected this message.",
+  SCAM: "WhatsApp rejected this message.",
+  NONE: "",
+};
+
+function templateRejectText(reason) {
+  const code = String(reason || "").trim();
+  if (!code || code === "NONE") return "";
+  return TEMPLATE_REJECT_TEXT[code] || code.replace(/_/g, " ");
+}
+
 /** The Meta flow id behind a template's FLOW button, if it has one. */
 function flowIdOf(components = []) {
   const buttons = (Array.isArray(components) ? components : []).find((c) => String(c?.type || "").toUpperCase() === "BUTTONS")?.buttons || [];
@@ -190,4 +305,6 @@ module.exports = {
   typedButtons,
   detectTemplateType,
   flowIdOf,
+  normalizeTemplateCopy,
+  templateRejectText,
 };

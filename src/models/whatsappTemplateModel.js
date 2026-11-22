@@ -121,6 +121,12 @@ const whatsappTemplateSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+whatsappTemplateSchema.virtual("rejectionReason").get(function rejectionReason() {
+  return this.rejectedReason || "";
+});
+whatsappTemplateSchema.set("toJSON", { virtuals: true });
+whatsappTemplateSchema.set("toObject", { virtuals: true });
+
 whatsappTemplateSchema.index({ status: 1 });
 whatsappTemplateSchema.index({ businessId: 1 });
 whatsappTemplateSchema.index({ createdBy: 1, wabaId: 1 });
