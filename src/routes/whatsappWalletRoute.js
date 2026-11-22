@@ -24,4 +24,7 @@ router.put("/whatsapp/plans/:planId/toggle", authUser, ctrl.togglePlan);
 router.post("/whatsapp/plans/purchase", authUser, ctrl.purchasePlan);
 router.get("/whatsapp/subscription", authUser, ctrl.getSubscription);
 
+router.get("/whatsapp/pricing", authUser, ctrl.getPricing);
+router.put("/whatsapp/pricing/:category", authUser, ctrl.updatePricing);
+
 module.exports = router;

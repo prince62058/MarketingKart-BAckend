@@ -4,6 +4,7 @@ const whatsappAccountModel = require("../models/whatsappAccountModel");
 const whatsappTemplateModel = require("../models/whatsappTemplateModel");
 const whatsappFlowModel = require("../models/whatsappFlowModel");
 const templateTypes = require("../services/whatsappTemplateTypes");
+const whatsappBilling = require("../services/whatsappBillingService");
 const { screenId: flowScreenId } = require("../services/whatsappFlowBuilder");
 const OpenAI = require("openai");
 
@@ -56,6 +57,15 @@ exports.createTemplate = async (req, res) => {
     // Meta writes the body of a one-time passcode template itself; a catalogue template has no header.
     const bodyText = otpBody || req.body.bodyText;
     const headerType = templateType === "OTP" || templateType === "CATALOG" ? "NONE" : req.body.headerType;
+    if (
+      !whatsappBilling.allowsMedia(category) &&
+      ["IMAGE", "VIDEO", "DOCUMENT"].includes(String(headerType || "").toUpperCase())
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Utility and authentication templates can only be a text message. Photos, video and documents are for Marketing.",
+      });
+    }
 
     if (!name || !category || !bodyText) {
       return res.status(400).json({ success: false, message: "name, category, bodyText are required" });
@@ -367,6 +377,24 @@ exports.getTemplateById = async (req, res) => {
 
 exports.updateTemplate = async (req, res) => {
   try {
+    const current = await whatsappTemplateModel
+      .findOne({
+        _id: req.params.templateId,
+        ...(req.user.userType === "ADMIN" ? {} : { createdBy: req.user._id }),
+      })
+      .select("category headerType");
+    const nextCategory = req.body.category || current?.category;
+    const nextHeader = req.body.headerType || current?.headerType;
+    if (
+      current &&
+      !whatsappBilling.allowsMedia(nextCategory) &&
+      ["IMAGE", "VIDEO", "DOCUMENT"].includes(String(nextHeader || "").toUpperCase())
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Utility and authentication templates can only be a text message. Photos, video and documents are for Marketing.",
+      });
+    }
     const template = await whatsappTemplateService.updateTemplate(
       req.params.templateId,
       req.body,

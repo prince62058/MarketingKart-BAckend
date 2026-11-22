@@ -1,4 +1,5 @@
 const WhatsAppPlan = require("../models/whatsappPlanModel");
+const { CATALOG } = require("../services/whatsappPlanCatalog");
 
 async function disableFreeWhatsAppPlans() {
   try {
@@ -18,45 +19,31 @@ async function seedWhatsAppPlansIfEmpty() {
   try {
     await disableFreeWhatsAppPlans();
 
-    const count = await WhatsAppPlan.countDocuments();
-    if (count > 0) {
-      console.log(`ℹ️ WhatsApp plans already exist (${count} items). Skipping initial seed.`);
-      return;
+    let created = 0;
+    for (const plan of CATALOG) {
+      const existing = await WhatsAppPlan.findOne({ code: plan.code });
+      if (existing) continue;
+      await WhatsAppPlan.create({ ...plan, disable: false });
+      created += 1;
+    }
+    if (created > 0) {
+      console.log(`✅ Added ${created} WhatsApp plan(s) with message credits.`);
     }
 
-    console.log("🌱 Seeding initial WhatsApp marketing plans matching LeadKart reference...");
-
-    const PLANS = [
+    // The older plans had a price and no included messages, so they undercut the catalog.
+    const retired = await WhatsAppPlan.updateMany(
       {
-        title: "Growth Plan",
-        price: 999,
-        duration: 30,
-        contactLimit: 2000,
-        campaignLimit: 20,
-        templateLimit: 10,
-        features: ["Standard Support", "Bulk Messaging", "2000 Contacts", "Analytics"],
-        badge: "POPULAR",
-        color: "#8b5cf6",
-        sortOrder: 1,
         disable: false,
+        code: { $nin: CATALOG.map((plan) => plan.code) },
+        marketingCredits: { $in: [0, null] },
+        utilityCredits: { $in: [0, null] },
+        authenticationCredits: { $in: [0, null] },
       },
-      {
-        title: "Enterprise Plan",
-        price: 1999,
-        duration: 30,
-        contactLimit: 10000,
-        campaignLimit: 100,
-        templateLimit: 50,
-        features: ["Premium Priority Support", "Unlimited Campaigns", "10,000 Contacts", "Dedicated Account Manager"],
-        badge: "BEST VALUE",
-        color: "#eab308",
-        sortOrder: 2,
-        disable: false,
-      },
-    ];
-
-    await WhatsAppPlan.insertMany(PLANS);
-    console.log(`✅ Seeded ${PLANS.length} initial WhatsApp marketing plans.`);
+      { $set: { disable: true } }
+    );
+    if (retired.modifiedCount > 0) {
+      console.log(`✅ Retired ${retired.modifiedCount} WhatsApp plan(s) that included no messages.`);
+    }
   } catch (error) {
     console.error("❌ Failed to seed WhatsApp marketing plans:", error.message);
   }

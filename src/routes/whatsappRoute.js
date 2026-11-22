@@ -19,6 +19,7 @@ router.get("/whatsapp/stats", authUser, campaignController.getWhatsAppStats);
 router.post("/whatsapp/account/connect", authUser, isAdmin, accountController.connectAccount);
 router.post("/whatsapp/account/connect-facebook", authUser, (_req, res) => res.status(410).json({success:false,message:'Update MarketingKart and use Connect WhatsApp to select your own business number.'}));
 router.get("/whatsapp/account", authUser, accountController.getAccountDetails);
+router.put("/whatsapp/account/billing-mode", authUser, accountController.setBillingMode);
 router.post("/whatsapp/account/disconnect", authUser, accountController.disconnectAccount);
 
 // ─── Meta OAuth / Embedded Signup Flow ──────────────────────────────────────
@@ -57,6 +58,7 @@ router.post(
   campaignController.createCampaign
 );
 router.post("/whatsapp/campaigns/ai-fill", authUser, campaignController.aiFillCampaign);
+router.get("/whatsapp/campaigns/quote", authUser, campaignController.quoteCampaign);
 router.get("/whatsapp/campaigns", authUser, campaignController.getAllCampaigns);
 router.get("/whatsapp/campaigns/:campaignId", authUser, campaignController.getCampaignById);
 router.put("/whatsapp/campaigns/:campaignId/pause", authUser, campaignController.pauseCampaign);

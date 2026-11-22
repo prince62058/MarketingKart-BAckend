@@ -205,6 +205,13 @@ test("a campaign names the flow in the FLOW button's token so answers can be mat
   assert.deepEqual(buildComponents({ 1: "Asha" }, components), [{ type: "body", parameters: [{ type: "text", text: "Asha" }] }, flowButton]);
   assert.deepEqual(buildComponents({}, components), [flowButton]);
   assert.deepEqual(buildComponents({}, [{ type: "BODY", text: "Hello" }]), []);
+  assert.deepEqual(
+    buildComponents({}, [{ type: "HEADER", format: "IMAGE" }, { type: "BODY", text: "Hello" }], {
+      headerType: "IMAGE",
+      headerMediaUrl: "https://cdn.example.com/offer.jpg",
+    }),
+    [{ type: "header", parameters: [{ type: "image", image: { link: "https://cdn.example.com/offer.jpg" } }] }]
+  );
 });
 
 test("templates synced from Meta get their type and flow id", () => {

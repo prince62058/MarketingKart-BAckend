@@ -9,6 +9,11 @@ const whatsappSubscriptionModel = new mongoose.Schema(
     startDate: { type: Date, default: Date.now },
     endDate: { type: Date, required: true },
     transactionId: { type: objectId, ref: "whatsappTransactionModel", default: null },
+    cycle: { type: String, enum: ["MONTHLY", "QUARTERLY", "ANNUAL"], default: "MONTHLY" },
+    marketingCredits: { type: Number, default: 0 },
+    utilityCredits: { type: Number, default: 0 },
+    authenticationCredits: { type: Number, default: 0 },
+    serviceCredits: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

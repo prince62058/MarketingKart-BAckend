@@ -186,8 +186,23 @@ const flowButtonComponents = (templateComponents = []) => {
     }));
 };
 
-const buildComponents = (variables, templateComponents = []) => {
-  if (!variables || Object.keys(variables).length === 0) return flowButtonComponents(templateComponents);
+const mediaHeaderComponent = (template, templateComponents = []) => {
+  const header = (templateComponents || []).find((c) => String(c?.type || "").toUpperCase() === "HEADER");
+  const format = String(header?.format || template?.headerType || "").toUpperCase();
+  if (!["IMAGE", "VIDEO", "DOCUMENT"].includes(format)) return null;
+  const link = String(template?.headerMediaUrl || header?.example?.header_handle?.[0] || "").trim();
+  if (!/^https:\/\//i.test(link)) return null;
+  const type = format.toLowerCase();
+  const media = { link };
+  if (format === "DOCUMENT") media.filename = "file";
+  return { type: "header", parameters: [{ type, [type]: media }] };
+};
+
+const buildComponents = (variables, templateComponents = [], template = null) => {
+  const headerMedia = mediaHeaderComponent(template, templateComponents);
+  if (!variables || Object.keys(variables).length === 0) {
+    return [...(headerMedia ? [headerMedia] : []), ...flowButtonComponents(templateComponents)];
+  }
 
   const finalComponents = [];
 
@@ -208,7 +223,9 @@ const buildComponents = (variables, templateComponents = []) => {
 
   // 1. Process HEADER
   const headerComp = templateComponents.find(c => c.type === "HEADER");
-  if (headerComp) {
+  if (headerMedia) {
+    finalComponents.push(headerMedia);
+  } else if (headerComp) {
     const headerIndices = getCompVarIndices(headerComp);
     if (headerIndices.length > 0) {
       finalComponents.push({
@@ -267,8 +284,10 @@ const DEFAULT_SEND_RATE_PER_MINUTE = 60;
 const enqueueCampaignMessages = async (campaign, contacts, template, options = {}) => {
   // Build readable text from template for display in chat
   const templateDisplayText = template.bodyText || `Template: ${template.name}`;
+  const sources = Array.isArray(options.billingSources) ? options.billingSources : [];
+  const sellPaise = Math.max(0, Math.round(Number(options.sellPaise) || 0));
 
-  const messages = contacts.map((contact) => {
+  const messages = contacts.map((contact, index) => {
     // Resolve variables for this contact
     const resolved = resolveVariables(contact, campaign.variableMapping);
     
@@ -289,6 +308,10 @@ const enqueueCampaignMessages = async (campaign, contacts, template, options = {
       templateName: template.name,
       direction: "OUTBOUND",
       status: "QUEUED",
+      billCategory: options.billCategory || null,
+      billSource: sources[index] || null,
+      billPaise: sources[index] === "wallet" ? sellPaise : 0,
+      billingState: sources[index] ? "reserved" : "none",
     };
   });
 
@@ -313,7 +336,7 @@ const enqueueCampaignMessages = async (campaign, contacts, template, options = {
       to: msg.to,
       templateName: template.name,
       languageCode: template.language || "en_US",
-      components: buildComponents(msg.variables, template.components || []),
+      components: buildComponents(msg.variables, template.components || [], template),
     },
     opts: {
       delay: Math.round(startDelayMs + index * spacingMs),
@@ -620,7 +643,7 @@ const getOverallStats = async ({ businessId, createdBy, isAdmin = false } = {}) 
 const requeueQueuedMessages = async (campaignId) => {
   const campaign = await whatsappCampaignModel
     .findById(campaignId)
-    .populate("templateId", "name language");
+    .populate("templateId", "name language components headerType headerMediaUrl");
 
   if (!campaign || !campaign.templateId) {
     throw new Error("Campaign template not found");
@@ -642,7 +665,7 @@ const requeueQueuedMessages = async (campaignId) => {
       to: msg.to,
       templateName: campaign.templateId.name,
       languageCode: campaign.templateId.language || "en_US",
-      components: buildComponents(msg.variables || {}, campaign.templateId.components || []),
+      components: buildComponents(msg.variables || {}, campaign.templateId.components || [], campaign.templateId),
     },
   }));
 
@@ -657,6 +680,12 @@ const deleteCampaign = async (id, userId) => {
 
   if (campaign.createdBy.toString() !== userId.toString()) {
     throw new Error("Not authorized to delete this campaign");
+  }
+
+  const held = await whatsappMessageModel.find({ campaignId: id, billingState: "reserved" });
+  const whatsappBilling = require("./whatsappBillingService");
+  for (const msg of held) {
+    await whatsappBilling.settleMessage(msg, "FAILED");
   }
 
   // Delete associated messages

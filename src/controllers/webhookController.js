@@ -25,6 +25,7 @@ const whatsappBotService = require("../services/whatsappBotService");
 const whatsappAccountHealthService = require("../services/whatsappAccountHealthService");
 const whatsappConversionService = require("../services/whatsappConversionService");
 const whatsappFlowService = require("../services/whatsappFlowService");
+const whatsappBilling = require("../services/whatsappBillingService");
 
 const getPhoneVariants = (rawPhone) => {
   const digits = String(rawPhone || "").replace(/\D/g, "");
@@ -341,7 +342,7 @@ exports.postWhatsAppWebhook = async (req, res) => {
 
           const existingMessage = await whatsappMessageModel.findOne(
             { metaMessageId: wamid },
-            "campaignId status businessId phoneNumberId conversationId"
+            "campaignId status businessId phoneNumberId conversationId billingState billSource billCategory billPaise"
           );
 
           if (!existingMessage || !shouldApplyWhatsAppStatus(existingMessage.status, newStatus)) {
@@ -373,6 +374,9 @@ exports.postWhatsAppWebhook = async (req, res) => {
           );
 
           if (message) {
+            await whatsappBilling.settleMessage(existingMessage, newStatus).catch((err) => {
+              console.error("[WA Billing] settle failed:", err.message);
+            });
             // Increment campaign aggregate stat for this status
             if (message.campaignId) {
               const incPayload = { [`stats.${newStatus.toLowerCase()}`]: 1 };

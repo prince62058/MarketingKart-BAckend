@@ -84,6 +84,15 @@ const whatsappMessageSchema = new mongoose.Schema(
     deliveredAt: { type: Date, default: null },
     readAt: { type: Date, default: null },
     failedAt: { type: Date, default: null },
+    // reserved until Meta says delivered (kept) or failed (released). Settled only once.
+    billingState: {
+      type: String,
+      enum: ["none", "reserved", "settled", "released"],
+      default: "none",
+    },
+    billCategory: { type: String, default: null },
+    billSource: { type: String, default: null },
+    billPaise: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

@@ -61,6 +61,7 @@ const buildAccountResponse = (account) => ({
   businessName: account.businessName || null,
   connectedVia: account.connectedVia || "MANUAL",
   onboardingMode: account.onboardingMode || 'NEW_OR_MIGRATE',
+  billingMode: account.billingMode === 'CUSTOMER' ? 'CUSTOMER' : 'PLATFORM',
   coexistenceSync: account.onboardingMode === 'BUSINESS_APP' ? {
     historyStatus: account.coexistenceSync?.historyStatus || 'PENDING',
     historyProgress: account.coexistenceSync?.historyProgress || 0,
@@ -457,6 +458,21 @@ exports.getAccountDetails = async (req, res) => {
       },
     });
 
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.setBillingMode = async (req, res) => {
+  try {
+    const mode = req.body.billingMode === "CUSTOMER" ? "CUSTOMER" : "PLATFORM";
+    const account = await whatsappAccountModel.findOneAndUpdate(
+      { userId: req.user._id },
+      { $set: { billingMode: mode } },
+      { new: true }
+    );
+    if (!account) return res.status(404).json({ success: false, message: "Connect WhatsApp first." });
+    return res.status(200).json({ success: true, data: buildAccountResponse(account) });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }

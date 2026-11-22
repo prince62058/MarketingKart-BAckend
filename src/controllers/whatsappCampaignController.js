@@ -1,4 +1,5 @@
 const whatsappCampaignService = require("../services/whatsappCampaignService");
+const whatsappBilling = require("../services/whatsappBillingService");
 const whatsappTemplateService = require("../services/whatsappTemplateService");
 const whatsappCampaignModel = require("../models/whatsappCampaignModel");
 const whatsappAccountModel = require("../models/whatsappAccountModel");
@@ -9,7 +10,24 @@ function getOpenAI() {
   return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 }
 
+exports.quoteCampaign = async (req, res) => {
+  try {
+    const template = await whatsappTemplateService.getTemplateById(req.query.templateId);
+    if (!template) return res.status(404).json({ success: false, message: "Template not found" });
+    const estimate = await whatsappBilling.quote({
+      userId: req.user._id,
+      category: whatsappBilling.categoryOf(template),
+      count: req.query.count,
+    });
+    return res.status(200).json({ success: true, data: estimate });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.createCampaign = async (req, res) => {
+  let hold = null;
+  let campaignStarted = false;
   try {
     const {
       name,
@@ -125,6 +143,14 @@ exports.createCampaign = async (req, res) => {
       });
     }
 
+    const headerFormat = String(template.headerType || "").toUpperCase();
+    if (["IMAGE", "VIDEO", "DOCUMENT"].includes(headerFormat) && !/^https:\/\//i.test(String(template.headerMediaUrl || ""))) {
+      return res.status(400).json({
+        success: false,
+        message: "This template needs a public https photo, video or file before it can be sent.",
+      });
+    }
+
     if (template.status !== "APPROVED") {
       return res.status(400).json({
         success: false,
@@ -191,6 +217,15 @@ exports.createCampaign = async (req, res) => {
     }
     // ----------------------------------------
 
+    const billCategory = whatsappBilling.categoryOf(template);
+    if (req.user.userType !== "ADMIN") {
+      hold = await whatsappBilling.reserveCampaign({
+        userId: req.user._id,
+        category: billCategory,
+        count: contacts.length,
+      });
+    }
+
     // Create campaign record
     const campaign = await whatsappCampaignService.createCampaign({
       name,
@@ -204,13 +239,20 @@ exports.createCampaign = async (req, res) => {
       sendRatePerMinute: ratePerMinute,
       "stats.queued": contacts.length,
     });
+    campaignStarted = true;
 
     // Enqueue all messages
     const enqueuedCount = await whatsappCampaignService.enqueueCampaignMessages(
       campaign,
       contacts,
       template,
-      { startAt, ratePerMinute }
+      {
+        startAt,
+        ratePerMinute,
+        billingSources: hold ? hold.sources : [],
+        sellPaise: hold ? hold.sellPaise : 0,
+        billCategory,
+      }
     );
 
     return res.status(201).json({
@@ -224,8 +266,11 @@ exports.createCampaign = async (req, res) => {
       parseErrors: errors,
     });
   } catch (error) {
+    if (hold && !campaignStarted) {
+      await whatsappBilling.releaseHold(hold).catch(() => {});
+    }
     console.error("[Campaign] createCampaign error:", error.message);
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(error.status || 500).json({ success: false, message: error.message });
   }
 };
 

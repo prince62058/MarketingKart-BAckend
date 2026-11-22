@@ -7,6 +7,7 @@ const WhatsAppTransaction = require("../models/whatsappTransactionModel");
 const WhatsAppSubscription = require("../models/whatsappSubscriptionModel");
 const { sendWalletNotification } = require("../helpers/walletNotificationHelper");
 const { whatsappRechargeInvoice } = require("../services/serviceInvoiceService");
+const planCatalog = require("../services/whatsappPlanCatalog");
 
 const isAdminUser = (user) => user?.userType === "ADMIN" || user?.role === "ADMIN" || user?.userType === "STAFF";
 
@@ -319,6 +320,7 @@ exports.createPlan = async (req, res) => {
     if (!isAdminUser(req.user)) {
       return res.status(403).json({ success: false, message: "Only admins can create plans" });
     }
+    planCatalog.assertPlanEarns(req.body || {});
     const plan = await WhatsAppPlan.create(req.body);
     return res.status(201).json({ success: true, data: plan });
   } catch (error) {
@@ -343,6 +345,9 @@ exports.updatePlan = async (req, res) => {
     if (!isAdminUser(req.user)) {
       return res.status(403).json({ success: false, message: "Only admins can update plans" });
     }
+    const current = await WhatsAppPlan.findById(req.params.planId);
+    if (!current) return res.status(404).json({ success: false, message: "Plan not found" });
+    planCatalog.assertPlanEarns({ ...current.toObject(), ...req.body });
     const plan = await WhatsAppPlan.findByIdAndUpdate(req.params.planId, req.body, { new: true });
     if (!plan) return res.status(404).json({ success: false, message: "Plan not found" });
     return res.status(200).json({ success: true, data: plan });
@@ -377,24 +382,25 @@ exports.purchasePlan = async (req, res) => {
     const plan = await WhatsAppPlan.findById(planId);
     if (!plan || plan.disable) throw new Error("Plan not found or disabled");
     if (!(plan.price > 0)) throw new Error("Free plans are not available");
+    const quote = planCatalog.cycleQuote(plan, req.body.cycle);
 
     const user = await User.findById(userId).session(session);
     if (!user) throw new Error("User not found");
 
     const prevBal = parseFloat(user.whatsappWallet || 0);
-    if (prevBal < plan.price) throw new Error("Insufficient wallet balance");
+    if (prevBal < quote.total) throw new Error("Insufficient wallet balance");
 
-    const newBal = parseFloat((prevBal - plan.price).toFixed(2));
+    const newBal = parseFloat((prevBal - quote.total).toFixed(2));
 
     // Create debit transaction
     const [txn] = await WhatsAppTransaction.create(
       [{
         type: "DEBIT",
-        amount: plan.price,
+        amount: quote.total,
         userId,
         transactionId: `wa_plan_${Date.now()}`,
         mode: "PLAN_PURCHASE",
-        description: `Plan purchased: ${plan.title}`,
+        description: `Plan purchased: ${plan.title} (${quote.cycle.toLowerCase()})`,
         planId: plan._id,
         previousBalance: prevBal,
         newBalance: newBal,
@@ -404,7 +410,7 @@ exports.purchasePlan = async (req, res) => {
 
     // Create/update subscription
     const endDate = new Date();
-    endDate.setDate(endDate.getDate() + (plan.duration || 30));
+    endDate.setDate(endDate.getDate() + quote.days);
 
     // Expire any existing active subscription
     await WhatsAppSubscription.updateMany(
@@ -421,6 +427,11 @@ exports.purchasePlan = async (req, res) => {
         startDate: new Date(),
         endDate,
         transactionId: txn._id,
+        cycle: quote.cycle,
+        marketingCredits: quote.credits.marketingCredits,
+        utilityCredits: quote.credits.utilityCredits,
+        authenticationCredits: quote.credits.authenticationCredits,
+        serviceCredits: quote.credits.serviceCredits,
       }],
       { session }
     );
@@ -432,7 +443,14 @@ exports.purchasePlan = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: `${plan.title} plan activated!`,
-      data: { walletBalance: newBal, plan: plan.title, expiresAt: endDate },
+      data: {
+        walletBalance: newBal,
+        plan: plan.title,
+        expiresAt: endDate,
+        amount: quote.total,
+        cycle: quote.cycle,
+        credits: quote.credits,
+      },
     });
   } catch (error) {
     await session.abortTransaction();
@@ -455,6 +473,42 @@ exports.getSubscription = async (req, res) => {
       .populate("planId")
       .sort({ createdAt: -1 });
     return res.status(200).json({ success: true, data: sub });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getPricing = async (req, res) => {
+  try {
+    const billing = require("../services/whatsappBillingService");
+    const rates = await billing.ensureRates();
+    return res.status(200).json({ success: true, data: rates });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updatePricing = async (req, res) => {
+  try {
+    if (!isAdminUser(req.user)) {
+      return res.status(403).json({ success: false, message: "Only admins can change WhatsApp pricing" });
+    }
+    const billing = require("../services/whatsappBillingService");
+    await billing.ensureRates();
+    const Rate = require("../models/whatsappRateModel");
+    const category = String(req.params.category || "").toUpperCase();
+    const sellPaise = Math.round(Number(req.body.sellPaise));
+    const metaPaise = Math.round(Number(req.body.metaPaise));
+    if (!Number.isInteger(sellPaise) || sellPaise < 1 || !Number.isInteger(metaPaise) || metaPaise < 0) {
+      return res.status(400).json({ success: false, message: "Prices must be whole paise." });
+    }
+    const rate = await Rate.findOneAndUpdate(
+      { category },
+      { $set: { sellPaise, metaPaise, country: "IN" } },
+      { new: true }
+    );
+    if (!rate) return res.status(404).json({ success: false, message: "Unknown category" });
+    return res.status(200).json({ success: true, data: rate });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }

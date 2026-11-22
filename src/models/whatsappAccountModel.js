@@ -44,6 +44,8 @@ const whatsappAccountSchema = new mongoose.Schema(
       default: null,
     },
     onboardingMode: { type: String, enum: ['NEW_OR_MIGRATE','BUSINESS_APP'], default: 'NEW_OR_MIGRATE' },
+    // PLATFORM: MarketingKart pays Meta and charges the wallet. CUSTOMER: their own WABA bill, so we do not charge the message again.
+    billingMode: { type: String, enum: ["PLATFORM", "CUSTOMER"], default: "PLATFORM" },
     coexistenceSync: {
       contactsRequestId: String, historyRequestId: String,
       contactsRequestedAt: Date, historyRequestedAt: Date,

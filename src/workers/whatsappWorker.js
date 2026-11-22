@@ -4,6 +4,7 @@ const whatsappCloudApiService = require("../services/whatsappCloudApiService");
 const whatsappMessageModel = require("../models/whatsappMessageModel");
 const whatsappCampaignModel = require("../models/whatsappCampaignModel");
 const whatsappAccountModel = require("../models/whatsappAccountModel");
+const whatsappBilling = require("../services/whatsappBillingService");
 
 let worker = null;
 
@@ -17,6 +18,7 @@ const processJob = async (job) => {
     components,
   } = job.data;
 
+  let sentToMeta = false;
   try {
     const campaign = await whatsappCampaignModel.findById(campaignId, "createdBy status businessId");
     if (!campaign) throw new Error("Campaign not found");
@@ -60,6 +62,7 @@ const processJob = async (job) => {
     }
 
     const wamid = result?.messages?.[0]?.id;
+    sentToMeta = Boolean(wamid);
 
     const whatsappConversationModel = require("../models/whatsappConversationModel");
     const businessModel = require("../models/businessModel");
@@ -193,7 +196,10 @@ const processJob = async (job) => {
     const isFinalAttempt = (job.attemptsMade + 1) >= maxAttempts;
 
     // Only mark the message failed when retries are exhausted.
-    const currentMsg = await whatsappMessageModel.findById(messageId, "status");
+    const currentMsg = await whatsappMessageModel.findById(
+      messageId,
+      "status campaignId billingState billSource billCategory billPaise"
+    );
     const shouldMarkFailed =
       isFinalAttempt &&
       currentMsg &&
@@ -221,6 +227,13 @@ const processJob = async (job) => {
       await whatsappCampaignModel.findByIdAndUpdate(campaignId, {
         $inc: { "stats.failed": 1, "stats.queued": -1 },
       });
+
+      // Meta never accepted this message, so the reserved credit or wallet money goes back.
+      if (!sentToMeta && currentMsg?.billingState === "reserved") {
+        await whatsappBilling.settleMessage(currentMsg, "FAILED").catch((err) => {
+          console.error("[WhatsApp Worker] billing release failed:", err.message);
+        });
+      }
 
       // Check if campaign is fully processed even after failure
       const updatedCampaign = await whatsappCampaignModel.findById(campaignId, "stats status");
