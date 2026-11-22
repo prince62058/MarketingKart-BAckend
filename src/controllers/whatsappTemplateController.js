@@ -50,7 +50,13 @@ exports.createTemplate = async (req, res) => {
     let otpBody = null;
     try {
       templateType = templateTypes.resolveType(req.body.templateType, category);
-      if (templateType === "OTP") otpBody = templateTypes.otpBodyText({ addSecurityRecommendation, codeExpirationMinutes });
+      if (templateType === "OTP") {
+        otpBody = templateTypes.otpBodyText({
+          addSecurityRecommendation,
+          codeExpirationMinutes,
+          language: language || "en_US",
+        });
+      }
     } catch (typeErr) {
       return res.status(400).json({ success: false, message: typeErr.message });
     }
@@ -311,7 +317,14 @@ exports.createTemplate = async (req, res) => {
       metaStatus = metaResult?.status || "PENDING";
       console.log(`[Template] Meta upload SUCCESS: id=${metaTemplateId}, status=${metaStatus}`);
     } catch (metaErr) {
-      const metaUploadError = metaErr?.metaErrorDetails?.error_user_msg || metaErr?.message || "Meta upload failed";
+      const details = metaErr?.metaErrorDetails || {};
+      const raw = details.error_user_msg || metaErr?.message || "WhatsApp could not accept this template.";
+      const otpLocked =
+        String(category || "").toUpperCase() === "AUTHENTICATION" &&
+        (details.error_subcode === 2388185 || /does not have permission to create message template/i.test(raw));
+      const metaUploadError = otpLocked
+        ? "WhatsApp has not opened OTP templates on this number yet. The account is still on the starting limit of 250 messages a day, and business verification is not finished. Verify the business in Meta Business Settings, then try again. Marketing and utility templates work now."
+        : raw;
       console.warn("[Template] Meta upload failed:", metaUploadError);
       return res.status(400).json({
         success: false,

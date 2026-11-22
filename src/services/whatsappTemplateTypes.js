@@ -17,8 +17,68 @@ const TEMPLATE_TYPES = {
 };
 
 const BUTTON_TEXT_MAX = 25;
-const OTP_BODY = "{{1}} is your verification code.";
-const OTP_SECURITY_LINE = "For your security, do not share this code.";
+
+// WhatsApp writes the OTP sentence. These are the official lines for the
+// languages the app offers, so the saved copy matches what the customer reads.
+const OTP_COPY = {
+  en_US: {
+    body: "{{1}} is your verification code.",
+    security: "For your security, do not share this code.",
+    footer: (minutes) => `Expires in ${minutes} minutes.`,
+    button: "Copy code",
+  },
+  en_GB: {
+    body: "{{1}} is your verification code.",
+    security: "For your security, do not share this code.",
+    footer: (minutes) => `Expires in ${minutes} minutes.`,
+    button: "Copy code",
+  },
+  hi: {
+    body: "{{1}} आपका वेरिफ़िकेशन कोड है.",
+    security: "अपनी सुरक्षा के लिए, इस कोड को किसी के साथ शेयर न करें.",
+    footer: (minutes) => `${minutes} मिनट में समय-सीमा समाप्त हो जाएगी.`,
+    button: "कोड कॉपी करें",
+  },
+  gu: {
+    body: "{{1}} એ તમારો ખાતરીનો કોડ છે.",
+    security: "તમારી સુરક્ષા માટે, આ કોડ કોઈની સાથે શેર કરશો નહિ.",
+    footer: (minutes) => `${minutes} મિનિટમાં સમય પૂરો થશે.`,
+    button: "કોડ કોપિ કરો",
+  },
+  bn: {
+    body: "আপনার যাচাইকরণের কোড {{1}}",
+    security: "আপনার নিরাপত্তার জন্য এই কোড শেয়ার করবেন না।",
+    footer: (minutes) => `${minutes} মিনিটের মধ্যে মেয়াদ শেষ হয়ে যাবে।`,
+    button: "কোড কপি করুন",
+  },
+  mr: {
+    body: "{{1}} हा तुमचा व्हेरिफिकेशन कोड आहे.",
+    security: "तुमच्या सुरक्षेसाठी हा कोड शेअर करू नका.",
+    footer: (minutes) => `${toDevanagariDigits(minutes)} मिनिटांमध्ये एक्स्पायर होईल.`,
+    button: "कोड कॉपी करा",
+  },
+  te: {
+    body: "{{1}} మీ వెరిఫికేషన్ కోడ్.",
+    security: "మీ భద్రత కోసం ఈ కోడ్‌ను షేర్ చేయవద్దు.",
+    footer: (minutes) => `${minutes} నిమిషాల్లో గడువు ముగుస్తుంది.`,
+    button: "కోడ్‌ను కాపీ చేయండి",
+  },
+  ta: {
+    body: "{{1}} என்பது உங்கள் சரிபார்ப்புக் குறியீடாகும்.",
+    security: "பாதுகாப்பு நோக்கங்களுக்காக, இந்தக் குறியீட்டைப் பகிர வேண்டாம் என்று கேட்டுக் கொள்கிறோம்.",
+    footer: (minutes) => `${minutes} நிமிடங்களில் காலாவதியாகும்.`,
+    button: "குறியீட்டை நகலெடு",
+  },
+};
+
+function toDevanagariDigits(value) {
+  const digits = "०१२३४५६७८९";
+  return String(value).replace(/\d/g, (digit) => digits[Number(digit)]);
+}
+
+function otpCopy(language) {
+  return OTP_COPY[language] || OTP_COPY.en_US;
+}
 
 class TemplateTypeError extends Error {
   constructor(message) {
@@ -70,10 +130,11 @@ function otpComponents({ addSecurityRecommendation = true, codeExpirationMinutes
 }
 
 /** What the customer will read, for the app's list and preview (Meta writes the real text). */
-function otpBodyText({ addSecurityRecommendation = true, codeExpirationMinutes } = {}) {
+function otpBodyText({ addSecurityRecommendation = true, codeExpirationMinutes, language } = {}) {
   const minutes = otpMinutes(codeExpirationMinutes);
-  const lines = [addSecurityRecommendation !== false ? `${OTP_BODY} ${OTP_SECURITY_LINE}` : OTP_BODY];
-  if (minutes) lines.push(`This code expires in ${minutes} minutes.`);
+  const copy = otpCopy(language);
+  const lines = [addSecurityRecommendation !== false ? `${copy.body} ${copy.security}` : copy.body];
+  if (minutes) lines.push(copy.footer(minutes));
   return lines.join("\n");
 }
 
@@ -125,6 +186,7 @@ module.exports = {
   resolveType,
   otpComponents,
   otpBodyText,
+  otpCopy,
   typedButtons,
   detectTemplateType,
   flowIdOf,

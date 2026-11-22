@@ -13,7 +13,7 @@ const fake = (id, exports) => {
 
 const USER = "64b0000000000000000000a1";
 const FLOW_ID = "64b0000000000000000000f1";
-const state = { account: null, flows: [], saved: [], uploads: [] };
+const state = { account: null, flows: [], saved: [], uploads: [], failAuth: false };
 
 fake("src/services/whatsappTemplateService", {
   createTemplate: async (data) => {
@@ -23,6 +23,11 @@ fake("src/services/whatsappTemplateService", {
 });
 fake("src/services/whatsappCloudApiService", {
   uploadTemplateToMeta: async (template, credentials) => {
+    if (state.failAuth && String(template.category).toUpperCase() === "AUTHENTICATION") {
+      const err = new Error("This WhatsApp Business account does not have permission to create message template");
+      err.metaErrorDetails = { code: 10, error_subcode: 2388185, error_user_msg: err.message };
+      throw err;
+    }
     state.uploads.push({ template, credentials });
     return { id: "meta-tpl-1", status: "PENDING" };
   },
@@ -51,8 +56,8 @@ const FLOW = {
   definition: { screens: [{ title: "Form", fields: [] }] },
 };
 
-async function create(body, { account = ACCOUNT, flows = [FLOW] } = {}) {
-  Object.assign(state, { account, flows, saved: [], uploads: [] });
+async function create(body, { account = ACCOUNT, flows = [FLOW], failAuth = false } = {}) {
+  Object.assign(state, { account, flows, saved: [], uploads: [], failAuth });
   const res = { statusCode: 0, body: null };
   res.status = (code) => {
     res.statusCode = code;
@@ -134,6 +139,15 @@ test("a one-time passcode template uses Meta's fixed body and a copy-code button
   const tooLong = await create({ name: "x", category: "AUTHENTICATION", codeExpirationMinutes: 120 });
   assert.equal(tooLong.res.statusCode, 400);
   assert.equal(tooLong.sent, undefined);
+
+  const hindi = await create({ name: "login_code_hi", category: "AUTHENTICATION", language: "hi", codeExpirationMinutes: 10 });
+  assert.match(hindi.saved.bodyText, /आपका वेरिफ़िकेशन कोड/);
+  assert.match(hindi.saved.bodyText, /10 मिनट में समय-सीमा समाप्त हो जाएगी/);
+
+  const locked = await create({ name: "login_code", category: "AUTHENTICATION" }, { failAuth: true });
+  assert.equal(locked.res.statusCode, 400);
+  assert.match(locked.res.body.message, /250 messages a day/);
+  assert.equal(locked.saved, undefined);
 });
 
 test("a catalogue template has no header and a View catalog button", async () => {
