@@ -12,6 +12,7 @@ const planModel = require("../models/planModel.js");
 const { adInvoiceLines, legacyAdInvoiceLines, campaignDays } = require("../helpers/adInvoice.js");
 const { invoiceTheme } = require("../helpers/invoiceThemes.js");
 const { mkFullLogoB64, mkIconLogoB64 } = require("../utils/invoiceLogos.js");
+const { poweredByBlock, poweredByCss } = require("../utils/ayotrixLogo.js");
 
 
 const generateInvoiceNumber = async () => {
@@ -215,6 +216,7 @@ exports.generateInvoice = async (
             font-size: 11px;
             color: #94A3B8;
           }
+          ${poweredByCss}
         </style>
       </head>
       <body>
@@ -296,6 +298,7 @@ exports.generateInvoice = async (
         <div class="footer">
           <p>Thank you for choosing MarketingKart.ai for your business marketing!</p>
           <p style="margin-top: 4px;">This is a computer-generated tax invoice and requires no physical signature.</p>
+          ${poweredByBlock()}
         </div>
       </body>
     </html>`;
@@ -1120,6 +1123,7 @@ exports.getInvoiceHTML = async (req, res) => {
       color: #64748b;
       letter-spacing: 0.2px;
     }
+    ${poweredByCss}
   </style>
 
 
@@ -1259,22 +1263,8 @@ exports.getInvoiceHTML = async (req, res) => {
     <div class="bottom-banner">
       <div class="brand-left-tag">
         <div style="font-size: 8px; color: #94a3b8; font-weight: 500; margin-bottom: 2px;">A Brand of</div>
-        <div style="display: flex; align-items: center; gap: 10px;">
-          <!-- Official Ayotrix 'A' symbol -->
-          <svg width="28" height="28" viewBox="0 0 100 100" fill="none" style="display: block;">
-            <polygon points="50,12 88,86 68,86 50,48 32,86 12,86" fill="url(#ayoGrad)" />
-            <defs>
-              <linearGradient id="ayoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stop-color="#ff7a00" />
-                <stop offset="100%" stop-color="#ff3b00" />
-              </linearGradient>
-            </defs>
-          </svg>
-          <div>
-            <div class="brand-left-title">${brandParent}</div>
-            <div class="brand-left-sub">${brandSubtext}</div>
-          </div>
-        </div>
+        <div class="brand-left-title">${brandParent}</div>
+        <div class="brand-left-sub">${brandSubtext}</div>
       </div>
 
 
@@ -1293,6 +1283,8 @@ exports.getInvoiceHTML = async (req, res) => {
     <div class="sub-categories-bar">
       ${bottomServicesBar}
     </div>
+
+    ${poweredByBlock()}
   </div>
 </body>
 </html>`;

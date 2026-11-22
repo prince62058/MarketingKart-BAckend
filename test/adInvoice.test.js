@@ -175,6 +175,9 @@ test("an ad payment saves an invoice with the package and the app's breakdown, a
     assert.ok(page.text.includes(text), `the invoice page shows "${text}"`);
   }
   assert.ok(!page.text.includes("Social Media Marketing Service"));
+  assert.ok(page.text.includes("Powered by"), "the invoice page ends with the Ayotrix lockup");
+  assert.ok(page.text.includes('alt="Ayotrix Infotech"'));
+  assert.ok(page.text.includes("MarketingKart.ai"), "the MarketingKart mark stays on the invoice");
 
   // The e-mailed PDF shows the same lines, in the app's order.
   const pdf = pdfPages.at(-1);
@@ -183,6 +186,8 @@ test("an ad payment saves an invoice with the package and the app's breakdown, a
   assert.ok(order.every((at) => at >= 0), "every line is in the PDF");
   assert.deepEqual([...order].sort((a, b) => a - b), order, "in the app's order");
   for (const amount of ["₹1105.00", "₹165.75", "₹198.90", "₹29.35", "₹1499.00"]) assert.ok(pdf.includes(amount), amount);
+  assert.ok(pdf.includes("Powered by"), "the emailed invoice PDF carries the Ayotrix lockup");
+  assert.ok(pdf.includes("MarketingKart"));
   const mail = mails.at(-1);
   assert.equal(mail.to, "owner@example.com");
   assert.ok(mail.html.includes("Starter 3 Days · Lead On WhatsApp"));
