@@ -26,9 +26,10 @@ fake("src/services/whatsappCloudApiService", {
     state.uploads.push({ template, credentials });
     return { id: "meta-tpl-1", status: "PENDING" };
   },
+  uploadTemplateHeaderSample: async ({ sourceUrl }) => `handle:${sourceUrl}`,
 });
 fake("src/models/whatsappAccountModel", { findOne: async () => state.account });
-fake("src/models/whatsappTemplateModel", {});
+fake("src/models/whatsappTemplateModel", { deleteOne: async () => ({ deletedCount: 0 }) });
 fake("src/models/whatsappFlowModel", {
   findOne: async (q) => state.flows.find((f) => String(f._id) === String(q._id) && String(f.userId) === String(q.userId)) || null,
 });
@@ -176,6 +177,35 @@ test("each type is only allowed in the categories WhatsApp Manager offers it in"
     assert.equal(res.statusCode, 400, `${category}/${templateType}`);
     assert.equal(sent, undefined);
   }
+});
+
+test("an image header sample is a WhatsApp handle, not the photo link", async () => {
+  const { res, component, saved } = await create({
+    name: "offer_photo",
+    category: "MARKETING",
+    headerType: "IMAGE",
+    headerMediaUrl: "https://cdn.example.com/offer.jpg",
+    bodyText: "New arrival",
+  });
+  assert.equal(res.statusCode, 201);
+  assert.deepEqual(component("HEADER"), {
+    type: "HEADER",
+    format: "IMAGE",
+    example: { header_handle: ["handle:https://cdn.example.com/offer.jpg"] },
+  });
+  assert.equal(saved.headerMediaUrl, "https://cdn.example.com/offer.jpg");
+});
+
+test("a photo template without an uploaded file is refused", async () => {
+  const { res, sent } = await create({
+    name: "offer_photo",
+    category: "MARKETING",
+    headerType: "IMAGE",
+    headerMediaUrl: "file:///storage/photo.jpg",
+    bodyText: "New arrival",
+  });
+  assert.equal(res.statusCode, 400);
+  assert.equal(sent, undefined);
 });
 
 test("the default template is built as before", async () => {

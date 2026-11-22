@@ -229,6 +229,95 @@ const syncTemplatesFromMeta = async (credentials) => {
 };
 
 /**
+ * Turn a public header photo, video, or PDF into the sample handle WhatsApp
+ * requires on a template. A normal link is not a sample, and Meta rejects the
+ * template with "IMAGE header needs an example".
+ * @param {Object} input - { accessToken, sourceUrl }
+ * @returns {Promise<string>} header handle
+ */
+const uploadTemplateHeaderSample = async ({ accessToken, sourceUrl }) => {
+  const appId = process.env.clientId;
+  if (!accessToken || !appId) {
+    throw new Error("WhatsApp is not ready to upload a template photo.");
+  }
+  if (!/^https:\/\//i.test(String(sourceUrl || ""))) {
+    throw new Error("Upload the header photo first, then submit the template.");
+  }
+
+  let file;
+  try {
+    file = await axios.get(sourceUrl, {
+      responseType: "arraybuffer",
+      timeout: 30000,
+      maxContentLength: 16 * 1024 * 1024,
+      maxBodyLength: 16 * 1024 * 1024,
+    });
+  } catch (error) {
+    throw new Error("Could not read the header photo. Upload it again and retry.");
+  }
+
+  const bytes = Buffer.from(file.data || []);
+  if (!bytes.length) {
+    throw new Error("The header photo was empty. Choose another file.");
+  }
+
+  let mime = String(file.headers?.["content-type"] || "").split(";")[0].trim().toLowerCase();
+  if (bytes.slice(0, 8).toString("hex").startsWith("89504e470d0a1a0a")) mime = "image/png";
+  else if (bytes.slice(0, 3).toString("hex") === "ffd8ff") mime = "image/jpeg";
+  else if (bytes.slice(0, 4).toString() === "%PDF") mime = "application/pdf";
+  else if (bytes.slice(4, 8).toString() === "ftyp") mime = "video/mp4";
+  else if (!mime || mime === "application/octet-stream") mime = "image/jpeg";
+
+  const allowed = ["image/jpeg", "image/png", "video/mp4", "application/pdf"];
+  if (!allowed.includes(mime)) {
+    throw new Error("Use a JPG, PNG, MP4, or PDF for the template header.");
+  }
+  const maxBytes = mime.startsWith("image/") ? 5 * 1024 * 1024 : 16 * 1024 * 1024;
+  if (bytes.length > maxBytes) {
+    throw new Error(mime.startsWith("image/") ? "The header photo must be under 5 MB." : "The header file must be under 16 MB.");
+  }
+
+  const rawName = String(sourceUrl).split("/").pop()?.split("?")[0] || "header";
+  const fileName = rawName.replace(/[^a-zA-Z0-9._-]/g, "") || "header.jpg";
+
+  let sessionId;
+  try {
+    const session = await axios.post(`${BASE_URL}/${appId}/uploads`, null, {
+      params: { file_name: fileName, file_length: bytes.length, file_type: mime },
+      headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: 20000,
+    });
+    sessionId = session.data?.id;
+  } catch (error) {
+    const metaError = error?.response?.data?.error;
+    throw new Error(metaError?.error_user_msg || metaError?.message || "WhatsApp could not start the photo upload.");
+  }
+  if (!sessionId) {
+    throw new Error("WhatsApp could not start the photo upload.");
+  }
+
+  try {
+    const uploaded = await axios.post(`${BASE_URL}/${sessionId}`, bytes, {
+      headers: {
+        Authorization: `OAuth ${accessToken}`,
+        file_offset: "0",
+        "Content-Type": "application/octet-stream",
+      },
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+      timeout: 60000,
+    });
+    const handle = uploaded.data?.h;
+    if (!handle) throw new Error("WhatsApp did not accept the header photo.");
+    return handle;
+  } catch (error) {
+    if (error.message === "WhatsApp did not accept the header photo.") throw error;
+    const metaError = error?.response?.data?.error;
+    throw new Error(metaError?.error_user_msg || metaError?.message || "WhatsApp did not accept the header photo.");
+  }
+};
+
+/**
  * Upload a new template to Meta for approval.
  * @param {Object} templateData - { name, category, language, components }
  * @param {Object} credentials - { accessToken, wabaId }
@@ -323,5 +412,6 @@ module.exports = {
   sendMediaMessage,
   syncTemplatesFromMeta,
   uploadTemplateToMeta,
+  uploadTemplateHeaderSample,
   fetchPhoneNumbersFromMeta,
 };

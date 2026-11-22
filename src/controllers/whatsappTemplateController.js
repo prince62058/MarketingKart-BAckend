@@ -152,10 +152,13 @@ exports.createTemplate = async (req, res) => {
           headerComponent.example = { header_text: headerExamples };
         }
       } else if (["IMAGE", "VIDEO", "DOCUMENT"].includes(headerType)) {
-        // For media headers, Meta requires example.header_handle with a media handle
-        // The headerMediaUrl should be a publicly accessible URL
-        if (headerMediaUrl) {
-          headerComponent.example = { header_handle: [headerMediaUrl] };
+        // Filled with a WhatsApp sample handle just before the Meta submit.
+        // A public link here is rejected as a missing sample.
+        if (!/^https:\/\//i.test(String(headerMediaUrl || ""))) {
+          return res.status(400).json({
+            success: false,
+            message: "Upload the header photo first, then submit the template.",
+          });
         }
       }
       
@@ -277,11 +280,27 @@ exports.createTemplate = async (req, res) => {
       });
     }
 
+    // A previous photo template can sit here as REJECTED without ever reaching WhatsApp,
+    // and the same name would then be blocked. Drop only that failed shell.
+    await whatsappTemplateModel.deleteOne({
+      name: cleanName,
+      createdBy: req.user._id,
+      status: "REJECTED",
+      metaTemplateId: null,
+    });
+
     // Upload to Meta for approval
     let metaTemplateId = null;
     let metaStatus = "PENDING";
-    let metaUploadError = null;
     try {
+      const headerComponent = components.find((component) => component.type === "HEADER");
+      if (headerComponent && ["IMAGE", "VIDEO", "DOCUMENT"].includes(headerComponent.format)) {
+        const handle = await whatsappCloudApiService.uploadTemplateHeaderSample({
+          accessToken: account.accessToken,
+          sourceUrl: headerMediaUrl,
+        });
+        headerComponent.example = { header_handle: [handle] };
+      }
       const metaResult = await whatsappCloudApiService.uploadTemplateToMeta({
         name: cleanName,
         category,
@@ -292,10 +311,12 @@ exports.createTemplate = async (req, res) => {
       metaStatus = metaResult?.status || "PENDING";
       console.log(`[Template] Meta upload SUCCESS: id=${metaTemplateId}, status=${metaStatus}`);
     } catch (metaErr) {
-      metaUploadError = metaErr?.metaErrorDetails?.error_user_msg || metaErr?.message || "Meta upload failed";
+      const metaUploadError = metaErr?.metaErrorDetails?.error_user_msg || metaErr?.message || "Meta upload failed";
       console.warn("[Template] Meta upload failed:", metaUploadError);
-      // Don't return error here — save template locally with rejection info
-      metaStatus = "REJECTED";
+      return res.status(400).json({
+        success: false,
+        message: metaUploadError,
+      });
     }
 
     const template = await whatsappTemplateService.createTemplate({
@@ -318,16 +339,6 @@ exports.createTemplate = async (req, res) => {
       wabaId: account.wabaId || null,
       phoneNumberId: account.phoneNumberId || null,
     });
-
-    // If Meta rejected, still return success (saved locally) but include warning
-    if (metaUploadError) {
-      return res.status(201).json({ 
-        success: true, 
-        message: `Template saved but Meta submission failed: ${metaUploadError}`, 
-        metaError: metaUploadError,
-        data: template 
-      });
-    }
 
     return res.status(201).json({ success: true, message: "Template submitted to Meta for review successfully!", data: template });
   } catch (error) {
