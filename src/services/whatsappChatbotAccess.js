@@ -7,10 +7,107 @@ const { PLANS, EXTRA_REPLY_RUPEES } = require("./whatsappChatbotPlanCatalog");
 
 async function ensurePlans() {
   for (const plan of PLANS) {
-    const existing = await ChatbotPlan.findOne({ code: plan.code }).select("_id").lean();
-    if (existing) continue;
+    const existing = await ChatbotPlan.findOne({ code: plan.code });
+    if (existing) {
+      if (!String(existing.subtitle || "").trim() && plan.subtitle) {
+        existing.subtitle = plan.subtitle;
+        await existing.save();
+      }
+      continue;
+    }
     await ChatbotPlan.create({ ...plan, disable: false });
   }
+}
+
+const DEFAULT_CONTENT = {
+  greeting: "Hi! Welcome to MarketingKart. Ask us about ads, packages, or WhatsApp marketing.",
+  fallbackMessage: "Thanks! Our team will reply shortly.",
+  systemPrompt: "You help with Meta ads and WhatsApp marketing on MarketingKart. Be concise and reply in English.",
+  handoffKeywords: ["human", "agent", "talk to a person", "speak to someone", "customer care"],
+  faqs: [
+    {
+      question: "What are your hours?",
+      answer: "We are available Monday to Saturday, 10am to 7pm.",
+      keywords: ["hours", "timing", "open", "time"],
+    },
+    {
+      question: "Pricing / packages?",
+      answer: "Launch ₹1499 (3 days), Scale ₹2000 (3 days), Pro Ads ₹3599 (5 days), Dominate ₹5999 (7 days).",
+      keywords: ["price", "pricing", "package", "cost", "plan"],
+    },
+    {
+      question: "How to create an ad?",
+      answer: "Open Create Ad in the app, choose a package, set your creatives and target area, then pay.",
+      keywords: ["create", "ad", "start"],
+    },
+  ],
+};
+
+function cleanFaqs(faqs) {
+  if (!Array.isArray(faqs)) return [];
+  return faqs
+    .slice(0, 50)
+    .map((faq) => ({
+      question: String(faq?.question || "").trim().slice(0, 300),
+      answer: String(faq?.answer || "").trim().slice(0, 2000),
+      keywords: Array.isArray(faq?.keywords)
+        ? faq.keywords.map((word) => String(word || "").trim().toLowerCase()).filter(Boolean).slice(0, 20)
+        : String(faq?.keywords || "")
+            .split(",")
+            .map((word) => word.trim().toLowerCase())
+            .filter(Boolean)
+            .slice(0, 20),
+    }))
+    .filter((faq) => faq.question && faq.answer);
+}
+
+function presentContent(settings) {
+  return {
+    greeting: settings?.greeting || "",
+    fallbackMessage: settings?.fallbackMessage || "",
+    systemPrompt: settings?.systemPrompt || "",
+    handoffKeywords: Array.isArray(settings?.handoffKeywords) ? settings.handoffKeywords : [],
+    faqs: Array.isArray(settings?.faqs) ? settings.faqs : [],
+  };
+}
+
+async function content() {
+  let settings = await ChatbotSettings.findOne({ key: "chatbot" });
+  if (!settings) {
+    settings = await ChatbotSettings.create({
+      key: "chatbot",
+      extraReplyRupees: EXTRA_REPLY_RUPEES,
+      ...DEFAULT_CONTENT,
+    });
+    return presentContent(settings);
+  }
+  const untouched = !String(settings.greeting || "").trim() && !(settings.faqs || []).length;
+  if (untouched) {
+    settings.greeting = DEFAULT_CONTENT.greeting;
+    settings.fallbackMessage = DEFAULT_CONTENT.fallbackMessage;
+    settings.systemPrompt = DEFAULT_CONTENT.systemPrompt;
+    settings.handoffKeywords = DEFAULT_CONTENT.handoffKeywords;
+    settings.faqs = DEFAULT_CONTENT.faqs;
+    await settings.save();
+  }
+  return presentContent(settings);
+}
+
+async function saveContent(body) {
+  const current = await ChatbotSettings.findOne({ key: "chatbot" });
+  const base = current || new ChatbotSettings({ key: "chatbot", extraReplyRupees: EXTRA_REPLY_RUPEES });
+  if (body.greeting !== undefined) base.greeting = String(body.greeting || "").trim().slice(0, 500);
+  if (body.fallbackMessage !== undefined) base.fallbackMessage = String(body.fallbackMessage || "").trim().slice(0, 500);
+  if (body.systemPrompt !== undefined) base.systemPrompt = String(body.systemPrompt || "").trim().slice(0, 1000);
+  if (body.handoffKeywords !== undefined) {
+    const words = Array.isArray(body.handoffKeywords)
+      ? body.handoffKeywords
+      : String(body.handoffKeywords || "").split(",");
+    base.handoffKeywords = words.map((word) => String(word || "").trim().toLowerCase()).filter(Boolean).slice(0, 40);
+  }
+  if (body.faqs !== undefined) base.faqs = cleanFaqs(body.faqs);
+  await base.save();
+  return presentContent(base);
 }
 
 async function extraReplyRupees() {
@@ -126,6 +223,8 @@ async function refundReply(userId, source, amount) {
 module.exports = {
   EXTRA_REPLY_RUPEES,
   ensurePlans,
+  content,
+  saveContent,
   extraReplyRupees,
   saveExtraReplyRupees,
   findActive,

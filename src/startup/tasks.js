@@ -39,6 +39,7 @@ async function initializeBackgroundTasks() {
         try {
             const chatbotAccess = require("../services/whatsappChatbotAccess");
             await chatbotAccess.ensurePlans();
+            await chatbotAccess.content();
         } catch (error) {
             console.error("❌ Failed to seed chatbot plans:", error.message);
         }

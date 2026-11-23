@@ -8,6 +8,7 @@ const whatsappChatbotPlanSchema = new mongoose.Schema(
     duration: { type: Number, default: 30 },
     replyCredits: { type: Number, required: true },
     features: [{ type: String }],
+    subtitle: { type: String, default: "", trim: true },
     badge: { type: String, default: null },
     color: { type: String, default: "#059669" },
     sortOrder: { type: Number, default: 0 },

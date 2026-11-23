@@ -65,17 +65,20 @@ const toPublic = (doc) => {
   };
 };
 
-const defaultConfigPayload = (userId, businessId, account) => ({
-  userId,
-  businessId: businessId || undefined,
-  enabled: false,
-  businessName: account?.businessName || account?.verifiedName || "",
-  greeting: "Hi! Thanks for messaging us. How can we help you today?",
-  fallbackMessage: "Thanks for your message. A team member will get back to you shortly.",
-  faqs: [],
-  handoffKeywords: [...DEFAULT_HANDOFF],
-  systemPrompt: "",
-});
+const defaultConfigPayload = async (userId, businessId, account) => {
+  const platform = await chatbotAccess.content();
+  return {
+    userId,
+    businessId: businessId || undefined,
+    enabled: false,
+    businessName: account?.businessName || account?.verifiedName || "",
+    greeting: platform.greeting || "Hi! Thanks for messaging us. How can we help you today?",
+    fallbackMessage: platform.fallbackMessage || "Thanks for your message. A team member will get back to you shortly.",
+    faqs: platform.faqs || [],
+    handoffKeywords: platform.handoffKeywords?.length ? platform.handoffKeywords : [...DEFAULT_HANDOFF],
+    systemPrompt: platform.systemPrompt || "",
+  };
+};
 
 exports.getBotConfig = async (req, res) => {
   try {
@@ -85,7 +88,7 @@ exports.getBotConfig = async (req, res) => {
       const account = await whatsappAccountModel.findOne({ userId, status: "CONNECTED" });
       const business = await businessModel.findOne({ userId }).select("_id");
       config = await whatsappChatbotConfigModel.create(
-        defaultConfigPayload(userId, business?._id, account)
+        await defaultConfigPayload(userId, business?._id, account)
       );
     }
     const access = await chatbotAccess.presentAccess(await chatbotAccess.findActive(userId));
@@ -126,7 +129,7 @@ exports.updateBotConfig = async (req, res) => {
       const account = await whatsappAccountModel.findOne({ userId, status: "CONNECTED" });
       const business = await businessModel.findOne({ userId }).select("_id");
       config = await whatsappChatbotConfigModel.create({
-        ...defaultConfigPayload(userId, business?._id, account),
+        ...(await defaultConfigPayload(userId, business?._id, account)),
         ...updates,
       });
     } else {
@@ -162,6 +165,7 @@ function cleanPlanInput(body) {
     duration: Math.max(1, Math.floor(Number(body.duration) || 30)),
     replyCredits: Math.floor(Number(body.replyCredits) || 0),
     features: features.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 12),
+    subtitle: String(body.subtitle || "").trim().slice(0, 80),
     badge: String(body.badge || "").trim().slice(0, 24) || null,
     color: String(body.color || "#059669").trim().slice(0, 20),
     sortOrder: Math.floor(Number(body.sortOrder) || 0),
@@ -247,9 +251,10 @@ exports.getChatbotSettings = async (req, res) => {
     if (!isAdminUser(req.user)) {
       return res.status(403).json({ success: false, message: "Only admins can view chatbot pricing" });
     }
+    const platform = await chatbotAccess.content();
     return res.status(200).json({
       success: true,
-      data: { extraReplyRupees: await chatbotAccess.extraReplyRupees() },
+      data: { extraReplyRupees: await chatbotAccess.extraReplyRupees(), ...platform },
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
@@ -261,8 +266,16 @@ exports.updateChatbotSettings = async (req, res) => {
     if (!isAdminUser(req.user)) {
       return res.status(403).json({ success: false, message: "Only admins can change chatbot pricing" });
     }
-    const extraReplyRupees = await chatbotAccess.saveExtraReplyRupees(req.body?.extraReplyRupees);
-    return res.status(200).json({ success: true, data: { extraReplyRupees } });
+    const body = req.body || {};
+    let extraReplyRupees = await chatbotAccess.extraReplyRupees();
+    if (body.extraReplyRupees !== undefined) {
+      extraReplyRupees = await chatbotAccess.saveExtraReplyRupees(body.extraReplyRupees);
+    }
+    const hasContent = ["greeting", "fallbackMessage", "systemPrompt", "handoffKeywords", "faqs"].some(
+      (key) => body[key] !== undefined
+    );
+    const platform = hasContent ? await chatbotAccess.saveContent(body) : await chatbotAccess.content();
+    return res.status(200).json({ success: true, data: { extraReplyRupees, ...platform } });
   } catch (error) {
     return res.status(400).json({ success: false, message: error.message });
   }

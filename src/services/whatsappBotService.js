@@ -42,6 +42,18 @@ function matchesHandoff(text, keywords) {
   });
 }
 
+function mergeFaqs(primary, extra) {
+  const out = Array.isArray(primary) ? [...primary] : [];
+  const seen = new Set(out.map((faq) => String(faq?.question || "").trim().toLowerCase()).filter(Boolean));
+  for (const faq of extra || []) {
+    const key = String(faq?.question || "").trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(faq);
+  }
+  return out;
+}
+
 function matchFaq(text, faqs) {
   if (!Array.isArray(faqs) || !faqs.length) return null;
   const normalized = normalize(text);
@@ -349,14 +361,14 @@ async function handleInbound({ conversation, textBody, phoneNumberId, msgType })
     const config = await whatsappChatbotConfigModel.findOne({ userId: account.userId });
     if (!config || config.enabled !== true) return;
 
-    const effectiveConfig = config || {
-      enabled: true,
-      businessName: account.businessName || account.verifiedName || "",
-      greeting: "Hi! Thanks for messaging us. How can we help you today?",
-      fallbackMessage: "Thanks for your message. A team member will get back to you shortly.",
-      faqs: [],
-      handoffKeywords: DEFAULT_HANDOFF,
-      systemPrompt: "",
+    const platform = await chatbotAccess.content();
+    const effectiveConfig = {
+      ...config.toObject(),
+      greeting: config.greeting || platform.greeting,
+      fallbackMessage: config.fallbackMessage || platform.fallbackMessage,
+      systemPrompt: [config.systemPrompt, platform.systemPrompt].filter(Boolean).join("\n"),
+      faqs: mergeFaqs(config.faqs, platform.faqs),
+      handoffKeywords: config.handoffKeywords?.length ? config.handoffKeywords : platform.handoffKeywords,
     };
 
     // Human handoff
