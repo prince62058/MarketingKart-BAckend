@@ -1,4 +1,4 @@
-const CHANNEL_ID = "mk_alerts";
+const CHANNEL_ID = "mk_alerts_3";
 const DEFAULT_NOTIFICATION_IMAGE =
   "https://sgp1.digitaloceanspaces.com/marketingkart.aii/MarketingKart/Notifications/app-logo.png";
 
@@ -26,11 +26,12 @@ function buildFcmMessage({ token, tokens, title, body, image, data = {} }) {
       priority: "high",
       notification: {
         channelId: CHANNEL_ID,
-        sound: "default",
+        sound: "mk_notify",
         priority: "max",
         visibility: "public",
-        defaultSound: true,
-        defaultVibrateTimings: true,
+        defaultSound: false,
+        defaultVibrateTimings: false,
+        vibrateTimingsMillis: [0, 280, 120, 280],
         imageUrl: picture,
         ticker: String(title || "MarketingKart"),
       },

@@ -25,13 +25,13 @@ async function dispatchNotification({ userId, businessId, title, message, type =
   try {
     if (!userId) return null;
 
-    // 1. Resolve User and Tokens
-    let user = null;
-    if (typeof userId === "object" && userId._id) {
-      user = userId;
-    } else {
-      user = await User.findById(userId).select("_id fcm adminFcm name mobile email").lean();
-    }
+    // An ObjectId also has `_id` (it returns itself), so that check treated every
+    // stored user id as a user document and skipped the device token entirely.
+    const userKey =
+      userId && typeof userId === "object" && userId._id && !userId._bsontype
+        ? userId._id
+        : userId;
+    const user = await User.findById(userKey).select("_id fcm adminFcm name mobile email").lean();
 
     if (!user) return null;
 
@@ -230,9 +230,98 @@ async function sendAdStatusNotification({ userId, businessId, campaignId, campai
   });
 }
 
+function clip(text, limit = 90) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!value) return "";
+  return value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
+}
+
+/**
+ * WhatsApp template submitted, approved, rejected, paused, or disabled.
+ */
+async function sendTemplateStatusNotification({ userId, templateId, templateName, status, reason }) {
+  const name = templateName || "Template";
+  const outcome = String(status || "").toUpperCase();
+  const copy = {
+    PENDING: [`Template submitted: ${name}`, "WhatsApp is reviewing this template. You will get another alert when it is approved."],
+    APPROVED: [`Template approved: ${name}`, "WhatsApp approved this template. You can use it in campaigns now."],
+    REJECTED: [`Template rejected: ${name}`, reason ? `WhatsApp rejected this template. ${clip(reason)}` : "WhatsApp rejected this template. Open Templates to see why."],
+    PAUSED: [`Template paused: ${name}`, "WhatsApp paused this template. New sends will wait until it is active again."],
+    DISABLED: [`Template disabled: ${name}`, "WhatsApp disabled this template."],
+  };
+  const [title, message] = copy[outcome] || [`Template update: ${name}`, `Status is now ${outcome || "updated"}.`];
+
+  return dispatchNotification({
+    userId,
+    title,
+    message,
+    type: "template",
+    metadata: { templateId, templateName: name, status: outcome, reason },
+    customData: { templateId, status: outcome },
+  });
+}
+
+/**
+ * A customer message landed in the inbox.
+ */
+async function sendWhatsAppInboundNotification({ userId, businessId, conversationId, customerName, customerPhone, preview }) {
+  const who = customerName && customerName !== "Unknown" ? customerName : (customerPhone || "a customer");
+  const body = clip(preview) || "Open the chat to read it.";
+  return dispatchNotification({
+    userId,
+    businessId,
+    title: `WhatsApp from ${who}`,
+    message: body,
+    type: "whatsapp",
+    metadata: { conversationId, customerName, customerPhone, event: "inbound" },
+    customData: { conversationId, event: "inbound" },
+  });
+}
+
+/**
+ * An outbound chat message reached the customer, or WhatsApp said it failed.
+ * Campaign blasts are counted on the campaign screen, not pushed one by one.
+ */
+async function sendWhatsAppDeliveryNotification({ userId, businessId, conversationId, contactName, phone, preview, failed, errorMessage }) {
+  const who = contactName || phone || "the customer";
+  const title = failed ? "WhatsApp not delivered" : "WhatsApp delivered";
+  const message = failed
+    ? `Your message to ${who} was not delivered.${errorMessage ? ` ${clip(errorMessage, 70)}` : ""}`
+    : `Your message to ${who} was delivered.${preview ? ` “${clip(preview, 60)}”` : ""}`;
+
+  return dispatchNotification({
+    userId,
+    businessId,
+    title,
+    message,
+    type: "whatsapp",
+    metadata: { conversationId, contactName, phone, event: failed ? "failed" : "delivered" },
+    customData: { conversationId, event: failed ? "failed" : "delivered" },
+  });
+}
+
+/**
+ * An AI video finished rendering.
+ */
+async function sendVideoReadyNotification({ userId, projectId, title }) {
+  const name = clip(title, 60) || "Your video";
+  return dispatchNotification({
+    userId,
+    title: "AI video is ready",
+    message: `${name} has finished. Open AI Video to watch it.`,
+    type: "video",
+    metadata: { projectId, title: name },
+    customData: { projectId },
+  });
+}
+
 module.exports = {
   dispatchNotification,
   sendWalletNotification,
   sendLeadNotification,
   sendAdStatusNotification,
+  sendTemplateStatusNotification,
+  sendWhatsAppInboundNotification,
+  sendWhatsAppDeliveryNotification,
+  sendVideoReadyNotification,
 };

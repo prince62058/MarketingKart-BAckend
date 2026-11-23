@@ -175,6 +175,7 @@ async function syncLeadsForBusiness(businessId, options = {}) {
   const { internalCampaignId = null, sinceUnix = null } = options;
   const result = { created: 0, updated: 0, fetched: 0, forms: 0, skipped: 0 };
   let recentlyCreated = 0;
+  const freshLeads = [];
 
   const business = await businessModel
     .findById(businessId)
@@ -341,7 +342,15 @@ async function syncLeadsForBusiness(businessId, options = {}) {
         },
       });
       result.created += 1;
-      if (isRecent(lead.created_time)) recentlyCreated += 1;
+      if (isRecent(lead.created_time)) {
+        recentlyCreated += 1;
+        freshLeads.push({
+          name: contact.name,
+          phone: contact.userContactNumber,
+          campaignId: campaign._id,
+          campaignName: campaign.title,
+        });
+      }
     }
 
     if (writes.length) {
@@ -454,7 +463,15 @@ async function syncLeadsForBusiness(businessId, options = {}) {
           },
         });
         result.created += 1;
-        if (isRecent(lead.created_time)) recentlyCreated += 1;
+        if (isRecent(lead.created_time)) {
+          recentlyCreated += 1;
+          freshLeads.push({
+            name: contact.name,
+            phone: contact.userContactNumber,
+            campaignId: resolvedCamp._id,
+            campaignName: resolvedCamp.title,
+          });
+        }
       }
 
       if (writes.length) {
@@ -466,8 +483,8 @@ async function syncLeadsForBusiness(businessId, options = {}) {
   // Only genuinely new leads are worth a push. A first sync can legitimately
   // import months of history, and "You have 214 new leads" at midnight for
   // leads from March helps nobody.
-  if (recentlyCreated > 0) {
-    await announceNewLeads(business, recentlyCreated);
+  if (freshLeads.length > 0) {
+    await announceNewLeads(business, freshLeads);
   }
 
   return result;
@@ -483,26 +500,32 @@ function isRecent(createdTime) {
   return Date.now() - date.getTime() <= RECENT_LEAD_MS;
 }
 
-/** Push notification + the socket event the app listens on for a live badge. */
-async function announceNewLeads(business, count) {
-  try {
-    if (business.userId) {
-      await sendLeadNotification({
-        userId: business.userId,
-        businessId: business._id,
-        count,
-      });
+/** One push per new lead, to that business's owner. The socket stays a single refresh. */
+async function announceNewLeads(business, leads) {
+  for (const lead of leads) {
+    try {
+      if (business.userId) {
+        await sendLeadNotification({
+          userId: business.userId,
+          businessId: business._id,
+          campaignId: lead.campaignId,
+          campaignName: lead.campaignName,
+          leadName: lead.name,
+          leadPhone: lead.phone,
+          count: 1,
+        });
+      }
+    } catch (error) {
+      console.warn("[leadSync] notification failed:", error.message);
     }
-  } catch (error) {
-    console.warn("[leadSync] notification failed:", error.message);
   }
 
   try {
     if (global.io) {
       global.io.to(`business:${String(business._id)}`).emit("newLead", {
-        count,
+        count: leads.length,
         businessId: String(business._id),
-        message: `${count} new lead(s) received`,
+        message: `${leads.length} new lead(s) received`,
         timestamp: new Date().toISOString(),
       });
     }

@@ -19,7 +19,12 @@ const whatsappTemplateModel = require("../models/whatsappTemplateModel");
 const Notification = require("../models/notificationModel");
 const User = require("../models/userModel");
 const { sendNotificationToMultipleToken } = require("./notificationController");
-const { sendLeadNotification } = require("../helpers/appNotificationHelper");
+const {
+  sendLeadNotification,
+  sendTemplateStatusNotification,
+  sendWhatsAppInboundNotification,
+  sendWhatsAppDeliveryNotification,
+} = require("../helpers/appNotificationHelper");
 const { syncLeadsForBusiness } = require("../services/leadSyncService");
 const whatsappBotService = require("../services/whatsappBotService");
 const whatsappAccountHealthService = require("../services/whatsappAccountHealthService");
@@ -88,9 +93,10 @@ const fetchAndProcessLeadDetails = async (data, PAGE_ACCESS_TOKEN) => {
       },
       { new: true }
     );
-    console.log("Lead details:", leadDetails);
+    return { name: fullName, phone };
   } catch (error) {
     console.error("Error fetching lead details:", error);
+    return { name: null, phone: null };
   }
 };
 
@@ -109,7 +115,6 @@ exports.getWebhook = (req, res) => {
 // Endpoint to handle webhook events
 exports.postWebhook = async (req, res) => {
   const payload = req.body;
-  const userNotifications = new Map(); // Track counts per business owner
 
   if (payload.entry) {
     for (const entry of payload.entry) {
@@ -176,53 +181,40 @@ exports.postWebhook = async (req, res) => {
               leadSource: "META",
               leadStatus: "NEW",
             });
-            await fetchAndProcessLeadDetails(data, business?.pageAccessToken);
-            
+            const details = await fetchAndProcessLeadDetails(data, business?.pageAccessToken);
+
             if (business?.userId) {
               await pinnedLeadsModel.create({
                 userId: business.userId,
                 leadId: data._id,
               });
 
-              // Collect for notification aggregation
-              const userId = business.userId.toString();
-              if (!userNotifications.has(userId)) {
-                userNotifications.set(userId, { 
-                  count: 0, 
-                  businessId: business._id, 
-                  fcm: null 
+              // One push per lead, to the business owner. A batch of five leads
+              // is five alerts, so none of them is hidden inside a count.
+              await sendLeadNotification({
+                userId: business.userId,
+                businessId: business._id,
+                campaignId: campaign?._id,
+                campaignName: campaign?.title,
+                leadName: details?.name,
+                leadPhone: details?.phone,
+                count: 1,
+              }).catch((notifErr) => {
+                console.error("[Webhook] Lead notification failed:", notifErr.message);
+              });
+
+              if (global.io) {
+                global.io.to(`business:${String(business._id)}`).emit("newLead", {
+                  count: 1,
+                  businessId: String(business._id),
+                  message: "1 new lead received",
+                  timestamp: new Date().toISOString(),
                 });
               }
-              userNotifications.get(userId).count += 1;
             }
           }
         }
       }
-    }
-
-    // Send notifications for this webhook hit
-    for (const [userId, notifData] of userNotifications) {
-       try {
-         const count = notifData.count;
-         await sendLeadNotification({
-           userId,
-           businessId: notifData.businessId,
-           count,
-         });
-         // Same event the hourly sync emits, so an open Leads tab updates the
-         // moment Meta delivers rather than on the next pull-to-refresh.
-         if (global.io) {
-           global.io.to(`business:${String(notifData.businessId)}`).emit("newLead", {
-             count,
-             businessId: String(notifData.businessId),
-             message: `${count} new lead(s) received`,
-             timestamp: new Date().toISOString(),
-           });
-         }
-         console.log(`[Webhook] Lead notification (${count}) dispatched to user: ${userId}`);
-       } catch (notifErr) {
-         console.error("[Webhook] Error sending aggregated lead notification:", notifErr.message);
-       }
     }
   }
 
@@ -343,7 +335,7 @@ exports.postWhatsAppWebhook = async (req, res) => {
 
           const existingMessage = await whatsappMessageModel.findOne(
             { metaMessageId: wamid },
-            "campaignId status businessId phoneNumberId conversationId billingState billSource billCategory billPaise"
+            "campaignId status businessId phoneNumberId conversationId direction to contactName textBody billingState billSource billCategory billPaise"
           );
 
           if (!existingMessage || !shouldApplyWhatsAppStatus(existingMessage.status, newStatus)) {
@@ -378,7 +370,37 @@ exports.postWhatsAppWebhook = async (req, res) => {
             await whatsappBilling.settleMessage(existingMessage, newStatus).catch((err) => {
               console.error("[WA Billing] settle failed:", err.message);
             });
-            // Increment campaign aggregate stat for this status
+            // Chat replies get a delivery (or failure) alert. A campaign blast
+            // can be hundreds of numbers, so those stay on the campaign stats.
+            const firstArrival =
+              newStatus === "DELIVERED" ||
+              (newStatus === "READ" &&
+                existingMessage.status !== "DELIVERED" &&
+                existingMessage.status !== "READ");
+            if (
+              !message.campaignId &&
+              message.direction === "OUTBOUND" &&
+              message.phoneNumberId &&
+              (firstArrival || newStatus === "FAILED")
+            ) {
+              const owner = await whatsappAccountModel
+                .findOne({ phoneNumberId: message.phoneNumberId, status: "CONNECTED" })
+                .select("userId")
+                .lean();
+              if (owner?.userId) {
+                await sendWhatsAppDeliveryNotification({
+                  userId: owner.userId,
+                  businessId: message.businessId,
+                  conversationId: message.conversationId,
+                  contactName: message.contactName,
+                  phone: message.to,
+                  preview: message.textBody,
+                  failed: newStatus === "FAILED",
+                  errorMessage: message.errorMessage,
+                }).catch((err) => console.error("[WA Webhook] delivery notification failed:", err.message));
+              }
+            }
+
             if (message.campaignId) {
               const incPayload = { [`stats.${newStatus.toLowerCase()}`]: 1 };
               if (newStatus === "READ" && (!existingMessage.status || existingMessage.status === "SENT" || existingMessage.status === "QUEUED")) {
@@ -445,16 +467,31 @@ exports.postWhatsAppWebhook = async (req, res) => {
           const { message_template_id: metaTemplateId, event, reason } = change.value;
           const newStatus = WA_TEMPLATE_STATUS_MAP[event];
           if (metaTemplateId && newStatus) {
-            const template = await whatsappTemplateModel.findOneAndUpdate(
-              { metaTemplateId: String(metaTemplateId) },
-              { $set: { status: newStatus, rejectedReason: newStatus === "REJECTED" ? (reason || "") : "" } },
-              { new: true }
-            );
-            if (template && global.io) {
-              global.io.to(`business:${template.businessId}`).emit("templateStatusUpdate", {
-                templateId: String(template._id),
-                status: newStatus,
-              });
+            const previous = await whatsappTemplateModel
+              .findOne({ metaTemplateId: String(metaTemplateId) })
+              .select("status createdBy businessId name")
+              .lean();
+            if (previous && previous.status !== newStatus) {
+              const template = await whatsappTemplateModel.findOneAndUpdate(
+                { _id: previous._id },
+                { $set: { status: newStatus, rejectedReason: newStatus === "REJECTED" ? (reason || "") : "" } },
+                { new: true }
+              );
+              if (template && global.io && template.businessId) {
+                global.io.to(`business:${template.businessId}`).emit("templateStatusUpdate", {
+                  templateId: String(template._id),
+                  status: newStatus,
+                });
+              }
+              if (template?.createdBy && ["APPROVED", "REJECTED", "PAUSED", "DISABLED"].includes(newStatus)) {
+                await sendTemplateStatusNotification({
+                  userId: template.createdBy,
+                  templateId: template._id,
+                  templateName: template.name,
+                  status: newStatus,
+                  reason,
+                }).catch((err) => console.error("[WA Webhook] template notification failed:", err.message));
+              }
             }
           }
         }
@@ -702,6 +739,17 @@ exports.postWhatsAppWebhook = async (req, res) => {
               // Emit to conversation room (for live chat screen)
               global.io.to(`conversation:${conversation._id}`).emit("newWhatsAppMessage", messagePayload);
               global.io.to(`conversation:${conversation._id}`).emit("chatMessage", messagePayload);
+            }
+
+            if (ownerUserId) {
+              await sendWhatsAppInboundNotification({
+                userId: ownerUserId,
+                businessId,
+                conversationId: conversation._id,
+                customerName: convObj.customerName,
+                customerPhone,
+                preview: textBody,
+              }).catch((err) => console.error("[WA Webhook] inbound notification failed:", err.message));
             }
 
             // AI chatbot: FAQ first → OpenAI fallback (fire-and-forget; keep Meta ACK fast)

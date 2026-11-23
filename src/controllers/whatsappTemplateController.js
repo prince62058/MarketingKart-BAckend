@@ -5,6 +5,7 @@ const whatsappTemplateModel = require("../models/whatsappTemplateModel");
 const whatsappFlowModel = require("../models/whatsappFlowModel");
 const templateTypes = require("../services/whatsappTemplateTypes");
 const whatsappBilling = require("../services/whatsappBillingService");
+const { sendTemplateStatusNotification } = require("../helpers/appNotificationHelper");
 const { screenId: flowScreenId } = require("../services/whatsappFlowBuilder");
 const OpenAI = require("openai");
 
@@ -302,6 +303,13 @@ exports.createTemplate = async (req, res) => {
         createdBy: req.user._id,
       });
 
+      await sendTemplateStatusNotification({
+        userId: req.user._id,
+        templateId: template._id,
+        templateName: template.name,
+        status: template.status,
+      }).catch((err) => console.error("[Template] notification failed:", err.message));
+
       return res.status(201).json({
         success: true,
         message: "Template created successfully and stored in database.",
@@ -380,6 +388,13 @@ exports.createTemplate = async (req, res) => {
       wabaId: account.wabaId || null,
       phoneNumberId: account.phoneNumberId || null,
     });
+
+    await sendTemplateStatusNotification({
+      userId: req.user._id,
+      templateId: template._id,
+      templateName: template.name,
+      status: metaStatus,
+    }).catch((err) => console.error("[Template] notification failed:", err.message));
 
     return res.status(201).json({ success: true, message: "Template submitted to Meta for review successfully!", data: template });
   } catch (error) {

@@ -16,6 +16,7 @@ const avatars = require("./aiVideo.avatars");
 const { httpError, insufficientCredits, providerError, requireProvider } = require("./aiVideo.errors");
 const creditsLedger = require("./aiVideo.credits");
 const logger = require("../../utils/logger");
+const { sendVideoReadyNotification } = require("../../helpers/appNotificationHelper");
 
 const { POLL_INTERVAL_MS, PROVIDER_URL_REFRESH_MS, newId, seedAvatars, presentProject, presentAvatar } = logic;
 
@@ -168,6 +169,11 @@ async function completeProject(studio, project, video) {
     lastCheckedAt: new Date(),
     error: null,
   });
+  await sendVideoReadyNotification({
+    userId: studio.userId,
+    projectId: project.id,
+    title: project.title,
+  }).catch((err) => logger.warn(`[AI VIDEO] ready notification failed: ${err.message}`));
   return true;
 }
 
