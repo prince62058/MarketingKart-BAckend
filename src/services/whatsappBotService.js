@@ -5,6 +5,7 @@ const whatsappConversationModel = require("../models/whatsappConversationModel")
 const whatsappMessageModel = require("../models/whatsappMessageModel");
 const whatsappCloudApiService = require("./whatsappCloudApiService");
 const logger = require("../utils/logger");
+const chatbotAccess = require("./whatsappChatbotAccess");
 
 let openaiClient = null;
 function openai() {
@@ -126,7 +127,7 @@ function arrangeReply(text) {
       lines.push(plan.detail ? `₹${plan.price} · ${plan.detail}` : `₹${plan.price}`);
       lines.push("");
     }
-    if (/kaunsa|inme se|koi bhi/i.test(raw)) lines.push("Kaunsa plan chahiye?");
+    if (/kaunsa|inme se|koi bhi|which plan/i.test(raw)) lines.push("Which plan would you like?");
     return tidyReply(lines.join("\n"));
   }
 
@@ -155,12 +156,12 @@ async function generateAiReply({ textBody, config, customerName, history, matche
     "A short yes, ha, yahi, okay, or kardo means they accepted the plan already shown.",
     "Never send the same message twice. Do not repeat the plan card. Tell only the next step: open Create Ad, choose that package, and pay.",
     "Do not say an order has started. Chat cannot place the order.",
-    "Reply in the same language the customer wrote in. Hindi, English, Hinglish, or any other language.",
+    "Reply in English.",
     "Arrange the reply like a WhatsApp card from the first line. Do not write plans, steps, or options in one paragraph.",
     "Put each plan or step on its own line. A plan name can be wrapped in *asterisks*. Keep a blank line between plans.",
-    "Example:\n*Plans*\n\n*Launch*\n₹1499 · 3 days\n\n*Scale*\n₹2000 · 3 days\n\nKaunsa plan chahiye?",
+    "Example:\n*Plans*\n\n*Launch*\n₹1499 · 3 days\n\n*Scale*\n₹2000 · 3 days\n\nWhich plan would you like?",
     matchedFaq
-      ? `Saved FAQ for this question. Keep every price, time, and fact exactly, and write it in the customer's language.\nQ: ${matchedFaq.question}\nA: ${matchedFaq.answer}`
+      ? `Saved FAQ for this question. Keep every price, time, and fact exactly, and write the answer in English.\nQ: ${matchedFaq.question}\nA: ${matchedFaq.answer}`
       : "",
     config.businessName ? `Business name: ${config.businessName}.` : "",
     config.systemPrompt ? `Extra instructions: ${config.systemPrompt}` : "",
@@ -342,8 +343,11 @@ async function handleInbound({ conversation, textBody, phoneNumberId, msgType })
     if (accounts.length !== 1 || !accounts[0].userId) return;
     const account = accounts[0];
 
+    const chatbotPlan = await chatbotAccess.findActive(account.userId);
+    if (!chatbotPlan) return;
+
     const config = await whatsappChatbotConfigModel.findOne({ userId: account.userId });
-    if (config && config.enabled === false) return;
+    if (!config || config.enabled !== true) return;
 
     const effectiveConfig = config || {
       enabled: true,
@@ -396,13 +400,22 @@ async function handleInbound({ conversation, textBody, phoneNumberId, msgType })
     if (history.length && history[history.length - 1].role === "user" && history[history.length - 1].content === text) {
       history.pop();
     }
-    let aiReply = await generateAiReply({
-      textBody: text,
-      config: effectiveConfig,
-      customerName: conversation.customerName,
-      matchedFaq: faq,
-      history,
-    });
+    const taken = await chatbotAccess.consumeReply(account.userId);
+    if (!taken.ok) return;
+
+    let aiReply;
+    try {
+      aiReply = await generateAiReply({
+        textBody: text,
+        config: effectiveConfig,
+        customerName: conversation.customerName,
+        matchedFaq: faq,
+        history,
+      });
+    } catch (err) {
+      await chatbotAccess.refundReply(account.userId, taken.source, taken.amount);
+      throw err;
+    }
     const lastBot = [...history].reverse().find((m) => m.role === "assistant");
     const compact = (value) =>
       String(value || "")
@@ -413,9 +426,14 @@ async function handleInbound({ conversation, textBody, phoneNumberId, msgType })
     const previous = compact(lastBot?.content);
     const next = compact(aiReply);
     if (previous && next && (previous === next || previous.includes(next) || next.includes(previous))) {
-      aiReply = "Ye plan pehle bata diya hai. App me Create Ad khol kar isi package ko choose karke pay kar dijiye.";
+      aiReply = "This plan was already shared. Open Create Ad in the app, choose this package, and pay.";
     }
-    await sendBotText({ account, conversation, text: aiReply });
+    try {
+      await sendBotText({ account, conversation, text: aiReply });
+    } catch (err) {
+      await chatbotAccess.refundReply(account.userId, taken.source, taken.amount);
+      throw err;
+    }
   } catch (err) {
     logger.error("[whatsappBot] handleInbound failed", { message: err?.message || String(err) });
     console.error("[whatsappBot] handleInbound failed:", err?.message || err);

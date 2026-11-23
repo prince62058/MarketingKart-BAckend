@@ -37,7 +37,7 @@ const whatsappChatbotConfigSchema = new mongoose.Schema(
     },
     enabled: {
       type: Boolean,
-      default: true,
+      default: false,
     },
     businessName: {
       type: String,

@@ -36,6 +36,12 @@ async function initializeBackgroundTasks() {
         await seedFaqsIfEmpty();
         await seedContactUsIfEmpty();
         await seedWhatsAppPlansIfEmpty();
+        try {
+            const chatbotAccess = require("../services/whatsappChatbotAccess");
+            await chatbotAccess.ensurePlans();
+        } catch (error) {
+            console.error("❌ Failed to seed chatbot plans:", error.message);
+        }
         await seedRcsPlansIfEmpty();
 
         // First start only: the AI Video price list (never overwrites what an admin saved).

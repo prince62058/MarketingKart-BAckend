@@ -260,6 +260,17 @@ exports.setBotMode = async (req, res) => {
       return res.status(403).json({ success: false, message: "You do not have access to this conversation" });
     }
 
+    if (isBotActive) {
+      const chatbotAccess = require("../services/whatsappChatbotAccess");
+      const chatbotPlan = await chatbotAccess.findActive(req.user._id);
+      if (!chatbotPlan) {
+        return res.status(403).json({
+          success: false,
+          message: "Buy a chatbot plan to turn the AI agent on.",
+        });
+      }
+    }
+
     conversation.isBotActive = isBotActive;
     await conversation.save();
 
