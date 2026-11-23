@@ -6,6 +6,7 @@ const businessModel = require("../models/businessModel");
 const axios = require("axios");
 const { cleanText, previewText, isGenericLabel } = require("../services/whatsappChatFormat");
 const whatsappBotService = require("../services/whatsappBotService");
+const chatbotAccess = require("../services/whatsappChatbotAccess");
 
 const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const publicBase = () => (process.env.PUBLIC_API_URL || "https://api.marketingkart.in").replace(/\/$/, "");
@@ -78,11 +79,13 @@ exports.getConversations = async (req, res) => {
 
     const total = await whatsappConversationModel.countDocuments(query);
 
+    const botAllowed = await chatbotAccess.allowsBot(req.user._id);
     const mappedConversations = conversations.map((c) => {
       const obj = c.toObject ? c.toObject() : { ...c };
       obj.contactPhone = obj.customerPhone;
       obj.contactName = obj.customerName && obj.customerName !== "Unknown" ? obj.customerName : obj.customerPhone;
       obj.lastMessage = previewText(obj.lastMessage);
+      obj.isBotActive = botAllowed && obj.isBotActive !== false;
       return obj;
     });
 
@@ -261,7 +264,6 @@ exports.setBotMode = async (req, res) => {
     }
 
     if (isBotActive) {
-      const chatbotAccess = require("../services/whatsappChatbotAccess");
       const chatbotPlan = await chatbotAccess.findActive(req.user._id);
       if (!chatbotPlan) {
         return res.status(403).json({
@@ -412,7 +414,7 @@ exports.sendChatMessage = async (req, res) => {
       lastMessageAt: updatedConv?.lastMessageAt || new Date(),
       unreadCount: conversation.unreadCount || 0,
       status: conversation.status || "OPEN",
-      isBotActive: conversation.isBotActive ?? true,
+      isBotActive: (await chatbotAccess.allowsBot(req.user._id)) && conversation.isBotActive !== false,
     };
 
     const messagePayload = {

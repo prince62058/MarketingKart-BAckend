@@ -26,6 +26,7 @@ const whatsappAccountHealthService = require("../services/whatsappAccountHealthS
 const whatsappConversionService = require("../services/whatsappConversionService");
 const whatsappFlowService = require("../services/whatsappFlowService");
 const whatsappBilling = require("../services/whatsappBillingService");
+const chatbotAccess = require("../services/whatsappChatbotAccess");
 
 const getPhoneVariants = (rawPhone) => {
   const digits = String(rawPhone || "").replace(/\D/g, "");
@@ -652,6 +653,7 @@ exports.postWhatsAppWebhook = async (req, res) => {
             }
 
             // Prepare unified payload for inbox & chat
+            const botAllowed = ownerUserId ? await chatbotAccess.allowsBot(ownerUserId) : false;
             const convObj = {
               _id: String(conversation._id),
               businessId: businessId,
@@ -663,7 +665,7 @@ exports.postWhatsAppWebhook = async (req, res) => {
               lastMessageAt: conversation.lastMessageAt,
               unreadCount: conversation.unreadCount || 1,
               status: conversation.status || "OPEN",
-              isBotActive: conversation.isBotActive ?? true,
+              isBotActive: botAllowed && conversation.isBotActive !== false,
             };
 
             const messagePayload = {

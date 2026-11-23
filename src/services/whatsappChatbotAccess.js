@@ -45,6 +45,10 @@ async function findActive(userId) {
   return ChatbotSubscription.findOne(activeFilter(userId)).populate("planId").sort({ createdAt: -1 });
 }
 
+async function allowsBot(userId) {
+  return Boolean(await findActive(userId));
+}
+
 async function presentAccess(sub) {
   const extra = await extraReplyRupees();
   if (!sub) {
@@ -125,6 +129,7 @@ module.exports = {
   extraReplyRupees,
   saveExtraReplyRupees,
   findActive,
+  allowsBot,
   presentAccess,
   consumeReply,
   refundReply,
