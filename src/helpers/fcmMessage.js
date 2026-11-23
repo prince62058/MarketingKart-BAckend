@@ -32,6 +32,7 @@ function buildFcmMessage({ token, tokens, title, body, image, data = {} }) {
         defaultSound: true,
         defaultVibrateTimings: true,
         imageUrl: picture,
+        ticker: String(title || "MarketingKart"),
       },
     },
     apns: {

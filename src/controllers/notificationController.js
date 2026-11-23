@@ -178,9 +178,11 @@ const sendNotificationToAllUsersBusiness = async (req, res) => {
       .flat()
       .filter((t) => typeof t === "string" && t.trim().length > 0);
 
+    const picture = notificationImage(req.file?.location);
     const notificationPayload = {
       title,
       description: message,
+      image: picture,
       customData: "default",
     };
 
@@ -192,7 +194,7 @@ const sendNotificationToAllUsersBusiness = async (req, res) => {
       userId: user._id,
       title,
       message,
-      image: notificationImage(req.file?.location),
+      image: picture,
       read: false,
       status: "sent",
       createdAt: new Date(),
@@ -218,9 +220,11 @@ const sendNotificationToBusinessUsers = async (req, res) => {
     const business = await Business.findById(businessId).select("userId");
     const tokens = await User.find({ _id: business.userId }).select("fcm");
 
+    const picture = notificationImage(req.file?.location);
     const notificationPayload = {
       title,
       description: message,
+      image: picture,
       customData: "default",
     };
 
@@ -235,7 +239,7 @@ const sendNotificationToBusinessUsers = async (req, res) => {
         title,
         message,
         businessId,
-        image: notificationImage(req.file?.location),
+        image: picture,
       });
       await notification.save();
 
