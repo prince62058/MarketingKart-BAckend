@@ -8,6 +8,7 @@ const WhatsAppTransaction = require("../models/whatsappTransactionModel");
 const ChatbotPlan = require("../models/whatsappChatbotPlanModel");
 const ChatbotSubscription = require("../models/whatsappChatbotSubscriptionModel");
 const chatbotAccess = require("../services/whatsappChatbotAccess");
+const { whatsappPlanInvoice } = require("../services/serviceInvoiceService");
 const { assertPlanEarns } = require("../services/whatsappChatbotPlanCatalog");
 
 const isAdminUser = (user) => user?.userType === "ADMIN" || user?.role === "ADMIN" || user?.userType === "STAFF";
@@ -344,6 +345,16 @@ exports.purchaseChatbotPlan = async (req, res) => {
     user.whatsappWallet = newBal;
     await user.save({ session });
     await session.commitTransaction();
+
+    whatsappPlanInvoice({
+      userId,
+      planTitle: `Chatbot ${plan.title}`,
+      amount: plan.price,
+      days: plan.duration || 30,
+      replies: plan.replyCredits,
+      transactionId: txn._id,
+      planId: plan._id,
+    }).catch((invoiceErr) => console.error("Chatbot plan invoice failed:", invoiceErr.message));
 
     return res.status(200).json({
       success: true,

@@ -6,7 +6,7 @@ const WhatsAppPlan = require("../models/whatsappPlanModel");
 const WhatsAppTransaction = require("../models/whatsappTransactionModel");
 const WhatsAppSubscription = require("../models/whatsappSubscriptionModel");
 const { sendWalletNotification } = require("../helpers/walletNotificationHelper");
-const { whatsappRechargeInvoice } = require("../services/serviceInvoiceService");
+const { whatsappRechargeInvoice, whatsappPlanInvoice } = require("../services/serviceInvoiceService");
 const planCatalog = require("../services/whatsappPlanCatalog");
 
 const isAdminUser = (user) => user?.userType === "ADMIN" || user?.role === "ADMIN" || user?.userType === "STAFF";
@@ -439,6 +439,16 @@ exports.purchasePlan = async (req, res) => {
     user.whatsappWallet = newBal;
     await user.save({ session });
     await session.commitTransaction();
+
+    // The bill matches the wallet debit. A failed invoice does not undo the plan.
+    whatsappPlanInvoice({
+      userId,
+      planTitle: plan.title,
+      amount: quote.total,
+      days: quote.days,
+      transactionId: txn._id,
+      planId: plan._id,
+    }).catch((invoiceErr) => console.error("WhatsApp plan invoice failed:", invoiceErr.message));
 
     return res.status(200).json({
       success: true,

@@ -17,8 +17,17 @@ const capitalise = (text) => String(text || "").replace(/^\w/, (c) => c.toUpperC
 // one it would call a WhatsApp or AI Video invoice an "Ad Campaign Invoice".
 async function nextInvoiceNumber(Invoices, Companies) {
   const company = await Companies.findOne().select("invoicePrefix").lean();
+  const prefix = company?.invoicePrefix || "MKAI";
+  const year = new Date().getFullYear();
+  const head = `${prefix}/${year}/`;
+  const latest = await Invoices.findOne({ invoiceNumber: new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/${year}/\\d+$`) })
+    .sort({ invoiceNumber: -1 })
+    .select("invoiceNumber")
+    .lean();
+  const seq = parseInt(String(latest?.invoiceNumber || "").split("/").pop(), 10);
   const count = await Invoices.countDocuments();
-  return `${company?.invoicePrefix || "MKAI"}/${new Date().getFullYear()}/${String(count + 1).padStart(4, "0")}`;
+  const next = Math.max(Number.isFinite(seq) ? seq : 0, count) + 1;
+  return `${head}${String(next).padStart(4, "0")}`;
 }
 
 // The app lists invoices per business, so attach the customer's business when we know it.
@@ -106,4 +115,54 @@ async function aiVideoOrderInvoice({ userId, businessId, order, paymentId, metho
   });
 }
 
-module.exports = { whatsappRechargeInvoice, aiVideoOrderInvoice, AI_VIDEO_GST_RATE };
+/**
+ * A WhatsApp message plan or chatbot plan paid from the WhatsApp wallet.
+ * The invoice total is the amount that left the wallet. GST is not added on top,
+ * because the wallet debit is the whole charge. The same transaction is never billed twice.
+ */
+async function whatsappPlanInvoice({ userId, planTitle, amount, days, replies, transactionId, planId, paidAt }, deps = {}) {
+  const total = round2(amount);
+  const paymentRef = String(transactionId || "");
+  if (!(total > 0) || !paymentRef) return null;
+  const Invoices = deps.Invoice || Invoice;
+  const existing = await Invoices.findOne({ transactionId: paymentRef }).lean();
+  if (existing) return existing;
+  const dayCount = Number(days);
+  const replyCount = Number(replies);
+  const detail = [
+    Number.isFinite(dayCount) && dayCount > 0 ? `${dayCount} days` : null,
+    Number.isFinite(replyCount) && replyCount > 0 ? `${replyCount.toLocaleString("en-IN")} AI replies` : null,
+    "Paid from the WhatsApp wallet",
+  ].filter(Boolean).join(" · ");
+  const title = String(planTitle || "WhatsApp plan").trim() || "WhatsApp plan";
+  const saved = await Invoices.create({
+    service: "WHATSAPP",
+    invoiceNumber: await nextInvoiceNumber(Invoices, deps.Company || Company),
+    userId,
+    businessId: await businessOf(deps.Business || Business, userId, null),
+    packageName: title,
+    planId: planId || undefined,
+    items: [{ description: title, subDescription: detail, qty: 1, unitPrice: total, amount: total }],
+    subTotal: total,
+    gstAmount: "0",
+    gstRate: 0,
+    totalAmount: total,
+    paymentMethod: "MarketingKart WhatsApp wallet",
+    transactionId: paymentRef,
+    status: "PAID",
+  });
+  // createdAt is immutable on the schema, so a normal update cannot move a backfilled bill
+  // back to the day the wallet was actually charged.
+  if (paidAt && saved?._id) {
+    const when = new Date(paidAt);
+    if (typeof Invoices.collection?.updateOne === "function") {
+      await Invoices.collection.updateOne({ _id: saved._id }, { $set: { createdAt: when } });
+    } else {
+      await Invoices.updateOne({ _id: saved._id }, { $set: { createdAt: when } });
+    }
+    saved.createdAt = when;
+  }
+  return saved;
+}
+
+module.exports = { whatsappRechargeInvoice, aiVideoOrderInvoice, whatsappPlanInvoice, nextInvoiceNumber, AI_VIDEO_GST_RATE };

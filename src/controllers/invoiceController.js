@@ -5,25 +5,15 @@ const companyModel = require("../models/commpanyModelV2.js");
 const businessModel = require("../models/businessModel.js");
 const GstOfUserModel = require("../models/GstOfUserModel.js");
 const internalCampiagnModel = require("../models/internalCampiagnModel.js");
-const adsDetailModel = require("../models/adsDetailModel.js");
 const advertisementModel = require("../models/advertisementModel.js");
 const invoiceModel = require("../models/invoiceModel.js");
 const planModel = require("../models/planModel.js");
 const { adInvoiceLines, legacyAdInvoiceLines, campaignDays } = require("../helpers/adInvoice.js");
+const { nextInvoiceNumber } = require("../services/serviceInvoiceService");
 const { invoiceTheme } = require("../helpers/invoiceThemes.js");
 const { mkFullLogoB64, mkIconLogoB64 } = require("../utils/invoiceLogos.js");
 const { poweredByBlock, poweredByCss } = require("../utils/ayotrixLogo.js");
 
-
-const generateInvoiceNumber = async () => {
-  try {
-    const count = await adsDetailModel.countDocuments();
-    const nextInvoiceNumber = count + 1;
-    return nextInvoiceNumber.toString().padStart(3, "0");
-  } catch (error) {
-    throw new Error("Failed to generate invoice number: " + error.message);
-  }
-};
 
 exports.generateInvoice = async (
   intenalId,
@@ -76,9 +66,12 @@ exports.generateInvoice = async (
     });
 
     // Saved before the PDF and the e-mail, so the invoice is there (admin panel and the app's
-    // invoices) even when either of them fails.
+    // invoices) even when either of them fails. The number is stored with the invoice; the PDF
+    // used to invent one afterwards and the app then had nothing to show.
+    const invoiceNumber = await nextInvoiceNumber(invoiceModel, companyModel);
     await invoiceModel.create({
       service: "META_ADS",
+      invoiceNumber,
       paymentMethod: /^pay_/i.test(String(transactionId || "")) ? "Razorpay" : "MarketingKart wallet",
       transactionId: transactionId ? String(transactionId) : undefined,
       adsAmount: lines.adSpend,
@@ -101,7 +94,6 @@ exports.generateInvoice = async (
       ? `${lines.packageName} · ${advertismentType.title}`
       : lines.packageName;
     const date = new Date().toISOString().split("T")[0];
-    const invoiceNumber = await generateInvoiceNumber();
 
     // HTML Content for PDF
     const htmlContent = `<!DOCTYPE html>
@@ -451,7 +443,7 @@ exports.getInvoiceByBusinessId = async (req, res) => {
       });
     }
 
-    const invoices = await invoiceModel.find({ userId });
+    const invoices = await invoiceModel.find({ userId }).sort({ createdAt: -1 });
 
     const totalInvoices = await invoiceModel.countDocuments({ userId });
     const totalPages = Math.ceil(totalInvoices / parseInt(limit));
