@@ -157,6 +157,36 @@ test("each kind of ad aims at its own action", { skip }, async () => {
   assert.match(await goal("something_new"), /get in touch/);
 });
 
+test("a photo is attached for the model, and a non-https link is ignored", async () => {
+  delete process.env.OPENAI_API_KEY;
+  const local = require("../src/services/adContentService");
+  const reply = { campaignName: "Thali Leads", headline: "Fresh thali today", primaryText: "Ghar jaisa thali. Fill the form.", caption: "Order a thali" };
+  const provider = fakeProvider(reply);
+  const business = { name: "Prince Kitchen", category: "Food" };
+  const withPhoto = await local.generate(
+    { userId: "photo-ad-user", business, adType: "lead_ads", language: "english", imageUrl: "https://cdn.example.com/thali.jpg" },
+    { api: provider },
+  );
+  assert.equal(withPhoto.source, "ai");
+  const sent = provider.calls[0].body;
+  const user = sent.messages[1].content;
+  const system = sent.messages[0].content;
+  assert.equal(user[0].type, "text");
+  assert.match(user[0].text, /Prince Kitchen/);
+  assert.doesNotMatch(user[0].text, /Food/, "the saved category must not override the photo");
+  assert.match(system, /follow the photo/);
+  assert.equal(sent.temperature, 0.4);
+  assert.equal(user[1].image_url.url, "https://cdn.example.com/thali.jpg");
+  assert.equal(user[1].image_url.detail, "high");
+
+  const plain = fakeProvider(reply);
+  await local.generate(
+    { userId: "photo-ad-user-2", business, adType: "lead_ads", language: "english", imageUrl: "http://cdn.example.com/thali.jpg" },
+    { api: plain },
+  );
+  assert.equal(typeof plain.calls[0].body.messages[1].content, "string");
+});
+
 test("one customer cannot run it in a loop", { skip }, async () => {
   const userId = String(new h.mongoose.Types.ObjectId());
   for (let i = 0; i < 30; i += 1) await service.generate({ userId, business: facts, adType: "sales", language: "english" });

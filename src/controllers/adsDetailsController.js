@@ -23,6 +23,7 @@ const logger = require("../utils/logger");
 const AdErrorLog = require("../models/AdErrorLog");
 const internalCampaignServices = require("../services/internalCampiagnService");
 const { generateInvoice } = require("./invoiceController");
+const { suggestInterests } = require("../services/interestSuggestService");
 const mongoose = require("mongoose");
 const { createTransaction } = require("./transtionController");
 const Transaction = require("../models/transtionModel");
@@ -3338,9 +3339,22 @@ exports.targetingLocation = async (req, res) => {
   }
 };
 
+async function searchAdInterests(accessToken, term) {
+  const response = await axios.get("https://graph.facebook.com/v22.0/search", {
+    params: {
+      type: "adinterest",
+      q: String(term || "").trim().slice(0, 80),
+      access_token: accessToken,
+      limit: 5,
+    },
+    timeout: 12000,
+  });
+  return response?.data?.data || [];
+}
+
 exports.targetingInterest = async (req, res) => {
   try {
-    const { businessId, search } = req.query;
+    const { businessId, search, hint } = req.query;
     if (!businessId) {
       return res
         .status(400)
@@ -3349,30 +3363,30 @@ exports.targetingInterest = async (req, res) => {
     if (!search || String(search).trim().length < 1) {
       return res.status(200).send({
         success: true,
+        ai: false,
         message: "Target Search Interest Data",
         data: [],
       });
     }
     const accessToken = await getMetaSearchToken();
-    const response = await axios.get("https://graph.facebook.com/v22.0/search", {
-      params: {
-        type: "adinterest",
-        q: String(search).trim().slice(0, 120),
-        access_token: accessToken,
-        limit: 25,
-      },
-      timeout: 15000,
+    const result = await suggestInterests({
+      userId: req.user && req.user._id,
+      query: search,
+      hint,
+      searchMeta: term => searchAdInterests(accessToken, term),
     });
     return res.status(200).send({
       success: true,
-      message: "Target Search Interest Data",
-      data: response?.data?.data || [],
+      ai: result.ai,
+      message: result.ai ? "AI interest suggestions" : "Target Search Interest Data",
+      data: result.interests,
     });
   } catch (error) {
     if (isExpiredMetaError(error)) markConfiguredTokenInvalid();
     console.error("targetingInterest error:", error.response?.data || error.message);
     return res.status(500).send({
       success: false,
+      ai: false,
       message: error.response?.data?.error?.message || error.message,
       data: [],
     });
