@@ -759,8 +759,10 @@ exports.getInvoiceHTML = async (req, res) => {
     // Client / Bill To (per-invoice editable override -> user GST / User / Business -> Default)
     const clientName = invoice.clientName || userGst?.gstRegisteredName || invoice.businessId?.businessName || invoice.userId?.name || "Client Name";
     const companyName = invoice.companyName || invoice.businessId?.businessName || "Company Name";
-    const address = invoice.addressLine1 || userGst?.address || "Address Line 1";
-    const cityStatePin = invoice.cityStatePin || userGst?.cityState || "City, State - PIN";
+    const rawAddress = invoice.addressLine1 || userGst?.address || "";
+    const address = /^address line 1$/i.test(String(rawAddress).trim()) ? "" : rawAddress;
+    const rawCity = invoice.cityStatePin || userGst?.cityState || "";
+    const cityStatePin = /^city,\s*state\s*-?\s*pin$/i.test(String(rawCity).trim()) ? "" : rawCity;
     const gstNo = invoice.gstin ? `GSTIN: ${invoice.gstin}` : (userGst?.gstNumber ? `GSTIN: ${userGst.gstNumber}` : "");
 
     // Tagline (per-invoice editable override -> companyData -> Default)
@@ -816,8 +818,32 @@ exports.getInvoiceHTML = async (req, res) => {
     const gstVal = Number.isFinite(storedGst) ? storedGst : Math.round(subTotal * 0.18);
     const gstRate = invoice.gstRate ?? 18;
     const totalVal = invoice.totalAmount || (subTotal + gstVal);
-    const dateFormatted = invoice.createdAt ? moment(invoice.createdAt).format("DD MMM YYYY") : moment().format("DD MMM YYYY");
-    const dueDateFormatted = invoice.dueDate ? moment(invoice.dueDate).format("DD MMM YYYY") : moment().add(15, "days").format("DD MMM YYYY");
+    const paid = String(invoice.status || "").toUpperCase() === "PAID";
+    const createdMoment = invoice.createdAt ? moment(invoice.createdAt) : moment();
+    const dateFormatted = createdMoment.format("DD MMM YYYY");
+    const storedDue = invoice.dueDate ? moment(invoice.dueDate) : null;
+    const dueIsUsable = storedDue?.isValid() && !storedDue.isBefore(createdMoment, "day");
+    const dueDateFormatted = dueIsUsable
+      ? storedDue.format("DD MMM YYYY")
+      : createdMoment.clone().add(15, "days").format("DD MMM YYYY");
+    const paidNotes = "This invoice is paid in full.\nThis is a computer generated invoice and does not require a physical signature.\nFor any queries, feel free to contact us.";
+    const notesForBill = paid ? (invoice.notes || paidNotes) : notesContent;
+    const bankLooksPlaceholder = /x{3,}/i.test(String(accountNumber)) || /0001234/.test(String(ifscCode));
+    const paymentBlock = paid || bankLooksPlaceholder
+      ? `<div class="payment-details-box">
+        <div class="section-title-orange">${paid ? "Payment" : "Payment status"}</div>
+        <div class="detail-line"><span>Status</span> <strong>: ${paid ? "Paid" : (invoice.status || "Due")}</strong></div>
+        ${invoice.paymentMethod ? `<div class="detail-line"><span>Paid via</span> <strong>: ${invoice.paymentMethod}</strong></div>` : ""}
+        ${paid ? `<div class="detail-line"><span>Paid on</span> <strong>: ${dateFormatted}</strong></div>` : ""}
+      </div>`
+      : `<div class="payment-details-box">
+        <div class="section-title-orange">Payment Details</div>
+        <div class="detail-line"><span>Bank Name</span> <strong>: ${bankName}</strong></div>
+        <div class="detail-line"><span>Account Name</span> <strong>: ${accountName}</strong></div>
+        <div class="detail-line"><span>Account No.</span> <strong>: ${accountNumber}</strong></div>
+        <div class="detail-line"><span>IFSC Code</span> <strong>: ${ifscCode}</strong></div>
+        <div class="detail-line"><span>UPI ID</span> <strong>: ${upiId}</strong></div>
+      </div>`;
 
 
     const html = `<!DOCTYPE html>
@@ -1123,7 +1149,7 @@ exports.getInvoiceHTML = async (req, res) => {
 <body style="margin: 0; padding: 0;">
   <!-- Print & Download Floating Toolbar -->
   <div class="no-print" style="max-width: 820px; margin: 12px auto 6px; text-align: right; padding: 0 16px;">
-    <button onclick="window.print()" style="background: ${theme.dark}; color: #fff; border: none; padding: 8px 18px; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 13px; box-shadow: 0 2px 6px rgba(234,88,12,0.3);">
+    <button onclick="window.print()" style="background: ${theme.dark}; color: #fff; border: none; padding: 8px 18px; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 13px; box-shadow: 0 2px 6px rgba(15,23,42,0.16);">
       🖨️ Print / Download PDF
     </button>
   </div>
@@ -1163,8 +1189,10 @@ exports.getInvoiceHTML = async (req, res) => {
         <div class="service-tag">${theme.label}</div>
         <div class="meta-line">Invoice No &nbsp;&nbsp;: &nbsp;<strong>${invoice.invoiceNumber || `MKAI/${dateFormatted.split(" ")[2]}/${String(invoice._id).slice(-4).toUpperCase()}`}</strong></div>
         <div class="meta-line">Invoice Date : &nbsp;<strong>${dateFormatted}</strong></div>
-        <div class="meta-line">Due Date &nbsp;&nbsp;&nbsp;&nbsp;: &nbsp;<strong>${dueDateFormatted}</strong></div>
-        <div class="meta-line">Payment Terms: &nbsp;<strong>${invoice.paymentTerms || "Net 15 Days"}</strong></div>
+        ${paid
+          ? `<div class="meta-line">Status &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: &nbsp;<strong>Paid</strong></div>`
+          : `<div class="meta-line">Due Date &nbsp;&nbsp;&nbsp;&nbsp;: &nbsp;<strong>${dueDateFormatted}</strong></div>
+        <div class="meta-line">Payment Terms: &nbsp;<strong>${invoice.paymentTerms || "Net 15 Days"}</strong></div>`}
         ${invoice.paymentMethod ? `<div class="meta-line">Paid via &nbsp;&nbsp;&nbsp;&nbsp;: &nbsp;<strong>${invoice.paymentMethod}</strong></div>` : ""}
         ${invoice.transactionId ? `<div class="meta-line">Payment ID &nbsp;: &nbsp;<strong>${invoice.transactionId}</strong></div>` : ""}
       </div>
@@ -1224,19 +1252,12 @@ exports.getInvoiceHTML = async (req, res) => {
 
     <!-- Payment Details & Notes -->
     <div class="lower-row">
-      <div class="payment-details-box">
-        <div class="section-title-orange">Payment Details</div>
-        <div class="detail-line"><span>Bank Name</span> <strong>: ${bankName}</strong></div>
-        <div class="detail-line"><span>Account Name</span> <strong>: ${accountName}</strong></div>
-        <div class="detail-line"><span>Account No.</span> <strong>: ${accountNumber}</strong></div>
-        <div class="detail-line"><span>IFSC Code</span> <strong>: ${ifscCode}</strong></div>
-        <div class="detail-line"><span>UPI ID</span> <strong>: ${upiId}</strong></div>
-      </div>
+      ${paymentBlock}
 
       <div class="notes-box">
         <div class="section-title-orange">Notes:</div>
         <ul>
-          ${notesContent
+          ${notesForBill
             .split("\n")
             .filter(Boolean)
             .map((n) => `<li>${n}</li>`)

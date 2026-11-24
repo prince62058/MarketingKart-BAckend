@@ -1,8 +1,9 @@
 /** Menu the WhatsApp Marketing account tab is allowed to show. */
 const CATALOG = [
-  { key: "billing", action: "billing", title: "Billing Details", subtitle: "WhatsApp plan and wallet", sortOrder: 10, hidden: false },
-  { key: "orders", action: "orders", title: "Order History", subtitle: "WhatsApp plan payments", sortOrder: 20, hidden: false },
-  { key: "invoices", action: "invoices", title: "Invoices", subtitle: "Download WhatsApp bills", sortOrder: 30, hidden: false },
+  { key: "billing", action: "billing", title: "Wallet billing", subtitle: "Message plan and wallet", sortOrder: 10, hidden: false },
+  { key: "chatbot-billing", action: "chatbot-billing", title: "Chatbot billing", subtitle: "Chatbot plan and AI replies", sortOrder: 15, hidden: false },
+  { key: "orders", action: "orders", title: "Wallet orders", subtitle: "Message plan and wallet payments", sortOrder: 20, hidden: false },
+  { key: "invoices", action: "invoices", title: "Wallet invoices", subtitle: "Message plan and wallet bills", sortOrder: 30, hidden: false },
   { key: "plans", action: "plans", title: "Plans", subtitle: "WhatsApp message plans", sortOrder: 40, hidden: false },
   { key: "wallet", action: "wallet", title: "Wallet", subtitle: "WhatsApp Marketing balance", sortOrder: 50, hidden: false },
   { key: "chatbot", action: "chatbot", title: "AI Chatbot", subtitle: "Chatbot plan and replies", sortOrder: 60, hidden: false },
@@ -14,6 +15,13 @@ const CATALOG = [
 ];
 
 const BY_KEY = new Map(CATALOG.map((item) => [item.key, item]));
+
+/** Labels shipped before wallet and chatbot bills were split. A custom admin label is left as-is. */
+const PREVIOUS_LABEL = {
+  billing: { title: "Billing Details", subtitle: "WhatsApp plan and wallet" },
+  orders: { title: "Order History", subtitle: "WhatsApp plan payments" },
+  invoices: { title: "Invoices", subtitle: "Download WhatsApp bills" },
+};
 
 function clip(value, max) {
   return String(value || "").trim().slice(0, max);
@@ -33,11 +41,28 @@ function normalizeItem(input, fallback) {
   };
 }
 
+function refreshPreviousLabel(saved, fallback) {
+  if (!saved) return undefined;
+  const previous = PREVIOUS_LABEL[fallback.key];
+  if (!previous) return saved;
+  const title = clip(saved.title, 80);
+  const subtitle = clip(saved.subtitle, 140);
+  if (title !== previous.title && subtitle !== previous.subtitle) return saved;
+  return {
+    ...saved,
+    title: title === previous.title ? fallback.title : saved.title,
+    subtitle: subtitle === previous.subtitle ? fallback.subtitle : saved.subtitle,
+  };
+}
+
 /** Keep only known WhatsApp actions. Admin text replaces the label, not the destination. */
 function mergeMenu(saved = [], edits) {
   const savedByKey = new Map(saved.map((item) => [item.key, item]));
   const editByKey = new Map((Array.isArray(edits) ? edits : []).filter((item) => item && BY_KEY.has(item.key)).map((item) => [item.key, item]));
-  return CATALOG.map((item) => normalizeItem(editByKey.get(item.key) || savedByKey.get(item.key) || item, item));
+  return CATALOG.map((item) => normalizeItem(
+    editByKey.get(item.key) || refreshPreviousLabel(savedByKey.get(item.key), item) || item,
+    item,
+  ));
 }
 
 function visibleMenu(rows) {
