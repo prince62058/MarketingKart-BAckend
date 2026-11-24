@@ -1,7 +1,7 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 process.env.clientId='app-test';process.env.clientSecret='secret-test';process.env.WHATSAPP_TOKEN_ENCRYPTION_KEY='ab'.repeat(32);
-const {connectSignup,validateGrant}=require('../src/services/whatsappSignupService');
+const {connectSignup,validateGrant,addNumberToAgencyBusiness}=require('../src/services/whatsappSignupService');
 const grant={is_valid:true,app_id:'app-test',scopes:['whatsapp_business_management','whatsapp_business_messaging'],granular_scopes:[{scope:'whatsapp_business_management',target_ids:['123456']}]};
 const input={userId:'tenant-a',code:'one-time-code',wabaId:'123456',phoneNumberId:'987654'};
 test('new-number signup never registers a Business App number', async () => {
@@ -114,6 +114,47 @@ test('connects only the explicitly chosen number using the customer token and su
  assert.equal(writes[0][3].headers.Authorization,'Bearer customer-token');
  assert.equal(writes[1][2].$set.phoneNumberId,'987654');
  assert.equal(writes[1][2].$set.accessToken,'customer-token');
+});
+test('a connected number is added to the agency business without using the customer token',async()=>{
+ process.env.businessId='agency-business';
+ process.env.systemUserAccessToken='system-token';
+ try {
+  const agencyGet=(get)=>async(url,opts)=>{
+   if(url.endsWith('/me'))return {data:{id:'sys-user'}};
+   if(String(url).includes('/system_users'))return {data:{data:[{id:'sys-user'}]}};
+   if(String(url).includes('whatsapp_business_accounts'))return {data:{data:[{id:'123456'}]}};
+   return get(url,opts);
+  };
+  const deps=mocks();
+  const get=deps.api.get;
+  deps.api.get=agencyGet(get);
+  assert.equal(await connectSignup(input,deps).then(account=>account.phoneNumberId),'987654');
+  const assign=deps.calls.find(c=>c[0]==='post'&&String(c[1]).endsWith('/123456/assigned_users'));
+  assert.equal(assign[3].headers.Authorization,'Bearer system-token');
+  assert.equal(assign[3].params.user,'sys-user');
+  assert.equal(assign[3].params.tasks,JSON.stringify(['MANAGE']));
+  const blocked=mocks();
+  blocked.api.post=async(url,body,opts)=>{blocked.calls.push(['post',url,body,opts]);if(String(url).includes('assigned_users'))throw new Error('permission denied');return {data:{success:true}};};
+  blocked.api.get=agencyGet((url,opts)=>mocks().api.get(url,opts));
+  const saved=await connectSignup(input,blocked);
+  assert.equal(saved.phoneNumberId,'987654');
+  process.env.businessId='3111194312384569';
+  const refused=mocks();
+  assert.equal(await addNumberToAgencyBusiness('123456',refused),false);
+  assert.equal(refused.calls.length,0);
+  process.env.businessId='agency-business';
+  const missing=mocks();
+  missing.api.get=async(url,opts)=>{
+   if(url.endsWith('/me'))return {data:{id:'sys-user'}};
+   if(String(url).includes('/system_users'))return {data:{data:[{id:'sys-user'}]}};
+   if(String(url).includes('whatsapp_business_accounts'))return {data:{data:[]}};
+   return mocks().api.get(url,opts);
+  };
+  assert.equal(await addNumberToAgencyBusiness('123456',missing),false);
+ } finally {
+  delete process.env.businessId;
+  delete process.env.systemUserAccessToken;
+ }
 });
 test('wrong phone, existing tenant and concurrent claim cannot connect or mutate Meta',async()=>{
  for(const opts of [{phones:[{id:'111111'}]},{existing:{userId:'tenant-b'}},{claimUser:'tenant-b'}]){

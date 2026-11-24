@@ -1,6 +1,7 @@
 const whatsappAccountModel = require("../models/whatsappAccountModel");
 const whatsappCloudApiService = require("../services/whatsappCloudApiService");
 const whatsappTemplateService = require("../services/whatsappTemplateService");
+const { addNumberToAgencyBusiness } = require("../services/whatsappSignupService");
 const axios = require("axios");
 
 const PHONE_STATUS_SCORE = {
@@ -155,6 +156,8 @@ exports.connectAccount = async (req, res) => {
       },
       { new: true, upsert: true }
     );
+
+    await addNumberToAgencyBusiness(wabaId);
 
     let templatesSynced = 0;
     let templatesCleared = 0;
@@ -388,6 +391,8 @@ exports.connectViaFacebook = async (req, res) => {
       },
       { new: true, upsert: true }
     );
+
+    await addNumberToAgencyBusiness(selectedAccount.wabaId);
 
     let templatesSynced = 0;
     let templatesCleared = 0;

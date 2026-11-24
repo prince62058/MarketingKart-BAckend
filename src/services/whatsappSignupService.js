@@ -96,6 +96,7 @@ async function connectSignup({userId, code, wabaId, phoneNumberId, mode = 'NEW_O
   } catch (syncErr) {
     console.warn('[Embedded Signup] Template sync failed:', syncErr.message);
   }
+  await addNumberToAgencyBusiness(wabaId, deps);
   if(coexistence){
     // These are one-shot requests. Persist intent before sending so a timeout is not blindly replayed.
     for(const [syncType,key] of [['smb_app_state_sync','contacts'],['history','history']]){
@@ -234,7 +235,61 @@ async function connectFacebookAccount({userId, accessToken, wabaId, phoneNumberI
   } catch (syncErr) {
     console.warn('[Facebook Connect] Template sync failed:', syncErr.message);
   }
+  await addNumberToAgencyBusiness(wabaId, deps);
   return account;
+}
+
+// Ayotrix Info 1 is a different portfolio. Numbers must not be attached there.
+const NOT_THE_AGENCY_BUSINESS = new Set(['3111194312384569']);
+
+async function graphIds(api, base, headers, path) {
+  const ids = [];
+  let cursor;
+  for (let page = 0; page < 20; page++) {
+    const response = await api.get(`${base}/${path}`, {
+      headers,
+      params: { fields: 'id', limit: 100, ...(cursor ? { after: cursor } : {}) },
+      timeout: 15000,
+    });
+    ids.push(...(response.data?.data || []).map(row => String(row.id)));
+    cursor = response.data?.paging?.cursors?.after;
+    if (!response.data?.paging?.next || !cursor) break;
+  }
+  return ids;
+}
+
+// Embedded Signup shares a customer's number into the business that owns the app.
+// This confirms that business is the agency portfolio, then gives the admin system user access.
+// Ownership stays with the customer. A failed check does not disconnect their number.
+async function addNumberToAgencyBusiness(wabaId, deps = {}) {
+  const businessId = String(process.env.businessId || '').trim();
+  const systemToken = process.env.systemUserAccessToken;
+  if (!businessId || NOT_THE_AGENCY_BUSINESS.has(businessId) || !systemToken || !/^\d{5,30}$/.test(String(wabaId || ''))) return false;
+  try {
+    const api = deps.api || axios;
+    const base = `https://graph.facebook.com/${version()}`;
+    const headers = { Authorization: `Bearer ${systemToken}` };
+    const me = await api.get(`${base}/me`, { headers, params: { fields: 'id' }, timeout: 15000 });
+    const systemUserId = String(me.data?.id || '');
+    if (!systemUserId) throw new Error('Agency system user was not found.');
+    const staff = await graphIds(api, base, headers, `${businessId}/system_users`);
+    if (!staff.includes(systemUserId)) throw new Error('System user is not on the agency business.');
+    const assigned = await api.post(`${base}/${wabaId}/assigned_users`, null, {
+      headers,
+      params: { user: systemUserId, tasks: JSON.stringify(['MANAGE']) },
+      timeout: 20000,
+    });
+    if (!assigned.data?.success) throw new Error('Meta did not add this number to the agency business.');
+    const [owned, shared] = await Promise.all([
+      graphIds(api, base, headers, `${businessId}/owned_whatsapp_business_accounts`),
+      graphIds(api, base, headers, `${businessId}/client_whatsapp_business_accounts`),
+    ]);
+    if (![...owned, ...shared].includes(String(wabaId))) throw new Error('Number is not on the agency business.');
+    return true;
+  } catch (error) {
+    console.warn('[WhatsApp] Number stayed connected, but was not added to the agency business:', error?.response?.data?.error?.message || error.message);
+    return false;
+  }
 }
 
 // An "Existing API number" account keeps the Facebook SDK token from connectFacebookAccount. That token
@@ -280,4 +335,4 @@ async function allowConversionEvents({userId, accessToken}, deps = {}) {
   if (!saved) throw refusal(409, 'WHATSAPP_CHANGED', 'Your WhatsApp connection changed meanwhile. Try again.');
   return {wabaId, tokenExpiresAt};
 }
-module.exports = {connectSignup,validateGrant,discoverFacebookAccounts,connectFacebookAccount,allowConversionEvents};
+module.exports = {connectSignup,validateGrant,discoverFacebookAccounts,connectFacebookAccount,allowConversionEvents,addNumberToAgencyBusiness};
