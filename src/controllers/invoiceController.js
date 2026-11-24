@@ -758,11 +758,17 @@ exports.getInvoiceHTML = async (req, res) => {
 
     // Client / Bill To (per-invoice editable override -> user GST / User / Business -> Default)
     const clientName = invoice.clientName || userGst?.gstRegisteredName || invoice.businessId?.businessName || invoice.userId?.name || "Client Name";
-    const companyName = invoice.companyName || invoice.businessId?.businessName || "Company Name";
-    const rawAddress = invoice.addressLine1 || userGst?.address || "";
+    const companyNameRaw = invoice.companyName || invoice.businessId?.businessName || "";
+    const companyName = companyNameRaw && companyNameRaw.trim().toLowerCase() !== String(clientName).trim().toLowerCase()
+      ? companyNameRaw
+      : "";
+    const rawAddress = invoice.addressLine1 || userGst?.address || invoice.businessId?.address || "";
     const address = /^address line 1$/i.test(String(rawAddress).trim()) ? "" : rawAddress;
     const rawCity = invoice.cityStatePin || userGst?.cityState || "";
     const cityStatePin = /^city,\s*state\s*-?\s*pin$/i.test(String(rawCity).trim()) ? "" : rawCity;
+    const phoneDigits = String(invoice.userId?.mobile || invoice.businessId?.businessContact || "").replace(/\D/g, "");
+    const phoneLocal = phoneDigits.length === 12 && phoneDigits.startsWith("91") ? phoneDigits.slice(2) : phoneDigits.length === 10 ? phoneDigits : "";
+    const billPhone = phoneLocal ? `+91 ${phoneLocal.slice(0, 5)} ${phoneLocal.slice(5)}` : "";
     const gstNo = invoice.gstin ? `GSTIN: ${invoice.gstin}` : (userGst?.gstNumber ? `GSTIN: ${userGst.gstNumber}` : "");
 
     // Tagline (per-invoice editable override -> companyData -> Default)
@@ -788,7 +794,11 @@ exports.getInvoiceHTML = async (req, res) => {
     // Brand Footer (per-invoice editable override -> companyData -> Default)
     const brandParent = invoice.brandParent || companyData?.invoiceBrandParent || "Ayotrix Infotech Pvt Ltd";
     const brandSubtext = invoice.brandSubtext || companyData?.invoiceBrandSubtext || "IDEAS | TECHNOLOGY | GROWTH";
-    const brandPhone = invoice.brandPhone || companyData?.phone || "+91 98765 43210";
+    const dummyPhone = (value) => {
+      const digits = String(value || "").replace(/\D/g, "");
+      return !digits || digits.endsWith("9876543210");
+    };
+    const brandPhone = [companyData?.phone, invoice.brandPhone].find((value) => value && !dummyPhone(value)) || "";
     const brandEmail = invoice.brandEmail || companyData?.email || "info@ayotrix.com";
     const brandWebsite = invoice.brandWebsite || companyData?.website || "www.ayotrix.com";
     const brandCity = invoice.brandCity || companyData?.invoiceBrandCity || "Indore, Madhya Pradesh, India";
@@ -827,7 +837,8 @@ exports.getInvoiceHTML = async (req, res) => {
       ? storedDue.format("DD MMM YYYY")
       : createdMoment.clone().add(15, "days").format("DD MMM YYYY");
     const paidNotes = "This invoice is paid in full.\nThis is a computer generated invoice and does not require a physical signature.\nFor any queries, feel free to contact us.";
-    const notesForBill = paid ? (invoice.notes || paidNotes) : notesContent;
+    const stockPayNote = /please make the payment within the due date/i.test(String(invoice.notes || notesContent || ""));
+    const notesForBill = paid && stockPayNote ? paidNotes : notesContent;
     const bankLooksPlaceholder = /x{3,}/i.test(String(accountNumber)) || /0001234/.test(String(ifscCode));
     const paymentBlock = paid || bankLooksPlaceholder
       ? `<div class="payment-details-box">
@@ -1181,6 +1192,7 @@ exports.getInvoiceHTML = async (req, res) => {
           ${companyName ? `<div>${companyName}</div>` : ""}
           ${address ? `<div>${address}</div>` : ""}
           ${cityStatePin ? `<div>${cityStatePin}</div>` : ""}
+          ${billPhone ? `<div>${billPhone}</div>` : ""}
           ${gstNo ? `<div><strong>${gstNo}</strong></div>` : ""}
         </div>
       </div>
@@ -1282,7 +1294,7 @@ exports.getInvoiceHTML = async (req, res) => {
 
 
       <div class="contact-center">
-        <div>📞 ${brandPhone}</div>
+        ${brandPhone ? `<div>📞 ${brandPhone}</div>` : ""}
         <div>✉️ ${brandEmail}</div>
         <div>🌐 ${brandWebsite}</div>
         <div>📍 ${brandCity}</div>
@@ -1305,6 +1317,7 @@ exports.getInvoiceHTML = async (req, res) => {
 
 
     res.setHeader("Content-Type", "text/html");
+    res.setHeader("Cache-Control", "no-store");
     return res.send(html);
   } catch (error) {
     return res.status(500).send("Error rendering invoice: " + error.message);
