@@ -8,7 +8,7 @@ const LIMITS = Object.freeze({ campaignName: 50, headline: 40, primaryText: 250,
 const LANGUAGES = {
   hinglish: "Hinglish: Hindi written in Roman script, mixed naturally with common English words, the way Indian shop owners talk. No Devanagari.",
   hindi: "Hindi written in Devanagari script. Keep brand names and product words as they are.",
-  english: "Simple, warm English that is easy for an Indian audience to follow.",
+  english: "English only. Simple, clear English. No Hindi and no Hinglish.",
 };
 
 const TONES = {
@@ -160,9 +160,10 @@ function promptFor({ business, objective, language, tone, hint, imageUrl }) {
  * `source` is "ai", or "template" when the AI service is not set up or did not give a usable answer.
  * `api` lets a test pass a stand-in for the OpenAI client.
  */
-async function generate({ userId, business, adType, language, tone, hint, imageUrl }, { api } = {}) {
+async function generate({ userId, business, adType, tone, hint, imageUrl }, { api } = {}) {
   throttle(userId);
-  const lang = LANGUAGES[language] ? language : "hinglish";
+  // The app is English only. A Hindi or Hinglish request still comes back in English.
+  const lang = "english";
   const objective = OBJECTIVES[adType] || GENERIC_OBJECTIVE;
   const photo = safeImageUrl(imageUrl);
   const facts = { business, objective, language: lang, tone, hint: clean(hint, 300), imageUrl: photo };

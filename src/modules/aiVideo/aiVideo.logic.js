@@ -119,7 +119,7 @@ function estimateDuration(script) {
 // Template fallback used only when the AI writer is unavailable.
 function buildScript({ topic, tone, language }) {
   const subject = String(topic || "your offer").trim();
-  const lang = language || "hinglish";
+  const lang = language || "english";
   const style = tone || "enthusiastic";
   if (lang === "hindi") {
     return `नमस्ते! ${subject} के लिए यह वीडियो तैयार है। ऑफर साफ है, और आखिर में एक सीधा कदम है। ${style === "urgent" ? "ऑफर सीमित समय के लिए है।" : "आज ही देखें।"}`;

@@ -430,7 +430,7 @@ exports.aiFillCampaign = async (req, res) => {
           role: "system",
           content: [
             "You name WhatsApp marketing campaigns for MarketingKart.",
-            "The user may write the prompt in ANY language (Hindi, Hinglish, English, Tamil, etc.). Understand it and reply in JSON.",
+            "Write the campaign name in English only, even if the note is in another language.",
             'Return ONLY JSON: { "name": string }',
             "name rules: clear campaign title, max 50 characters, Title Case or natural casing, no hashtags, no emojis, no quotes.",
             "Prefer including festival/offer/audience when present (e.g. Diwali Flash Sale - VIP).",

@@ -381,7 +381,7 @@ async function createProject(userId, businessId, input, voiceFile = null) {
     throw httpError(400, `Keep the script under ${config.maxScriptChars} characters so the video stays short.`);
   }
   const format = FORMATS.has(input.format) ? input.format : "9:16";
-  const language = ["hindi", "hinglish", "english"].includes(input.language) ? input.language : "hinglish";
+  const language = ["hindi", "hinglish", "english"].includes(input.language) ? input.language : "english";
   const speed = parseSpeed(input.speed);
   const captions = String(input.captions || "bold");
   const captionsOn = captions !== "off";
@@ -535,7 +535,7 @@ async function createVoiceover(userId, businessId, input) {
   if (script.length > config.maxScriptChars) {
     throw httpError(400, `Keep the script under ${config.maxScriptChars} characters.`);
   }
-  const language = ["hindi", "hinglish", "english"].includes(input.language) ? input.language : "hinglish";
+  const language = ["hindi", "hinglish", "english"].includes(input.language) ? input.language : "english";
 
   let voiceId;
   try {
@@ -578,7 +578,7 @@ async function createVoiceover(userId, businessId, input) {
 
 async function listVoices(input) {
   requireProvider();
-  const language = ["hindi", "hinglish", "english"].includes(input.language) ? input.language : "hinglish";
+  const language = ["hindi", "hinglish", "english"].includes(input.language) ? input.language : "english";
   try {
     return { language, voices: await catalog.libraryVoices({ language, gender: input.gender, search: input.search }) };
   } catch (error) {
@@ -588,7 +588,7 @@ async function listVoices(input) {
 
 async function voicePreview(input) {
   requireProvider();
-  const language = ["hindi", "hinglish", "english"].includes(input.language) ? input.language : "hinglish";
+  const language = ["hindi", "hinglish", "english"].includes(input.language) ? input.language : "english";
   try {
     const { name, previewUrl } = await catalog.resolveVoiceDetails({ voice: input.voice, language });
     if (!previewUrl) throw httpError(404, "No sample is available for this voice.");

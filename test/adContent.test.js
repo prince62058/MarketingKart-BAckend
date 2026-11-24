@@ -72,9 +72,10 @@ test("without an AI key the customer still gets complete ad text built from thei
   assert.match(content.primaryText, /WhatsApp/);
 });
 
-test("it writes in the language the customer picked", { skip }, async () => {
+test("ad text is always English, including when an older app asks for Hindi", { skip }, async () => {
   const hindi = (await generate(aliceToken, { ...valid(), language: "hindi" })).body.data.content;
-  assert.match(hindi.primaryText, /[ऀ-ॿ]/, "Devanagari");
+  assert.match(hindi.primaryText, /Welcome to Sharma Sweets/);
+  assert.doesNotMatch(hindi.primaryText, /[ऀ-ॿ]/);
   const english = (await generate(aliceToken, { ...valid(), language: "english" })).body.data.content;
   assert.match(english.primaryText, /Welcome to Sharma Sweets/);
   const unknown = await generate(aliceToken, { ...valid(), language: "klingon" });
@@ -120,7 +121,7 @@ test("the AI is asked with the business facts, the goal and the limits, and its 
   const system = body.messages[0].content;
   const user = body.messages[1].content;
   assert.match(system, /send the business a WhatsApp message/);
-  assert.match(system, /Hinglish/);
+  assert.match(system, /English only/);
   assert.match(system, /at most 40 characters/);
   assert.match(user, /Sharma Sweets/);
   assert.match(user, /Mithai, Gift boxes/);

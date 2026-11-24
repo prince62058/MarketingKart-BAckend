@@ -9,7 +9,7 @@ exports.generate = async (req, res) => {
   const { businessId, adType, language, tone, hint, imageUrl } = req.body || {};
   if (!businessId) return refuse(res, 400, "Choose a business first.");
   if (!adType || typeof adType !== "string" || adType.length > 40) return refuse(res, 400, "Choose the type of ad first.");
-  if (language !== undefined && !service.LANGUAGES[language]) return refuse(res, 400, "Choose Hinglish, Hindi or English.");
+  if (language !== undefined && !service.LANGUAGES[language]) return refuse(res, 400, "Use English.");
   if (hint !== undefined && (typeof hint !== "string" || hint.length > 500)) return refuse(res, 400, "Keep the note under 500 characters.");
   if (imageUrl !== undefined && imageUrl !== null && imageUrl !== "" && !service.safeImageUrl(imageUrl)) {
     return refuse(res, 400, "Use a photo that finished uploading.");
