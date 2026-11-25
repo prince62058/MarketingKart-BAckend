@@ -11,8 +11,10 @@ const planModel = require("../models/planModel.js");
 const { adInvoiceLines, legacyAdInvoiceLines, campaignDays } = require("../helpers/adInvoice.js");
 const { nextInvoiceNumber } = require("../services/serviceInvoiceService");
 const { invoiceTheme } = require("../helpers/invoiceThemes.js");
+const { pickChrome, escapeHtml, placeholderBank, chromeFromBody } = require("../helpers/invoiceChrome.js");
+const { resolveTemplate } = require("../helpers/invoiceTemplates.js");
 const { mkFullLogoB64, mkIconLogoB64 } = require("../utils/invoiceLogos.js");
-const { poweredByBlock, poweredByCss } = require("../utils/ayotrixLogo.js");
+const { ayotrixLogoB64, poweredByBlock, poweredByCss } = require("../utils/ayotrixLogo.js");
 
 
 exports.generateInvoice = async (
@@ -646,10 +648,17 @@ exports.createInvoice = async (req, res) => {
     const calculatedGst = gstAmount !== undefined ? Number(gstAmount) : Math.round(calculatedSubTotal * 0.18);
     const calculatedTotal = totalAmount !== undefined ? Number(totalAmount) : (calculatedSubTotal + calculatedGst);
 
+    const wording = chromeFromBody(req.body);
+    for (const key of ["clientName", "companyName", "addressLine1", "cityStatePin", "gstin"]) {
+      if (req.body[key] !== undefined) wording[key] = String(req.body[key] ?? "").slice(0, 300);
+    }
+    if (req.body.gstRate !== undefined) wording.gstRate = Number(req.body.gstRate) || 0;
+    if (/^[0-9a-f]{24}$/i.test(String(req.body.templateId || ""))) wording.templateId = req.body.templateId;
     const newInvoice = await invoiceModel.create({
       userId,
       businessId,
       invoiceNumber,
+      ...wording,
       items: items.map((it) => ({
         description: it.description,
         subDescription: it.subDescription || "",
@@ -703,6 +712,13 @@ exports.updateInvoice = async (req, res) => {
     if (paymentTerms) updateFields.paymentTerms = paymentTerms;
     if (status) updateFields.status = status;
     if (invoiceNumber) updateFields.invoiceNumber = invoiceNumber;
+    Object.assign(updateFields, chromeFromBody(req.body));
+    for (const key of ["clientName", "companyName", "addressLine1", "cityStatePin", "gstin"]) {
+      if (req.body[key] !== undefined) updateFields[key] = String(req.body[key] ?? "").slice(0, 300);
+    }
+    if (req.body.gstRate !== undefined) updateFields.gstRate = Number(req.body.gstRate) || 0;
+    if (req.body.templateId === null || req.body.templateId === "") updateFields.templateId = null;
+    else if (/^[0-9a-f]{24}$/i.test(String(req.body.templateId || ""))) updateFields.templateId = req.body.templateId;
 
     const updated = await invoiceModel.findByIdAndUpdate(
       invoiceId,
@@ -737,24 +753,14 @@ exports.deleteInvoice = async (req, res) => {
   }
 };
 
-// Render styled HTML matching reference invoice template
-exports.getInvoiceHTML = async (req, res) => {
+// Render styled HTML matching the MarketingKart invoice. Customer lines stay on the invoice;
+// wording comes from its template.
+async function renderStoredInvoice(invoice) {
   try {
-    const invoiceId = req.query.invoiceId || req.params.invoiceId;
-    const invoice = await invoiceModel
-      .findById(invoiceId)
-      .populate("userId")
-      .populate("businessId")
-      .populate("adsTypeId", "title");
-
-    if (!invoice) {
-      return res.status(404).send("Invoice not found");
-    }
-
     // The colours of the service this invoice bills (Meta Ads orange, WhatsApp green, ...).
     const theme = invoiceTheme(invoice);
     const companyData = await companyModel.findOne();
-    const userGst = await GstOfUserModel.findOne({ userId: invoice.userId?._id });
+    const userGst = invoice.userId?._id ? await GstOfUserModel.findOne({ userId: invoice.userId._id }) : null;
 
     // Client / Bill To (per-invoice editable override -> user GST / User / Business -> Default)
     const clientName = invoice.clientName || userGst?.gstRegisteredName || invoice.businessId?.businessName || invoice.userId?.name || "Client Name";
@@ -769,41 +775,35 @@ exports.getInvoiceHTML = async (req, res) => {
     const phoneDigits = String(invoice.userId?.mobile || invoice.businessId?.businessContact || "").replace(/\D/g, "");
     const phoneLocal = phoneDigits.length === 12 && phoneDigits.startsWith("91") ? phoneDigits.slice(2) : phoneDigits.length === 10 ? phoneDigits : "";
     const billPhone = phoneLocal ? `+91 ${phoneLocal.slice(0, 5)} ${phoneLocal.slice(5)}` : "";
-    const gstNo = invoice.gstin ? `GSTIN: ${invoice.gstin}` : (userGst?.gstNumber ? `GSTIN: ${userGst.gstNumber}` : "");
+    const customerGst = String(invoice.gstin || userGst?.gstNumber || "").trim();
 
-    // Tagline (per-invoice editable override -> companyData -> Default)
-    const tagline = (invoice.tagline || companyData?.invoiceTagline || "Smart Marketing\nStronger Business\nwith AI").replace(/\n/g, "<br/>");
-
-    // Thank You Text
-    const thankYouHeading = invoice.thankYouHeading || "Thank You!";
-    const thankYouText = invoice.thankYouText || companyData?.invoiceThankYouText || "for choosing MarketingKart.ai";
-
-    // Bank & Payment Details (per-invoice editable override -> companyData -> Default)
-    const bankName = invoice.bankName || companyData?.invoiceBankName || "HDFC Bank";
-    const accountName = invoice.accountName || companyData?.invoiceAccountName || "Ayotrix Infotech Pvt Ltd";
-    const accountNumber = invoice.accountNumber || companyData?.invoiceAccountNumber || "502000XXXXXXXX";
-    const ifscCode = invoice.ifscCode || companyData?.invoiceIfscCode || "HDFC0001234";
-    const upiId = invoice.upiId || companyData?.invoiceUpiId || "ayotrix@hdfcbank";
-
-    // Notes & Signatory (per-invoice editable override -> companyData -> Default)
-    const notesContent = invoice.notes || companyData?.invoiceNotes || "Please make the payment within the due date.\nThis is a computer generated invoice and does not require a physical signature.\nFor any queries, feel free to contact us.";
-    const signatoryFor = invoice.signatoryFor || "For MarketingKart.ai";
-    const signatoryName = invoice.signatoryName || "Dkumar";
-    const signatoryLabel = invoice.signatoryLabel || "Authorized Signatory";
-
-    // Brand Footer (per-invoice editable override -> companyData -> Default)
-    const brandParent = invoice.brandParent || companyData?.invoiceBrandParent || "Ayotrix Infotech Pvt Ltd";
-    const brandSubtext = invoice.brandSubtext || companyData?.invoiceBrandSubtext || "IDEAS | TECHNOLOGY | GROWTH";
-    const dummyPhone = (value) => {
-      const digits = String(value || "").replace(/\D/g, "");
-      return !digits || digits.endsWith("9876543210");
-    };
-    const brandPhone = [companyData?.phone, invoice.brandPhone].find((value) => value && !dummyPhone(value)) || "";
-    const brandEmail = invoice.brandEmail || companyData?.email || "info@ayotrix.com";
-    const brandWebsite = invoice.brandWebsite || companyData?.website || "www.ayotrix.com";
-    const brandCity = invoice.brandCity || companyData?.invoiceBrandCity || "Indore, Madhya Pradesh, India";
-    const brandMotto = (invoice.brandMotto || "Let's Build\na Smarter\nTomorrow").replace(/\n/g, "<br/>");
-    const bottomServicesBar = invoice.bottomServicesBar || "Social Media Marketing | Google Ads | Meta Ads | WhatsApp Marketing | AI Solutions | Lead Management";
+    // Wording comes from the invoice's template. A line changed on this bill alone still wins.
+    // The logo, colours and table stay the MarketingKart layout.
+    const template = await resolveTemplate(invoice);
+    const chrome = pickChrome(invoice, template, companyData);
+    const e = escapeHtml;
+    const tagline = e(chrome.tagline).replace(/\n/g, "<br/>");
+    const thankYouHeading = e(chrome.thankYouHeading);
+    const thankYouText = e(chrome.thankYouText);
+    const bankName = e(chrome.bankName);
+    const accountName = e(chrome.accountName);
+    const accountNumber = e(chrome.accountNumber);
+    const ifscCode = e(chrome.ifscCode);
+    const upiId = e(chrome.upiId);
+    const notesContent = chrome.notes;
+    const signatoryFor = e(chrome.signatoryFor);
+    const signatoryName = e(chrome.signatoryName);
+    const signatoryLabel = e(chrome.signatoryLabel);
+    const brandParent = e(chrome.brandParent);
+    const brandSubtext = e(chrome.brandSubtext);
+    const brandPhone = e(chrome.brandPhone);
+    const brandEmail = e(chrome.brandEmail);
+    const brandWebsite = e(chrome.brandWebsite);
+    const brandCity = e(chrome.brandCity);
+    const brandMotto = e(chrome.brandMotto).replace(/\n/g, "<br/>");
+    const bottomServicesBar = e(chrome.bottomServicesBar);
+    const label = (key) => e(chrome[key] || "");
+    const servicePill = chrome.serviceLabel ? e(chrome.serviceLabel) : e(theme.label);
 
     // Ad invoices saved before they kept their own lines have only the amounts: show them as the
     // ad budget, platform fee and gateway fee they were, not as a generic service line.
@@ -836,39 +836,46 @@ exports.getInvoiceHTML = async (req, res) => {
     const dueDateFormatted = dueIsUsable
       ? storedDue.format("DD MMM YYYY")
       : createdMoment.clone().add(15, "days").format("DD MMM YYYY");
-    const paidNotes = "This invoice is paid in full.\nThis is a computer generated invoice and does not require a physical signature.\nFor any queries, feel free to contact us.";
     const stockPayNote = /please make the payment within the due date/i.test(String(invoice.notes || notesContent || ""));
-    const notesForBill = paid && stockPayNote ? paidNotes : notesContent;
-    const bankLooksPlaceholder = /x{3,}/i.test(String(accountNumber)) || /0001234/.test(String(ifscCode));
-    const paymentBlock = paid || bankLooksPlaceholder
-      ? `<div class="payment-details-box">
-        <div class="section-title-orange">${paid ? "Payment" : "Payment status"}</div>
-        <div class="detail-line"><span>Status</span> <strong>: ${paid ? "Paid" : (invoice.status || "Due")}</strong></div>
-        ${invoice.paymentMethod ? `<div class="detail-line"><span>Paid via</span> <strong>: ${invoice.paymentMethod}</strong></div>` : ""}
-        ${paid ? `<div class="detail-line"><span>Paid on</span> <strong>: ${dateFormatted}</strong></div>` : ""}
-      </div>`
-      : `<div class="payment-details-box">
-        <div class="section-title-orange">Payment Details</div>
-        <div class="detail-line"><span>Bank Name</span> <strong>: ${bankName}</strong></div>
-        <div class="detail-line"><span>Account Name</span> <strong>: ${accountName}</strong></div>
-        <div class="detail-line"><span>Account No.</span> <strong>: ${accountNumber}</strong></div>
-        <div class="detail-line"><span>IFSC Code</span> <strong>: ${ifscCode}</strong></div>
-        <div class="detail-line"><span>UPI ID</span> <strong>: ${upiId}</strong></div>
-      </div>`;
-
+    const notesForBill = paid && stockPayNote ? chrome.paidNotes : notesContent;
+    const invoiceNo = invoice.invoiceNumber || `MKAI/${createdMoment.format("YYYY")}/${String(invoice._id || "").slice(-4).toUpperCase()}`;
+    const money = (amount) => Number(amount || 0).toLocaleString("en-IN");
+    const bankLooksPlaceholder = !invoice._preview && placeholderBank(chrome.accountNumber, chrome.ifscCode);
+    const kv = (rows) => `<table class="kv">${rows.filter(Boolean).map(([label, value]) => `<tr><td>${label}</td><td>${value}</td></tr>`).join("")}</table>`;
+    const metaTable = kv([
+      [label("invoiceNoLabel"), e(invoiceNo)],
+      [label("invoiceDateLabel"), dateFormatted],
+      ...(paid
+        ? [[label("statusLabel"), label("paidWord")]]
+        : [[label("dueDateLabel"), dueDateFormatted], [label("paymentTermsLabel"), e(chrome.paymentTerms || "Net 15 Days")]]),
+      invoice.paymentMethod ? [label("paidViaLabel"), e(invoice.paymentMethod)] : null,
+      invoice.transactionId ? [label("paymentIdLabel"), e(invoice.transactionId)] : null,
+      String(chrome.companyGstin || "").trim() ? [label("companyGstLabel"), e(chrome.companyGstin)] : null,
+    ]);
+    const paymentTitle = paid ? label("paidTitle") : (bankLooksPlaceholder ? label("paymentStatusTitle") : label("paymentTitle"));
+    const paymentTable = paid || bankLooksPlaceholder
+      ? kv([
+          [label("statusLabel"), paid ? label("paidWord") : e(String(invoice.status || "Due"))],
+          invoice.paymentMethod ? [label("paidViaLabel"), e(invoice.paymentMethod)] : null,
+          paid ? [label("paidOnLabel"), dateFormatted] : null,
+        ])
+      : kv([
+          [label("bankNameLabel"), bankName],
+          [label("accountNameLabel"), accountName],
+          [label("accountNumberLabel"), accountNumber],
+          [label("ifscLabel"), ifscCode],
+          [label("upiLabel"), upiId],
+        ]);
 
     const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Invoice - ${invoice.invoiceNumber || invoice._id}</title>
+  <title>Invoice - ${e(invoiceNo)}</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    @page {
-      size: A4 portrait;
-      margin: 6mm 8mm;
-    }
+    @page { size: A4 portrait; margin: 6mm 8mm; }
     html, body {
       font-family: 'Inter', -apple-system, sans-serif;
       color: #1e293b;
@@ -880,346 +887,109 @@ exports.getInvoiceHTML = async (req, res) => {
       print-color-adjust: exact !important;
     }
     @media print {
-      html, body { 
-        padding: 0 !important; 
-        margin: 0 !important;
-        max-width: 100% !important;
-        width: 100% !important;
-      }
+      html, body { padding: 0 !important; margin: 0 !important; max-width: 100% !important; width: 100% !important; }
       .no-print { display: none !important; }
-      .page-container {
-        page-break-inside: avoid !important;
-        break-inside: avoid !important;
-      }
+      .page-container { page-break-inside: avoid !important; break-inside: avoid !important; }
     }
-    .header-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      margin-bottom: 24px;
-    }
-    .brand-logo-wrap {
-      display: flex;
-      align-items: flex-start;
-    }
-    .tagline-box {
-      text-align: right;
-      font-size: 14px;
-      font-weight: 700;
-      color: #0f172a;
-      line-height: 1.35;
-      max-width: 220px;
-      letter-spacing: -0.2px;
-    }
-    .invoice-title-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      margin-bottom: 20px;
-    }
-    .bill-to-title {
-      color: ${theme.primary};
-      font-size: 15px;
-      font-weight: 700;
-      margin-bottom: 4px;
-    }
-    .client-name {
-      font-size: 18px;
-      font-weight: 800;
-      color: #0f172a;
-      margin-bottom: 3px;
-    }
-    .client-meta {
-      font-size: 12px;
-      color: #334155;
-      line-height: 1.45;
-    }
-    .invoice-meta-table {
-      text-align: right;
-    }
-    .invoice-heading {
-      font-size: 34px;
-      font-weight: 900;
-      color: ${theme.dark};
-      letter-spacing: -0.5px;
-      margin-bottom: 8px;
-      line-height: 1;
-    }
-    .service-tag {
-      display: inline-block;
-      background: ${theme.soft};
-      color: ${theme.dark};
-      border: 1px solid ${theme.border};
-      font-size: 11px;
-      font-weight: 700;
-      padding: 3px 10px;
-      border-radius: 999px;
-      margin-bottom: 8px;
-    }
-    .meta-line {
-      font-size: 12px;
-      color: #334155;
-      margin-bottom: 3px;
-    }
-    .meta-line strong {
-      color: #0f172a;
-    }
-    /* Items Table */
-    .table-wrap {
-      border-radius: 6px;
-      overflow: hidden;
-      border: 1px solid ${theme.primary};
-      margin-bottom: 14px;
-    }
-    table.data-table {
-      width: 100%;
-      border-collapse: collapse;
-    }
-    table.data-table thead th {
-      background: ${theme.primary};
-      color: #ffffff;
-      padding: 9px 12px;
-      font-size: 12px;
-      font-weight: 700;
-      text-align: left;
-    }
+    .header-row { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; }
+    .tagline-box { text-align: right; font-size: 14px; font-weight: 700; color: #0f172a; line-height: 1.35; max-width: 220px; letter-spacing: -0.2px; }
+    .header-rule { height: 3px; border-radius: 99px; background: linear-gradient(90deg, ${theme.primary}, ${theme.border}); margin-bottom: 18px; }
+    .bill-to-title { color: ${theme.primary}; font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+    .client-name { font-size: 18px; font-weight: 800; color: #0f172a; margin-bottom: 3px; }
+    .client-meta { font-size: 12px; color: #334155; line-height: 1.5; }
+    .invoice-heading { text-align: right; font-size: 34px; font-weight: 900; color: ${theme.dark}; letter-spacing: -0.5px; line-height: 1; margin-bottom: 8px; }
+    .paid-pill { display: inline-block; margin-left: 8px; vertical-align: 7px; background: #15803d; color: #fff; font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; padding: 4px 10px; border-radius: 999px; }
+    .service-tag { display: inline-block; float: right; clear: both; background: ${theme.soft}; color: ${theme.dark}; border: 1px solid ${theme.border}; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 999px; margin-bottom: 8px; }
+    .section-title { color: ${theme.dark}; font-size: 13px; font-weight: 700; margin-bottom: 6px; }
+    table.sheet { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+    table.sheet > tbody > tr > td { border: 1px solid ${theme.border}; padding: 12px 14px; vertical-align: top; width: 50%; background: #fff; }
+    table.kv { width: 100%; border-collapse: collapse; }
+    table.kv td { border: none; border-bottom: 1px solid #eef2f6; padding: 6px 0; font-size: 12px; vertical-align: top; background: transparent; }
+    table.kv tr:last-child td { border-bottom: none; }
+    table.kv td:first-child { width: 46%; color: #64748b; font-weight: 600; }
+    table.kv td:last-child { color: #0f172a; font-weight: 700; text-align: right; }
+    .table-wrap { border-radius: 8px; overflow: hidden; border: 1px solid ${theme.primary}; margin-bottom: 16px; }
+    table.data-table { width: 100%; border-collapse: collapse; }
+    table.data-table th, table.data-table td { border: 1px solid ${theme.line}; }
+    table.data-table thead th { background: ${theme.primary}; color: #ffffff; padding: 10px 12px; font-size: 12px; font-weight: 700; text-align: left; border-color: ${theme.dark}; }
     table.data-table thead th.text-right { text-align: right; }
     table.data-table thead th.text-center { text-align: center; }
-    table.data-table tbody td {
-      padding: 8px 12px;
-      font-size: 11.5px;
-      border-bottom: 1px solid #f1f5f9;
-      vertical-align: middle;
-    }
-    table.data-table tbody tr:nth-child(even) {
-      background: #f8fafc;
-    }
-    .item-desc-title {
-      font-weight: 700;
-      color: #0f172a;
-      font-size: 12px;
-    }
-    .item-desc-sub {
-      font-size: 10.5px;
-      color: #64748b;
-      margin-top: 1px;
-    }
-    /* Totals Box */
-    .summary-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      margin-bottom: 14px;
-    }
-    .thank-you-wrap {
-      padding-top: 4px;
-    }
-    .thank-you-script {
-      font-size: 34px;
-      font-family: 'Brush Script MT', cursive, sans-serif;
-      color: ${theme.primary};
-      line-height: 1;
-      transform: rotate(-3deg);
-      display: inline-block;
-    }
-    .thank-you-sub {
-      font-size: 12px;
-      font-weight: 600;
-      color: #334155;
-      margin-top: 4px;
-    }
-    .totals-card {
-      width: 310px;
-      background: ${theme.soft};
-      border-radius: 6px;
-      overflow: hidden;
-      border: 1px solid ${theme.border};
-    }
-    .totals-card-row {
-      display: flex;
-      justify-content: space-between;
-      padding: 6px 14px;
-      font-size: 12px;
-      font-weight: 600;
-      color: #334155;
-      border-bottom: 1px solid ${theme.line};
-    }
-    .totals-card-row.grand-total {
-      background: ${theme.primary};
-      color: #ffffff;
-      font-size: 14px;
-      font-weight: 800;
-      border-bottom: none;
-      padding: 8px 14px;
-    }
-    /* Lower Details */
-    .lower-row {
-      display: flex;
-      justify-content: space-between;
-      gap: 20px;
-      margin-bottom: 14px;
-    }
-    .payment-details-box {
-      flex: 1;
-      background: #f8fafc;
-      border: 1px solid #e2e8f0;
-      border-radius: 6px;
-      padding: 10px 14px;
-    }
-    .section-title-orange {
-      color: ${theme.dark};
-      font-size: 13px;
-      font-weight: 700;
-      margin-bottom: 6px;
-    }
-    .detail-line {
-      font-size: 11.5px;
-      color: #334155;
-      margin-bottom: 3px;
-      display: flex;
-      justify-content: space-between;
-    }
-    .notes-box {
-      flex: 1;
-      font-size: 10.5px;
-      color: #475569;
-      line-height: 1.45;
-    }
-    .notes-box ul {
-      margin-left: 14px;
-      margin-top: 2px;
-    }
-    .signatory-box {
-      margin-top: 10px;
-      text-align: right;
-    }
-    .signatory-title {
-      font-size: 11px;
-      font-weight: 700;
-      color: #0f172a;
-    }
-    .sign-script {
-      font-family: 'Brush Script MT', cursive;
-      font-size: 24px;
-      color: #334155;
-      margin: 2px 0;
-    }
-    /* Bottom Banner Footer */
-    .bottom-banner {
-      background: #0b1329;
-      color: #ffffff;
-      border-radius: 6px;
-      padding: 12px 18px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-top: 10px;
-    }
-    .brand-left-tag {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-    .brand-left-title {
-      font-size: 14.5px;
-      font-weight: 800;
-      color: #ffffff;
-    }
-    .brand-left-sub {
-      font-size: 8px;
-      letter-spacing: 1.3px;
-      color: #94a3b8;
-      margin-top: 1px;
-    }
-    .contact-center {
-      font-size: 10px;
-      color: #cbd5e1;
-      line-height: 1.45;
-    }
-    .smarter-right {
-      text-align: right;
-      font-size: 12px;
-      font-weight: 700;
-      color: #ffffff;
-      line-height: 1.25;
-      border-left: 1px solid #334155;
-      padding-left: 14px;
-    }
-    .sub-categories-bar {
-      margin-top: 8px;
-      text-align: center;
-      font-size: 9px;
-      color: #64748b;
-      letter-spacing: 0.2px;
-    }
+    table.data-table tbody td { padding: 10px 12px; font-size: 12px; vertical-align: middle; }
+    table.data-table tbody tr:nth-child(even) { background: #f8fafc; }
+    .item-desc-title { font-weight: 700; color: #0f172a; font-size: 12.5px; }
+    .item-desc-sub { font-size: 11px; color: #64748b; margin-top: 2px; }
+    .summary-row { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; gap: 20px; }
+    .thank-you-script { font-size: 36px; font-family: 'Brush Script MT', cursive, sans-serif; color: ${theme.primary}; line-height: 1; transform: rotate(-3deg); display: inline-block; }
+    .thank-you-sub { font-size: 12px; font-weight: 600; color: #334155; margin-top: 6px; }
+    .totals-card { width: 320px; background: ${theme.soft}; border-radius: 8px; overflow: hidden; border: 1px solid ${theme.border}; }
+    table.totals { width: 100%; border-collapse: collapse; }
+    table.totals td { padding: 8px 14px; font-size: 12px; font-weight: 600; color: #334155; border-bottom: 1px solid ${theme.line}; }
+    table.totals td.r { text-align: right; }
+    table.totals tr.grand-total td { background: ${theme.primary}; color: #ffffff; font-size: 15px; font-weight: 800; border-bottom: none; padding: 10px 14px; }
+    .notes-box { font-size: 11px; color: #475569; line-height: 1.5; }
+    .notes-box ul { margin-left: 14px; margin-top: 2px; }
+    .signatory-box { margin-top: 12px; text-align: right; }
+    .signatory-title { font-size: 11px; font-weight: 700; color: #0f172a; }
+    .sign-script { font-family: 'Brush Script MT', cursive; font-size: 26px; color: #334155; margin: 2px 0; }
+    .bottom-banner { background: #0b1329; color: #ffffff; border-radius: 8px; padding: 14px 18px; display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-top: 8px; }
+    .brand-left-title { font-size: 15px; font-weight: 800; color: #ffffff; }
+    .brand-left-sub { font-size: 8px; letter-spacing: 1.3px; color: #94a3b8; margin-top: 2px; }
+    .contact-center { font-size: 11px; color: #cbd5e1; line-height: 1.5; }
+    .smarter-right { text-align: right; font-size: 13px; font-weight: 700; color: #ffffff; line-height: 1.25; border-left: 1px solid #334155; padding-left: 16px; }
+    .sub-categories-bar { margin-top: 8px; text-align: center; font-size: 9px; color: #64748b; letter-spacing: 0.2px; }
     ${poweredByCss}
+    .brand-lockup .brand-kicker { font-size: 10px; font-weight: 700; letter-spacing: 2.2px; color: #475569; margin-top: 5px; }
+    .brand-lockup .ayotrix-powered { margin-top: 6px; text-align: left; }
+    .brand-lockup .ayotrix-powered-label { font-size: 8px; letter-spacing: 0.12em; margin: 0; line-height: 1; color: #94a3b8; }
+    .brand-lockup .ayotrix-powered img { height: 64px; width: auto; display: block; margin: -7px 0 -8px -31px; }
   </style>
-
-
 </head>
 <body style="margin: 0; padding: 0;">
-  <!-- Print & Download Floating Toolbar -->
   <div class="no-print" style="max-width: 820px; margin: 12px auto 6px; text-align: right; padding: 0 16px;">
-    <button onclick="window.print()" style="background: ${theme.dark}; color: #fff; border: none; padding: 8px 18px; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 13px; box-shadow: 0 2px 6px rgba(15,23,42,0.16);">
-      🖨️ Print / Download PDF
-    </button>
+    <button onclick="window.print()" style="background: ${theme.dark}; color: #fff; border: none; padding: 8px 18px; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 13px; box-shadow: 0 2px 6px rgba(15,23,42,0.16);">Print / Download PDF</button>
   </div>
 
   <div class="page-container" style="max-width: 820px; margin: 0 auto; padding: 18px 26px; background: #ffffff; box-sizing: border-box;">
-    <!-- Header -->
     <div class="header-row">
-      <div class="brand-logo-wrap">
-        <div>
-          <img src="${mkFullLogoB64}" alt="MarketingKart.ai" style="height: 52px; width: auto; object-fit: contain; display: block;" />
-          <div style="font-size: 10px; font-weight: 700; letter-spacing: 3.5px; color: #475569; margin-top: 6px; padding-left: 3px;">
-            LEADS &nbsp;|&nbsp; AUTOMATE &nbsp;|&nbsp; GROW
+      <div class="brand-lockup">
+        <img src="${mkFullLogoB64}" alt="MarketingKart.ai" style="height: 56px; width: auto; object-fit: contain; display: block;" />
+        <div class="brand-kicker">${label("brandKicker")}</div>
+        <div class="ayotrix-powered"><div class="ayotrix-powered-label">${label("poweredByLabel")}</div><img src="${ayotrixLogoB64}" alt="Ayotrix Infotech" /></div>
+      </div>
+      <div class="tagline-box">${tagline}</div>
+    </div>
+    <div class="header-rule"></div>
+
+    <table class="sheet">
+      <tr>
+        <td>
+          <div class="bill-to-title">${label("billToTitle")}</div>
+          <div class="client-name">${e(clientName)}</div>
+          <div class="client-meta">
+            ${companyName ? `<div>${e(companyName)}</div>` : ""}
+            ${address ? `<div>${e(address)}</div>` : ""}
+            ${cityStatePin ? `<div>${e(cityStatePin)}</div>` : ""}
+            ${billPhone ? `<div>${e(billPhone)}</div>` : ""}
+            ${customerGst ? `<div><strong>${label("customerGstLabel")}: ${e(customerGst)}</strong></div>` : ""}
           </div>
-        </div>
-      </div>
-      <div class="tagline-box">
-        ${tagline}
-      </div>
-    </div>
+        </td>
+        <td>
+          <div class="invoice-heading">${label("invoiceTitle")}${paid ? `<span class="paid-pill">${label("paidWord")}</span>` : ""}</div>
+          <div class="service-tag">${servicePill}</div>
+          ${metaTable}
+        </td>
+      </tr>
+    </table>
 
-
-
-    <!-- Invoice Meta Row -->
-    <div class="invoice-title-row">
-      <div>
-        <div class="bill-to-title">Bill To</div>
-        <div class="client-name">${clientName}</div>
-        <div class="client-meta">
-          ${companyName ? `<div>${companyName}</div>` : ""}
-          ${address ? `<div>${address}</div>` : ""}
-          ${cityStatePin ? `<div>${cityStatePin}</div>` : ""}
-          ${billPhone ? `<div>${billPhone}</div>` : ""}
-          ${gstNo ? `<div><strong>${gstNo}</strong></div>` : ""}
-        </div>
-      </div>
-      <div class="invoice-meta-table">
-        <div class="invoice-heading">INVOICE</div>
-        <div class="service-tag">${theme.label}</div>
-        <div class="meta-line">Invoice No &nbsp;&nbsp;: &nbsp;<strong>${invoice.invoiceNumber || `MKAI/${dateFormatted.split(" ")[2]}/${String(invoice._id).slice(-4).toUpperCase()}`}</strong></div>
-        <div class="meta-line">Invoice Date : &nbsp;<strong>${dateFormatted}</strong></div>
-        ${paid
-          ? `<div class="meta-line">Status &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: &nbsp;<strong>Paid</strong></div>`
-          : `<div class="meta-line">Due Date &nbsp;&nbsp;&nbsp;&nbsp;: &nbsp;<strong>${dueDateFormatted}</strong></div>
-        <div class="meta-line">Payment Terms: &nbsp;<strong>${invoice.paymentTerms || "Net 15 Days"}</strong></div>`}
-        ${invoice.paymentMethod ? `<div class="meta-line">Paid via &nbsp;&nbsp;&nbsp;&nbsp;: &nbsp;<strong>${invoice.paymentMethod}</strong></div>` : ""}
-        ${invoice.transactionId ? `<div class="meta-line">Payment ID &nbsp;: &nbsp;<strong>${invoice.transactionId}</strong></div>` : ""}
-      </div>
-    </div>
-
-    <!-- Items Table -->
     <div class="table-wrap">
       <table class="data-table">
         <thead>
           <tr>
-            <th style="width: 40px;">#</th>
-            <th>Description</th>
-            <th class="text-center" style="width: 60px;">Qty</th>
-            <th class="text-right" style="width: 130px;">Unit Price (INR)</th>
-            <th class="text-right" style="width: 130px;">Amount (INR)</th>
+            <th style="width: 40px;">${label("colHash")}</th>
+            <th>${label("colDescription")}</th>
+            <th class="text-center" style="width: 60px;">${label("colQty")}</th>
+            <th class="text-right" style="width: 130px;">${label("colPrice")}</th>
+            <th class="text-right" style="width: 130px;">${label("colAmount")}</th>
           </tr>
         </thead>
         <tbody>
@@ -1227,100 +997,133 @@ exports.getInvoiceHTML = async (req, res) => {
             <tr>
               <td style="color: #64748b; font-weight: 600;">${idx + 1}</td>
               <td>
-                <div class="item-desc-title">${it.description}</div>
-                ${it.subDescription ? `<div class="item-desc-sub">${it.subDescription}</div>` : ""}
+                <div class="item-desc-title">${e(it.description || "")}</div>
+                ${it.subDescription ? `<div class="item-desc-sub">${e(it.subDescription)}</div>` : ""}
               </td>
               <td class="text-center" style="font-weight: 600;">${it.qty || 1}</td>
-              <td class="text-right" style="font-weight: 600;">${(Number(it.unitPrice) || 0).toLocaleString("en-IN")}</td>
-              <td class="text-right" style="font-weight: 700; color: #0f172a;">${(Number(it.amount) || 0).toLocaleString("en-IN")}</td>
+              <td class="text-right" style="font-weight: 600;">₹ ${money(it.unitPrice)}</td>
+              <td class="text-right" style="font-weight: 700; color: #0f172a;">₹ ${money(it.amount)}</td>
             </tr>
           `).join("")}
         </tbody>
       </table>
     </div>
 
-    <!-- Totals Section -->
     <div class="summary-row">
       <div class="thank-you-wrap">
         <div class="thank-you-script">${thankYouHeading}</div>
         <div class="thank-you-sub">${thankYouText}</div>
       </div>
-
       <div class="totals-card">
-        <div class="totals-card-row">
-          <span>Subtotal</span>
-          <span>${subTotal.toLocaleString("en-IN")}</span>
-        </div>
-        ${gstVal > 0 || gstRate > 0 ? `<div class="totals-card-row">
-          <span>GST (${gstRate}%${invoice.gstInclusive ? ", included" : ""})</span>
-          <span>${gstVal.toLocaleString("en-IN")}</span>
-        </div>` : ""}
-        <div class="totals-card-row grand-total">
-          <span>Total Amount (INR)</span>
-          <span>₹ ${totalVal.toLocaleString("en-IN")}</span>
-        </div>
+        <table class="totals">
+          <tr><td>${label("subtotalLabel")}</td><td class="r">₹ ${money(subTotal)}</td></tr>
+          ${gstVal > 0 || gstRate > 0 ? `<tr><td>${label("gstLabel")} (${gstRate}%${invoice.gstInclusive ? ", included" : ""})</td><td class="r">₹ ${money(gstVal)}</td></tr>` : ""}
+          <tr class="grand-total"><td>${label("totalLabel")}</td><td class="r">₹ ${money(totalVal)}</td></tr>
+        </table>
       </div>
     </div>
 
-    <!-- Payment Details & Notes -->
-    <div class="lower-row">
-      ${paymentBlock}
+    <table class="sheet">
+      <tr>
+        <td>
+          <div class="section-title">${paymentTitle}</div>
+          ${paymentTable}
+        </td>
+        <td>
+          <div class="notes-box">
+            <div class="section-title">${label("notesTitle")}</div>
+            <ul>
+              ${String(notesForBill || "").split("\n").filter(Boolean).map((n) => `<li>${e(n)}</li>`).join("")}
+            </ul>
+            <div class="signatory-box">
+              <div class="signatory-title">${label("signatoryTitle")}<br/>${signatoryFor}</div>
+              <div class="sign-script">${signatoryName}</div>
+              <div style="font-size: 10px; color: #64748b;">${signatoryLabel}</div>
+            </div>
+          </div>
+        </td>
+      </tr>
+    </table>
 
-      <div class="notes-box">
-        <div class="section-title-orange">Notes:</div>
-        <ul>
-          ${notesForBill
-            .split("\n")
-            .filter(Boolean)
-            .map((n) => `<li>${n}</li>`)
-            .join("")}
-        </ul>
-
-        <div class="signatory-box">
-          <div class="signatory-title">Authorized Signatory<br/>${signatoryFor}</div>
-          <div class="sign-script">${signatoryName}</div>
-          <div style="font-size: 10px; color: #64748b;">${signatoryLabel}</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Bottom Dark Footer Banner -->
     <div class="bottom-banner">
-      <div class="brand-left-tag">
-        <div style="font-size: 8px; color: #94a3b8; font-weight: 500; margin-bottom: 2px;">A Brand of</div>
+      <div>
+        <div style="font-size: 8px; color: #94a3b8; font-weight: 500; margin-bottom: 2px;">${label("brandOfLabel")}</div>
         <div class="brand-left-title">${brandParent}</div>
         <div class="brand-left-sub">${brandSubtext}</div>
+        ${String(chrome.companyGstin || "").trim() ? `<div style="margin-top: 6px; font-size: 11px; font-weight: 700; color: #ffffff;">${label("companyGstLabel")}: ${e(chrome.companyGstin)}</div>` : ""}
       </div>
-
-
       <div class="contact-center">
-        ${brandPhone ? `<div>📞 ${brandPhone}</div>` : ""}
-        <div>✉️ ${brandEmail}</div>
-        <div>🌐 ${brandWebsite}</div>
-        <div>📍 ${brandCity}</div>
+        ${brandPhone ? `<div>${brandPhone}</div>` : ""}
+        <div>${brandEmail}</div>
+        <div>${brandWebsite}</div>
+        <div>${brandCity}</div>
       </div>
-
-      <div class="smarter-right">
-        ${brandMotto}
-      </div>
+      <div class="smarter-right">${brandMotto}</div>
     </div>
 
-    <div class="sub-categories-bar">
-      ${bottomServicesBar}
-    </div>
-
-    ${poweredByBlock()}
+    <div class="sub-categories-bar">${bottomServicesBar}</div>
   </div>
 </body>
 </html>`;
 
-
-
-    res.setHeader("Content-Type", "text/html");
-    res.setHeader("Cache-Control", "no-store");
-    return res.send(html);
+    return html;
   } catch (error) {
-    return res.status(500).send("Error rendering invoice: " + error.message);
+    error.message = "Error rendering invoice: " + error.message;
+    throw error;
+  }
+}
+
+function sendHtml(res, html) {
+  res.setHeader("Content-Type", "text/html");
+  res.setHeader("Cache-Control", "no-store");
+  return res.send(html);
+}
+
+exports.getInvoiceHTML = async (req, res) => {
+  try {
+    const invoiceId = req.query.invoiceId || req.params.invoiceId;
+    const invoice = await invoiceModel
+      .findById(invoiceId)
+      .populate("userId")
+      .populate("businessId")
+      .populate("adsTypeId", "title");
+    if (!invoice) return res.status(404).send("Invoice not found");
+    return sendHtml(res, await renderStoredInvoice(invoice));
+  } catch (error) {
+    return res.status(500).send(error.message);
+  }
+};
+
+// Same MarketingKart page, with sample lines, so an admin can see a template before it is used.
+exports.previewInvoiceTemplate = async (req, res) => {
+  try {
+    const Template = require("../models/invoiceTemplate.model.js");
+    const template = req.query.templateId
+      ? await Template.findById(req.query.templateId)
+      : await resolveTemplate({ service: "META_ADS" });
+    if (!template) return res.status(404).send("Template not found");
+    const sample = {
+      _preview: true,
+      service: template.service || "META_ADS",
+      templateId: template._id,
+      status: "PENDING",
+      invoiceNumber: "MKAI/PREVIEW",
+      clientName: "Sample customer",
+      companyName: "Sample business",
+      addressLine1: "Indore, Madhya Pradesh",
+      cityStatePin: "India",
+      gstin: "29ABCDE1234F1Z5",
+      companyGstin: String(template.companyGstin || "").trim() || "23AAAAA0000A1Z5",
+      items: [{ description: "Meta Ads", subDescription: "Sample line. Real bills use the customer's order.", qty: 1, unitPrice: 1000, amount: 1000 }],
+      subTotal: 1000,
+      gstAmount: "180",
+      gstRate: 18,
+      totalAmount: 1180,
+      createdAt: new Date(),
+    };
+    return sendHtml(res, await renderStoredInvoice(sample));
+  } catch (error) {
+    return res.status(500).send(error.message);
   }
 };
 
