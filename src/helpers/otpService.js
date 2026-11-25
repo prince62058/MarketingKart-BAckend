@@ -12,8 +12,9 @@
 //   OTP_TEST_ACCOUNTS="9876543210=1234,9123456789=4321"
 // A listed number gets that fixed OTP and no SMS. It still goes through expiry and attempt limits.
 //
-// Mobile login OTP is always 1234. The DLT SMS still sends that code. It never applies to e-mail / admin OTPs.
-// Anyone who knows a phone number can sign in as it with 1234.
+// A normal mobile login gets a new random OTP, and that code is sent by SMS. It is not 1234.
+// ALLOW_FIXED_DEV_OTP must be the exact string "true" to bring the old shared 1234 back, and then no SMS is sent.
+// That switch never applies to e-mail or admin OTPs.
 const crypto = require("crypto");
 const userModel = require("../models/userModel");
 const generateOtp = require("./otpHelper");
@@ -63,9 +64,12 @@ const testAccounts = () => {
  */
 async function issueOtp(user, identity, { allowFixedDev = false } = {}) {
   const listed = testAccounts()[String(identity)];
-  // Mobile login passes allowFixedDev. The code is 1234, and the caller still sends it through DLT.
-  const fixed = !listed && allowFixedDev;
-  const testOtp = listed || (fixed ? FIXED_DEV_OTP : undefined);
+  // Mobile login passes allowFixedDev. The shared 1234 is used only when the server explicitly opts in.
+  const bridge = allowFixedDev && process.env.ALLOW_FIXED_DEV_OTP === "true" && !listed;
+  if (bridge) {
+    console.warn("SECURITY WARNING: ALLOW_FIXED_DEV_OTP is on. Mobile login accepts a fixed OTP and does not send an SMS.");
+  }
+  const testOtp = listed || (bridge ? FIXED_DEV_OTP : undefined);
   const otp = testOtp || randomOtp();
 
   // Compare-and-swap on the window counters: two parallel requests cannot both take the last slot.
@@ -76,7 +80,7 @@ async function issueOtp(user, identity, { allowFixedDev = false } = {}) {
     const started = current.otpWindowStart ? new Date(current.otpWindowStart).getTime() : 0;
     const inWindow = started && now - started < SEND_WINDOW_MS;
     const count = inWindow ? current.otpWindowCount || 0 : 0;
-    if (!listed && count >= MAX_SENDS_PER_WINDOW) return { ok: false, reason: "rate_limited" };
+    if (!listed && !bridge && count >= MAX_SENDS_PER_WINDOW) return { ok: false, reason: "rate_limited" };
 
     const result = await userModel.updateOne(
       {
@@ -96,7 +100,7 @@ async function issueOtp(user, identity, { allowFixedDev = false } = {}) {
         $unset: { otp2: "" },
       },
     );
-    if (result.matchedCount === 1) return { ok: true, otp, isTestAccount: Boolean(listed) };
+    if (result.matchedCount === 1) return { ok: true, otp, isTestAccount: Boolean(listed || bridge) };
   }
   return { ok: false, reason: "rate_limited" };
 }

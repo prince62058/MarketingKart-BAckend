@@ -133,7 +133,7 @@ const sendMobileOtp = async (req, res) => {
     return null;
   }
 
-  // Listed test numbers skip SMS. Every other mobile login still goes out on the DLT flow, with OTP 1234.
+  // Listed test numbers, and the explicit dev bridge, skip SMS. Every other login gets its own OTP by SMS.
   if (!issued.isTestAccount && sendOtp(mobileNum, issued.otp) === false) {
     tooManyOtpRequests(res);
     return null;
