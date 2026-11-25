@@ -10,13 +10,18 @@ function httpError(status, message) {
 }
 
 // The app shows the exact gap and a Recharge button. Example: 100 on hand, 130 needed → extra 30.
-function insufficientCredits(have, need) {
+function insufficientCredits(have, need, reserved = 0) {
   const gap = require("./aiVideo.logic").creditShortfall(have, need);
-  const error = httpError(400, `You need extra ${gap.short} credits to generate Video.`);
+  const held = Math.max(0, Math.floor(Number(reserved) || 0));
+  const message = held > 0
+    ? `You need extra ${gap.short} credits. ${held} credits are on a video that is still rendering, and are charged only when that video is ready.`
+    : `You need extra ${gap.short} credits to generate Video.`;
+  const error = httpError(400, message);
   error.code = "INSUFFICIENT_CREDITS";
   error.have = gap.have;
   error.need = gap.need;
   error.short = gap.short;
+  error.reserved = held;
   return error;
 }
 

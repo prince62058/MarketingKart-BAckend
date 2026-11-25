@@ -41,8 +41,8 @@ function clean(text, maxChars) {
   return out;
 }
 
-async function write({ topic, tone, language }) {
-  const lang = LANGUAGE_RULES[language] ? language : "english";
+async function write({ topic, tone }) {
+  const lang = "english";
   const subject = String(topic || "").trim().slice(0, 300) || "our offer";
   const fallback = () => ({ script: logic.buildScript({ topic: subject, tone, language: lang }), source: "template" });
 

@@ -89,8 +89,14 @@ async function aiVideoOrderInvoice({ userId, businessId, order, paymentId, metho
     ? `${credits.toLocaleString("en-IN")} credits · ${Number(order.termDays) || 0} days`
     : `Credit pack · ${credits.toLocaleString("en-IN")} credits`;
   const label = methodLabel || order.methodLabel;
+  const transactionId = String(paymentId || order.razorpayPaymentId || order.id || "");
+  if (transactionId) {
+    const existing = await Invoices.findOne({ transactionId, service: "AI_VIDEO" }).lean();
+    if (existing) return existing;
+  }
   return Invoices.create({
     service: "AI_VIDEO",
+    status: "PAID",
     invoiceNumber: await nextInvoiceNumber(Invoices, deps.Company || Company),
     userId,
     businessId: await businessOf(Businesses, userId, businessId),
@@ -111,7 +117,7 @@ async function aiVideoOrderInvoice({ userId, businessId, order, paymentId, metho
     totalAmount: price,
     paymentMethod:
       order.method === "wallet" ? "MarketingKart wallet" : `Razorpay${label && label !== "Wallet" ? ` · ${label}` : ""}`,
-    transactionId: String(paymentId || order.razorpayPaymentId || order.id || ""),
+    transactionId,
   });
 }
 

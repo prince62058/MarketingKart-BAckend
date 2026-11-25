@@ -130,7 +130,7 @@ exports.connectAccount = async (req, res) => {
       return res.status(409).json({
         success: false,
         message:
-          "Meta number found, but it is not ready for messaging yet. Number add karke OTP verification Meta side par complete karo, phir connect karo.",
+          "Meta found this number, but it is not ready for messaging yet. Add the number and finish OTP verification in Meta, then connect again.",
       });
     }
 
@@ -346,7 +346,7 @@ exports.connectViaFacebook = async (req, res) => {
       return res.status(404).json({
         success: false,
         message:
-          "Koi WhatsApp Business number nahi mila. Pehle Meta Business Suite me jaakar apna WhatsApp number add karo aur OTP verify karo, phir yahan aa kar 'Continue with Facebook' dabao.",
+          "No WhatsApp Business number was found. Add your WhatsApp number in Meta Business Suite, finish OTP verification, then come back and tap Continue with Facebook.",
       });
     }
 
@@ -359,7 +359,7 @@ exports.connectViaFacebook = async (req, res) => {
       return res.status(409).json({
         success: false,
         message:
-          "WhatsApp number mil gaya, lekin abhi messaging ke liye ready nahi hai. Meta side par number ka OTP verification complete karo, phir dobara connect karo.",
+          "A WhatsApp number was found, but it is not ready for messaging yet. Finish OTP verification in Meta, then connect again.",
       });
     }
 

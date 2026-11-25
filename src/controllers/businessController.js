@@ -822,7 +822,7 @@ async function assignPageToBusinessManager(
   }
 
   throw new Error(
-    "Page /agencies me bheja gaya lekin MarketingKart Business Manager ki client_pages me abhi tak show nahi ho raha (verification fail). Page owner ne request accept nahi ki ya permission missing hai."
+    "The page was sent to Meta, but it is not showing in the MarketingKart Business Manager yet. The page owner has not accepted the request, or a permission is missing."
   );
 }
 

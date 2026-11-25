@@ -99,6 +99,54 @@ function presentOrder(order) {
   };
 }
 
+function orderTitle(order, plans = []) {
+  if (order.kind === "plan") {
+    const plan = plans.find(item => item.id === order.itemId);
+    const name = plan?.name || String(order.itemId || "AI Video").replace(/^\w/, c => c.toUpperCase());
+    const cycle = order.billing === "yearly" ? "yearly" : "monthly";
+    return `${name} plan (${cycle})`;
+  }
+  const credits = Number(order.credits) || 0;
+  return `${credits.toLocaleString("en-IN")} AI video credits`;
+}
+
+// The AI Video account only: plan, credits, and this studio's orders. Ads and WhatsApp bills
+// never appear here. A pending order older than a day is omitted, matching the checkout cleanup.
+function presentBilling(studio, { plans = [], invoices = [], now = Date.now() } = {}) {
+  const plan = effectivePlan(studio, now);
+  const planDoc = plans.find(item => item.id === plan);
+  const byTxn = new Map();
+  for (const invoice of invoices) {
+    if (invoice && invoice.transactionId) byTxn.set(String(invoice.transactionId), invoice);
+  }
+  const orders = [...(studio.orders || [])]
+    .filter(order => {
+      if (order.status === "paid" || order.status === "wallet_processing") return true;
+      if (order.status !== "pending_payment") return false;
+      return now - new Date(order.createdAt).getTime() < STALE_ORDER_MS;
+    })
+    .sort((a, b) => new Date(b.paidAt || b.createdAt) - new Date(a.paidAt || a.createdAt))
+    .slice(0, 50)
+    .map(order => {
+      const invoice =
+        (order.razorpayPaymentId && byTxn.get(String(order.razorpayPaymentId))) || byTxn.get(String(order.id));
+      return {
+        ...presentOrder(order),
+        title: orderTitle(order, plans),
+        invoiceId: invoice && invoice._id ? String(invoice._id) : null,
+        invoiceNumber: (invoice && invoice.invoiceNumber) || null,
+      };
+    });
+  return {
+    credits: studio.credits,
+    plan,
+    planName: planDoc?.name || (plan === "free" ? "Free" : plan),
+    planBilling: plan === "free" ? null : studio.planBilling || null,
+    planRenewsAt: plan === "free" ? null : studio.planRenewsAt || null,
+    orders,
+  };
+}
+
 function scriptSeconds(script) {
   const words = String(script || "")
     .trim()
@@ -117,17 +165,9 @@ function estimateDuration(script) {
 }
 
 // Template fallback used only when the AI writer is unavailable.
-function buildScript({ topic, tone, language }) {
+function buildScript({ topic }) {
   const subject = String(topic || "your offer").trim();
-  const lang = language || "english";
-  const style = tone || "enthusiastic";
-  if (lang === "hindi") {
-    return `नमस्ते! ${subject} के लिए यह वीडियो तैयार है। ऑफर साफ है, और आखिर में एक सीधा कदम है। ${style === "urgent" ? "ऑफर सीमित समय के लिए है।" : "आज ही देखें।"}`;
-  }
-  if (lang === "english") {
-    return `Here is the offer: ${subject}. The first seconds state the hook, the middle shows the value, and the close asks the viewer to act now.`;
-  }
-  return `Hey! ${subject}. Pehle 3 second mein hook, beech mein clear offer, aur end mein seedha call-to-action. ${style === "professional" ? "Tone calm aur business-ready hai." : "Abhi check karein."}`;
+  return `Here is the offer: ${subject}. The first seconds state the hook, the middle shows the value, and the close asks the viewer to act now.`;
 }
 
 // HeyGen reports no percentage, so the bar is an estimate that never reaches 100
@@ -269,6 +309,14 @@ function creditShortfall(have, need) {
   return { have: balance, need: required, short };
 }
 
+// Credits sitting on an unfinished video are not spent yet. `available` is what a new
+// video, voice, or avatar is allowed to use.
+function spendableCredits(credits, holds) {
+  const balance = Math.max(0, Math.floor(Number(credits) || 0));
+  const reserved = Math.max(0, Math.floor(Number(holds) || 0));
+  return { balance, reserved, available: Math.max(0, balance - reserved) };
+}
+
 module.exports = {
   VIDEO_COST,
   VOICEOVER_COST,
@@ -290,6 +338,8 @@ module.exports = {
   toPaise,
   effectivePlan,
   presentOrder,
+  orderTitle,
+  presentBilling,
   scriptSeconds,
   formatClock,
   estimateDuration,
@@ -304,4 +354,5 @@ module.exports = {
   makeLot,
   consumeLots,
   creditShortfall,
+  spendableCredits,
 };

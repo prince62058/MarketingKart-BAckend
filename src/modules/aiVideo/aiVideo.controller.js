@@ -98,6 +98,7 @@ const order = handler(req => service.createOrder(user(req), businessId(req), req
   message: data => data.message,
   status: 201,
 });
+const billing = handler(req => service.listBilling(user(req), businessId(req)), { message: "AI Video billing" });
 const confirmOrder = handler(req => service.confirmPayment(user(req), req.body || {}), {
   message: data => (data.granted ? "Payment confirmed" : "Payment pending"),
   scoped: false,
@@ -144,6 +145,7 @@ module.exports = {
   avatar,
   patchAvatar,
   order,
+  billing,
   confirmOrder,
   walletOrder,
   razorpayWebhook,

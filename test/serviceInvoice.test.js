@@ -1,6 +1,6 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { whatsappPlanInvoice, nextInvoiceNumber } = require("../src/services/serviceInvoiceService");
+const { whatsappPlanInvoice, aiVideoOrderInvoice, nextInvoiceNumber } = require("../src/services/serviceInvoiceService");
 
 function query(result) {
   const q = {
@@ -77,4 +77,45 @@ test("a WhatsApp plan invoice bills the wallet debit once and adds no GST", asyn
   assert.equal(second._id, first._id);
   assert.equal(created.length, 1);
   assert.equal(await whatsappPlanInvoice({ userId: "user-1", planTitle: "Free", amount: 0, transactionId: "txn-0" }, deps), null);
+});
+
+test("an AI Video invoice includes GST, stays on the AI Video service, and is not billed twice", async () => {
+  const { deps, created } = fakes();
+  const order = {
+    kind: "plan",
+    itemId: "pro",
+    billing: "yearly",
+    price: 2994,
+    credits: 12000,
+    termDays: 365,
+    method: "razorpay",
+    id: "ord-1",
+  };
+  const first = await aiVideoOrderInvoice({
+    userId: "user-1",
+    order,
+    paymentId: "pay_1",
+    methodLabel: "UPI",
+  }, deps);
+  assert.equal(first.service, "AI_VIDEO");
+  assert.equal(first.status, "PAID");
+  assert.equal(first.gstInclusive, true);
+  assert.equal(first.gstRate, 18);
+  assert.equal(first.totalAmount, 2994);
+  assert.equal(first.packageName, "AI Video Pro Plan (yearly)");
+  assert.equal(first.paymentMethod, "Razorpay · UPI");
+  assert.equal(first.transactionId, "pay_1");
+  assert.equal(Math.round((first.subTotal + Number(first.gstAmount)) * 100) / 100, 2994);
+  const second = await aiVideoOrderInvoice({ userId: "user-1", order, paymentId: "pay_1" }, deps);
+  assert.equal(second._id, first._id);
+  assert.equal(created.length, 1);
+
+  const pack = await aiVideoOrderInvoice({
+    userId: "user-1",
+    order: { kind: "pack", itemId: "pack_100", price: 299, credits: 100, method: "wallet", id: "ord-2" },
+    methodLabel: "Wallet",
+  }, deps);
+  assert.equal(pack.packageName, "100 AI Video Credits");
+  assert.equal(pack.paymentMethod, "MarketingKart wallet");
+  assert.equal(pack.transactionId, "ord-2");
 });

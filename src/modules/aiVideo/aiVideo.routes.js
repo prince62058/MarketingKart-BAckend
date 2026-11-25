@@ -65,6 +65,7 @@ router.post("/ai-video/avatars/:id/consent", guard, controller.avatarConsent);
 router.get("/ai-video/avatars/:id", guard, controller.avatar);
 router.patch("/ai-video/avatars/:id", guard, controller.patchAvatar);
 router.delete("/ai-video/avatars/:id", guard, controller.deleteAvatar);
+router.get("/ai-video/billing", guard, controller.billing);
 router.post("/ai-video/orders", guard, controller.order);
 router.post("/ai-video/orders/confirm", guard, controller.confirmOrder);
 router.post("/ai-video/orders/:id/wallet", guard, controller.walletOrder);

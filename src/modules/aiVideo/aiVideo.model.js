@@ -30,6 +30,9 @@ const projectSchema = new mongoose.Schema(
     durationSeconds: Number,
     error: String,
     cost: Number,
+    // "on_complete" videos are charged once, when the file is actually ready.
+    billing: String,
+    charged: { type: Boolean, default: false },
     refunded: { type: Boolean, default: false },
     lastCheckedAt: Date,
     renderStartedAt: Date,
@@ -101,6 +104,10 @@ const studioSchema = new mongoose.Schema(
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "userModel", required: true, index: true },
     businessId: { type: String, default: null },
     credits: { type: Number, default: 120 },
+    // Credits locked by videos that are still rendering. The balance itself drops only
+    // when a video finishes. A failed render releases the lock and charges nothing.
+    creditHolds: { type: Number, default: 0 },
+    creditHoldStamp: String,
     // Each purchase is its own pile. Unused credits drop out when `expiresAt` passes.
     creditLots: {
       type: [

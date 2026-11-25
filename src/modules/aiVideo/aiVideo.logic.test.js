@@ -67,7 +67,37 @@ assert.deepStrictEqual(
   [70],
 );
 assert.strictEqual(logic.freshLots([expired], now).length, 0);
+
+const billing = logic.presentBilling(
+  {
+    credits: 80,
+    plan: "pro",
+    planBilling: "yearly",
+    planRenewsAt: new Date(now + 86400000),
+    orders: [
+      { id: "old", kind: "pack", itemId: "pack_100", price: 299, credits: 100, status: "pending_payment", createdAt: new Date(now - 3 * 86400000) },
+      { id: "paid-1", kind: "plan", itemId: "pro", billing: "yearly", price: 2994, credits: 12000, status: "paid", method: "razorpay", razorpayPaymentId: "pay_1", paidAt: new Date(now - 1000), createdAt: new Date(now - 2000) },
+      { id: "pack-1", kind: "pack", itemId: "pack_100", price: 299, credits: 100, status: "paid", method: "wallet", paidAt: new Date(now), createdAt: new Date(now) },
+    ],
+  },
+  { plans: logic.PLANS, invoices: [{ _id: "inv1", transactionId: "pay_1", invoiceNumber: "MKAI/2026/0008" }], now },
+);
+assert.strictEqual(billing.planName, "Pro");
+assert.strictEqual(billing.planBilling, "yearly");
+assert.strictEqual(billing.orders.length, 2);
+assert.strictEqual(billing.orders[0].title, "100 AI video credits");
+assert.strictEqual(billing.orders[1].title, "Pro plan (yearly)");
+assert.strictEqual(billing.orders[1].invoiceNumber, "MKAI/2026/0008");
+const lapsed = logic.presentBilling(
+  { credits: 0, plan: "pro", planBilling: "monthly", planRenewsAt: new Date(now - 1000), orders: [] },
+  { now },
+);
+assert.strictEqual(lapsed.plan, "free");
+assert.strictEqual(lapsed.planBilling, null);
+assert.strictEqual(lapsed.planRenewsAt, null);
 assert.deepStrictEqual(logic.creditShortfall(100, 130), { have: 100, need: 130, short: 30 });
+assert.deepStrictEqual(logic.spendableCredits(50, 30), { balance: 50, reserved: 30, available: 20 });
+assert.deepStrictEqual(logic.spendableCredits(10, 40), { balance: 10, reserved: 40, available: 0 });
 const lot = logic.makeLot({ credits: 100, days: 30, orderId: "pack", now });
 assert.strictEqual(lot.remaining, 100);
 assert.ok(new Date(lot.expiresAt).getTime() - now >= 29 * 86400000);

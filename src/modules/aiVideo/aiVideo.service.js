@@ -3,6 +3,7 @@ const Studio = require("./aiVideo.model");
 const User = require("../../models/userModel");
 const Business = require("../../models/businessModel");
 const Transaction = require("../../models/transtionModel");
+const Invoice = require("../../models/invoiceModel");
 const serviceInvoices = require("../../services/serviceInvoiceService");
 const logic = require("./aiVideo.logic");
 const payments = require("./aiVideo.payments");
@@ -109,9 +110,25 @@ async function patchProject(studioId, projectId, fields) {
   await Studio.updateOne({ _id: studioId, "projects.id": projectId }, { $set });
 }
 
-// Marks a render failed and returns its credits exactly once, however many pollers race.
+function chargesOnComplete(project) {
+  return project && project.billing === "on_complete" && !project.charged;
+}
+
+function failureFields(reason) {
+  return { status: "Failed", refunded: true, error: reason, progress: 0 };
+}
+
+// Marks a render failed. A video that is billed on completion never had its credits taken,
+// so the lock is released exactly once. Older renders, which were charged up front, are refunded once.
 async function failProject(studioId, project, reason) {
   const cost = Number.isFinite(project.cost) ? project.cost : logic.VIDEO_COST;
+  if (chargesOnComplete(project)) {
+    const released = await creditsLedger.releaseRender(studioId, project.id, cost, failureFields(reason));
+    if (released.state === "closed") {
+      logger.error(`[AI VIDEO] render ${project.id} failed without a credit lock to release`);
+    }
+    return true;
+  }
   const marked = await Studio.updateOne(
     { _id: studioId, projects: { $elemMatch: { id: project.id, refunded: { $ne: true } } } },
     {
@@ -128,8 +145,14 @@ async function failProject(studioId, project, reason) {
   return true;
 }
 
-// The video never existed on the provider, so drop the draft entirely and refund.
-async function abortProject(studioId, projectId, cost) {
+// The provider never accepted the video, so drop the draft. A completion-billed video
+// only loses its lock. An older up-front charge is refunded.
+async function abortProject(studioId, projectId, cost, project) {
+  if (project && project.billing === "on_complete") {
+    await creditsLedger.releaseRender(studioId, projectId, cost, { refunded: true });
+    await Studio.updateOne({ _id: studioId }, { $pull: { projects: { id: projectId } } });
+    return;
+  }
   const marked = await Studio.updateOne(
     { _id: studioId, projects: { $elemMatch: { id: projectId, refunded: { $ne: true } } } },
     { $set: { "projects.$.refunded": true } },
@@ -157,7 +180,7 @@ async function completeProject(studio, project, video) {
       : null,
   ]);
   const seconds = Number(video.duration) || project.durationSeconds || logic.scriptSeconds(project.script);
-  await patchProject(studio._id, project.id, {
+  const finished = {
     status: "Completed",
     progress: 100,
     videoUrl: videoCopy || sourceVideo,
@@ -165,15 +188,37 @@ async function completeProject(studio, project, video) {
     providerUrlAt: videoCopy ? null : new Date(),
     durationSeconds: seconds,
     duration: logic.formatClock(seconds),
-    completedAt: new Date(),
+    completedAt: project.completedAt || new Date(),
     lastCheckedAt: new Date(),
     error: null,
-  });
-  await sendVideoReadyNotification({
-    userId: studio.userId,
-    projectId: project.id,
-    title: project.title,
-  }).catch((err) => logger.warn(`[AI VIDEO] ready notification failed: ${err.message}`));
+  };
+  // The file is in our storage. Only then is the customer charged, and only once.
+  if (chargesOnComplete(project)) {
+    const captured = await creditsLedger.captureRender(studio._id, project.id, Number(project.cost) || logic.VIDEO_COST, finished);
+    if (captured.state === "already") {
+      const saved = captured.studio && (captured.studio.projects || []).find(item => item.id === project.id);
+      if (saved && !saved.videoUrl) await patchProject(studio._id, project.id, finished);
+      return true;
+    }
+    if (captured.state === "captured") {
+      await sendVideoReadyNotification({
+        userId: studio.userId,
+        projectId: project.id,
+        title: project.title,
+      }).catch((err) => logger.warn(`[AI VIDEO] ready notification failed: ${err.message}`));
+      return true;
+    }
+    logger.error(`[AI VIDEO] video ${project.id} is ready but its credits could not be charged (${captured.state})`);
+    return false;
+  }
+  await patchProject(studio._id, project.id, finished);
+  if (project.status !== "Completed") {
+    await sendVideoReadyNotification({
+      userId: studio.userId,
+      projectId: project.id,
+      title: project.title,
+    }).catch((err) => logger.warn(`[AI VIDEO] ready notification failed: ${err.message}`));
+  }
   return true;
 }
 
@@ -191,7 +236,13 @@ function settleProject(studio, project) {
 async function doSettle(studio, project) {
   const now = Date.now();
   if (logic.isRenderTimedOut(project, now)) {
-    return failProject(studio._id, project, "Rendering took too long, so your credits were returned.");
+    return failProject(
+      studio._id,
+      project,
+      chargesOnComplete(project)
+        ? "Rendering took too long. No credits were charged."
+        : "Rendering took too long, so your credits were returned.",
+    );
   }
   if (!project.heygenVideoId) return false;
   if (project.lastCheckedAt && now - new Date(project.lastCheckedAt).getTime() < POLL_INTERVAL_MS) return false;
@@ -201,7 +252,13 @@ async function doSettle(studio, project) {
     video = await heygen.getVideo(project.heygenVideoId);
   } catch (error) {
     if (error instanceof heygen.HeyGenError && error.status === 404) {
-      return failProject(studio._id, project, "Rendering was cancelled, so your credits were returned.");
+      return failProject(
+        studio._id,
+        project,
+        chargesOnComplete(project)
+          ? "Rendering was cancelled. No credits were charged."
+          : "Rendering was cancelled, so your credits were returned.",
+      );
     }
     // A provider hiccup must not fail a render that is still running on their side.
     logger.warn(`[AI VIDEO] status check failed for ${project.id}: ${error.message}`);
@@ -211,7 +268,13 @@ async function doSettle(studio, project) {
 
   if (video.status === "failed") {
     logger.error(`[AI VIDEO] render ${project.heygenVideoId} failed: ${video.failure_code || "-"} ${video.failure_message || ""}`);
-    return failProject(studio._id, project, "We could not generate this video, so your credits were returned.");
+    return failProject(
+      studio._id,
+      project,
+      chargesOnComplete(project)
+        ? "We could not generate this video. No credits were charged."
+        : "We could not generate this video, so your credits were returned.",
+    );
   }
   if (video.status === "completed" && video.video_url) return completeProject(studio, project, video);
 
@@ -393,7 +456,8 @@ async function createProject(userId, businessId, input, voiceFile = null) {
   // Everything that can fail without costing anything happens before the credits are taken.
   let recording = null;
   if (ownVoice) {
-    if (studio.credits < config.videoCost) throw insufficientCredits(studio.credits, config.videoCost);
+    const open = logic.spendableCredits(studio.credits, studio.creditHolds);
+    if (open.available < config.videoCost) throw insufficientCredits(open.available, config.videoCost, open.reserved);
     recording = await audio.prepareVoiceNote({ buffer: voiceFile.buffer, filename: voiceFile.originalname, mimetype: voiceFile.mimetype });
   }
 
@@ -469,13 +533,21 @@ async function createProject(userId, businessId, input, voiceFile = null) {
     audioAssetId,
     audioSeconds: ownVoice ? recording.seconds : undefined,
     cost: config.videoCost,
+    billing: "on_complete",
+    charged: false,
     renderStartedAt: new Date(),
     createdAt: new Date(),
   };
 
-  // Charge first, then store the project. A failed render returns the credits.
-  const reserved = await creditsLedger.charge(studio, config.videoCost);
-  await Studio.updateOne({ _id: reserved._id }, { $push: { projects: project } });
+  // Lock the credits now so two videos cannot spend them, but do not take them yet.
+  // They are charged once, when the finished file is saved.
+  const reserved = await creditsLedger.hold(studio, config.videoCost);
+  try {
+    await Studio.updateOne({ _id: reserved._id }, { $push: { projects: project } });
+  } catch (error) {
+    await creditsLedger.release(reserved._id, config.videoCost);
+    throw error;
+  }
 
   try {
     const created = await heygen.createVideo(
@@ -496,7 +568,7 @@ async function createProject(userId, businessId, input, voiceFile = null) {
     );
     await patchProject(studio._id, projectId, { heygenVideoId: created.video_id, lastCheckedAt: new Date() });
   } catch (error) {
-    await abortProject(studio._id, projectId, config.videoCost);
+    await abortProject(studio._id, projectId, config.videoCost, project);
     throw providerError(error);
   }
 
@@ -832,17 +904,35 @@ async function createOrder(userId, businessId, input = {}) {
 async function grantOrder(studio, order, options) {
   const granted = await flipOrderToPaid(studio, order, options);
   if (granted) {
-    serviceInvoices
-      .aiVideoOrderInvoice({
+    try {
+      await serviceInvoices.aiVideoOrderInvoice({
         userId: studio.userId,
         businessId: studio.businessId,
         order,
         paymentId: options.paymentId,
         methodLabel: options.methodLabel,
-      })
-      .catch(err => logger.error(`[AI VIDEO] invoice for order ${order.id} failed: ${err.message}`));
+      });
+    } catch (err) {
+      logger.error(`[AI VIDEO] invoice for order ${order.id} failed: ${err.message}`);
+    }
   }
   return granted;
+}
+
+// Plan, credits and this studio's own orders, with the GST invoice for each paid order when one exists.
+async function listBilling(userId, businessId) {
+  const [studio, config] = await Promise.all([getStudio(userId, businessId), settings.get()]);
+  const keys = [
+    ...new Set(
+      (studio.orders || []).flatMap(order => [order.razorpayPaymentId, order.id].filter(Boolean).map(String)),
+    ),
+  ];
+  const invoices = keys.length
+    ? await Invoice.find({ userId: studio.userId, service: "AI_VIDEO", transactionId: { $in: keys } })
+        .select("_id transactionId invoiceNumber")
+        .lean()
+    : [];
+  return logic.presentBilling(studio, { plans: config.plans || [], invoices });
 }
 
 function flipOrderToPaid(studio, order, { fromStatus, paymentId, methodLabel }) {
@@ -1124,6 +1214,7 @@ module.exports = {
   getAvatar,
   updateAvatar,
   createOrder,
+  listBilling,
   confirmPayment,
   payWithWallet,
   handleRazorpayWebhook,

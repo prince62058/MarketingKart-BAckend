@@ -86,13 +86,13 @@ function template({ business, objective, language }) {
   const text = {
     hinglish: {
       headline: `${name}${place}`,
-      primaryText: `${name}${place} mein aapka swagat hai. ${objective.action} aur apna sawal ya order batayein, hum jaldi reply karenge.`,
+      primaryText: `Welcome to ${name}${place}. ${objective.action} and tell us what you need. We reply quickly.`,
       caption: `${objective.short} · ${name}`,
     },
     hindi: {
       headline: `${name}${place}`,
-      primaryText: `${name}${place} में आपका स्वागत है। हमसे जुड़ें और अपना सवाल या ऑर्डर बताएं, हम जल्दी जवाब देंगे।`,
-      caption: `${name} से जुड़ें`,
+      primaryText: `Welcome to ${name}${place}. ${objective.action} and tell us what you need. We reply quickly.`,
+      caption: `${objective.short} · ${name}`,
     },
     english: {
       headline: `${name}${place}`,

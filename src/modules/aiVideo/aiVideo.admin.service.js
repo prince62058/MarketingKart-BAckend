@@ -524,6 +524,7 @@ async function refundVideo({ admin, studioId, projectId, reason }) {
   const project = studio && studio.projects && studio.projects[0];
   if (!project) throw httpError(404, "Video not found");
   if (project.status === "Rendering") throw httpError(400, "This video is still rendering.");
+  if (project.billing === "on_complete" && !project.charged) throw httpError(400, "This video was not charged.");
   const cost = Number(project.cost);
   if (!Number.isFinite(cost) || cost <= 0) throw httpError(400, "This video did not cost any credits.");
   const updated = await Studio.findOneAndUpdate(
