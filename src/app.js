@@ -214,5 +214,7 @@ app.use("/api", require("./routes/whatsappWalletRoute"));
 app.use("/api", require("./routes/whatsappAccountMenuRoute"));
 app.use("/api", require("./routes/whatsappSupportRoute"));
 app.use("/api/whatsapp/chat", require("./routes/whatsappChatRoute"));
+app.use("/api/v1", require("./routes/whatsappPublicApiRoute"));
+app.use("/api", require("./routes/whatsappDeveloperRoute"));
 app.use(errorMiddleware);
 module.exports = app;

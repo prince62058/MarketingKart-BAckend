@@ -335,7 +335,7 @@ exports.postWhatsAppWebhook = async (req, res) => {
 
           const existingMessage = await whatsappMessageModel.findOne(
             { metaMessageId: wamid },
-            "campaignId status businessId phoneNumberId conversationId direction to contactName textBody billingState billSource billCategory billPaise"
+            "campaignId status businessId phoneNumberId conversationId direction to contactName textBody billingState billSource billCategory billPaise source billUserId"
           );
 
           if (!existingMessage || !shouldApplyWhatsAppStatus(existingMessage.status, newStatus)) {
@@ -370,6 +370,11 @@ exports.postWhatsAppWebhook = async (req, res) => {
             await whatsappBilling.settleMessage(existingMessage, newStatus).catch((err) => {
               console.error("[WA Billing] settle failed:", err.message);
             });
+            if (existingMessage.source === "API") {
+              require("../services/whatsappDeveloperService")
+                .notifyStatus(existingMessage, newStatus)
+                .catch((err) => console.error("[WA Developer] status webhook failed:", err.message));
+            }
             // Chat replies get a delivery (or failure) alert. A campaign blast
             // can be hundreds of numbers, so those stay on the campaign stats.
             const firstArrival =

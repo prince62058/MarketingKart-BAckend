@@ -93,6 +93,14 @@ const whatsappMessageSchema = new mongoose.Schema(
     billCategory: { type: String, default: null },
     billSource: { type: String, default: null },
     billPaise: { type: Number, default: 0 },
+    // Set on messages a customer's own app sent with a project key, so a failed
+    // delivery can return the wallet or plan credit to that account.
+    billUserId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "userModel",
+      default: null,
+      index: true,
+    },
   },
   { timestamps: true }
 );

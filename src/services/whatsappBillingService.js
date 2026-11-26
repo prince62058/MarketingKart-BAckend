@@ -180,10 +180,11 @@ async function settleMessage(message, nextStatus) {
   if (!claimed) return;
   if (!failed) return;
 
-  const campaign = message.campaignId
-    ? await mongoose.model("whatsappCampaign").findById(message.campaignId).select("createdBy").lean()
-    : null;
-  const userId = campaign && campaign.createdBy;
+  let userId = claimed.billUserId || null;
+  if (!userId && claimed.campaignId) {
+    const campaign = await mongoose.model("whatsappCampaign").findById(claimed.campaignId).select("createdBy").lean();
+    userId = campaign && campaign.createdBy;
+  }
   if (!userId) return;
   if (claimed.billSource === "wallet" && claimed.billPaise > 0) {
     await User.updateOne({ _id: userId }, { $inc: { whatsappWallet: Number((claimed.billPaise / 100).toFixed(2)) } });
