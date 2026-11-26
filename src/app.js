@@ -65,6 +65,8 @@ app.use(cors()); // Allows requests from all origins by default. You can configu
 // which has to be computed over the exact bytes Meta sent, not the re-serialized object.
 // Coexistence history arrives in batches; keep other JSON endpoints at their default limit.
 app.use('/api/whatsapp/webhook', express.json({limit:'8mb', verify:(req,_res,buf)=>{req.rawBody=buf;}}));
+// Contact imports send up to 5,000 rows per request.
+app.use('/api/whatsapp/contacts/import', express.json({limit:'5mb'}));
 app.use(express.json({
   verify: (req, res, buf) => {
     req.rawBody = buf;
@@ -212,6 +214,7 @@ app.use("/api/premium-plan", require("./routes/premiumPlanRoute"));
 app.use("/api", require("./routes/pageLinkOAuthRoute"));
 app.use("/api", require("./routes/whatsappWalletRoute"));
 app.use("/api", require("./routes/whatsappAccountMenuRoute"));
+app.use("/api", require("./routes/whatsappContactRoute"));
 app.use("/api", require("./routes/whatsappSupportRoute"));
 app.use("/api/whatsapp/chat", require("./routes/whatsappChatRoute"));
 app.use("/api/v1", require("./routes/whatsappPublicApiRoute"));
