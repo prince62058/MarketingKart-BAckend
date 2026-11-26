@@ -8,23 +8,22 @@ const ADMIN_ACCOUNTS = [
 
 async function seedAdminIfEmpty() {
   try {
-    const encryptedPassword = CryptoJS.AES.encrypt("admin123", "CRYPTOKEY").toString();
-    const encryptedOtp = CryptoJS.AES.encrypt("1234", "CRYPTOKEY").toString();
+    const password = process.env.ADMIN_BOOTSTRAP_PASSWORD;
+    if (!password) return;
+    const encryptedPassword = CryptoJS.AES.encrypt(password, "CRYPTOKEY").toString();
+
 
     for (const acc of ADMIN_ACCOUNTS) {
       await userModel.findOneAndUpdate(
         { email: acc.email },
         {
-          $set: {
+          $setOnInsert: {
             password: encryptedPassword,
-            otp: encryptedOtp,
             userType: "ADMIN",
             role: 2,
             disable: false,
             emailVerified: true,
             phoneVerified: true,
-          },
-          $setOnInsert: {
             name: acc.name,
             mobile: acc.mobile,
           },
