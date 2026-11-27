@@ -842,4 +842,5 @@ async function planOptions() {
 module.exports = {
   overview, customers, customer, adjustWallet, adjustCredits, grantPlan, extendPlan, cancelPlan, setControls, revokeKey, saveApiPackage,
   messages, numbers, numberDetail, customerLimits, refreshFromMeta, meta, tierLimit, integrations, apiUsage, panelSettings, savePanelSettings, audit, planOptions,
+  customerIds, record,
 };
