@@ -5,7 +5,7 @@ const Contact = require("../models/whatsappContactModel");
 const Group = require("../models/whatsappContactGroupModel");
 const Field = require("../models/whatsappContactFieldModel");
 
-const SOURCES = ["Direct", "Imported", "Organic", "API", "Lead Gen", "Click-to-WhatsApp"];
+const SOURCES = ["Direct", "Imported", "Organic", "API", "Lead Gen", "Click-to-WhatsApp", "Link & QR"];
 const FIELD_TYPES = ["Text", "Number", "Date", "Email"];
 const RESERVED_KEYS = new Set(["name", "phone", "email", "groups", "source", "subscribed", "_id", "id"]);
 const MAX_IMPORT = 5000;

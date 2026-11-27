@@ -48,6 +48,8 @@ const whatsappConversationSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    // Labels on this chat (manual from the inbox, or from a Link & QR / label keyword match).
+    labels: [{ type: mongoose.Schema.Types.ObjectId, ref: "whatsappLabel" }],
     // The Click-to-WhatsApp ad that started this chat: first touch, never overwritten. The click id
     // is a personal identifier that only the Conversions API needs, so normal reads leave it out.
     ctwa: {

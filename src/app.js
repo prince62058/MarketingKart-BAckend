@@ -216,6 +216,7 @@ app.use("/api", require("./routes/whatsappWalletRoute"));
 app.use("/api", require("./routes/whatsappAccountMenuRoute"));
 app.use("/api", require("./routes/whatsappContactRoute"));
 app.use("/api", require("./routes/whatsappBusinessProfileRoute"));
+app.use("/api", require("./routes/whatsappLinkRoute"));
 app.use("/api", require("./routes/whatsappSupportRoute"));
 app.use("/api/whatsapp/chat", require("./routes/whatsappChatRoute"));
 app.use("/api/v1", require("./routes/whatsappPublicApiRoute"));

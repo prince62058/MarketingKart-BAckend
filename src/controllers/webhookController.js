@@ -1,4 +1,5 @@
 const axios = require("axios");
+const whatsappLinkService = require("../services/whatsappLinkService");
 const crypto = require("crypto");
 const mongoose = require("mongoose");
 const webhookModel = require("../models/webhookModel");
@@ -755,6 +756,17 @@ exports.postWhatsAppWebhook = async (req, res) => {
                 customerPhone,
                 preview: textBody,
               }).catch((err) => console.error("[WA Webhook] inbound notification failed:", err.message));
+            }
+
+            // Link & QR / label and group keywords: join the link's group, label the chat (never throws).
+            if (ownerUserId && msgType === "TEXT" && textBody) {
+              void whatsappLinkService.applyInbound({
+                userId: ownerUserId,
+                conversation,
+                customerPhone,
+                customerName: conversation.customerName || customerName,
+                text: textBody,
+              });
             }
 
             // AI chatbot: FAQ first → OpenAI fallback (fire-and-forget; keep Meta ACK fast)
