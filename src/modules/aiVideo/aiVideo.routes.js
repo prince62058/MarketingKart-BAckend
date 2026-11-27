@@ -46,7 +46,9 @@ function voiceUpload(req, res, next) {
   });
 }
 
-router.get("/ai-video/studio", guard, controller.studio);
+// Opening the studio is the AI Video sign-in moment: welcome the person on WhatsApp once.
+const welcomeAiVideo = (req, res, next) => { require("../../services/whatsappWelcomeService").triggerWelcome(req.user, "ai_video"); next(); };
+router.get("/ai-video/studio", guard, welcomeAiVideo, controller.studio);
 router.patch("/ai-video/goal", guard, controller.goal);
 router.post("/ai-video/scripts", guard, controller.script);
 router.post("/ai-video/voice-clones", guard, voiceUpload, controller.cloneVoice);

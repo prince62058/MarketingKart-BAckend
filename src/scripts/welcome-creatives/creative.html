@@ -1,0 +1,178 @@
+<!doctype html>
+<!-- WhatsApp welcome creatives (1080x1080) -> public/images/welcome/*.jpg. Render one per product
+     (window taller than 1080, then crop the top 1080x1080):
+     chrome --headless=new --window-size=1080,1300 --allow-file-access-from-files --screenshot=out.png "creative.html?p=meta|whatsapp|ai_video" -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1080px; height: 1080px; overflow: hidden; }
+  body { font-family: "Avenir Next", "Helvetica Neue", Arial, sans-serif; color: #141a2e; background: #fff; position: relative; }
+  .bg { position: absolute; inset: 0; background: radial-gradient(120% 80% at 100% 0%, #fff3ea 0%, #ffffff 55%); }
+  .wave { position: absolute; left: -10%; right: -10%; border-radius: 50%; }
+  .wave.a { bottom: -560px; height: 900px; background: linear-gradient(110deg, #ff7a1a, #ff5a00 60%, #ff8a2b); transform: rotate(-8deg); }
+  .wave.b { bottom: -620px; height: 900px; background: linear-gradient(110deg, #ffb07a, #ff8c3a); opacity: .55; transform: rotate(4deg); left: -30%; }
+  .glow { position: absolute; width: 520px; height: 520px; border-radius: 50%; right: -160px; top: 180px; background: radial-gradient(circle, rgba(255,122,26,.18), transparent 65%); }
+
+  header { position: absolute; top: 54px; left: 64px; right: 64px; display: flex; align-items: center; justify-content: space-between; }
+  header img { height: 62px; mix-blend-mode: multiply; }
+  .tag { display: flex; align-items: center; gap: 18px; }
+  .tag i { width: 3px; height: 62px; background: #ff6a00; border-radius: 3px; }
+  .tag span { font-size: 25px; font-weight: 600; font-style: italic; line-height: 1.15; color: #141a2e; }
+  .tag span b { display: block; height: 5px; width: 150px; margin-top: 6px; border-radius: 4px; background: linear-gradient(90deg, #ff6a00, rgba(255,106,0,0)); }
+
+  h1 { position: absolute; left: 64px; top: 168px; line-height: .98; letter-spacing: -1.5px; }
+  h1 .l1 { display: block; font-size: 82px; font-weight: 700; }
+  h1 .l2 { display: block; font-size: 104px; font-weight: 800; background: linear-gradient(90deg, #ff4d00, #ff7a1a 55%, #ff9a3c); -webkit-background-clip: text; color: transparent; padding-bottom: 6px; }
+  h1 .l3 { display: block; font-size: 64px; font-weight: 600; letter-spacing: -1px; margin-top: 4px; }
+
+  .pill { position: absolute; left: 64px; top: 466px; padding: 20px 40px; border-radius: 60px; background: linear-gradient(90deg, #ff4d00, #ff7a1a); color: #fff; font-size: 46px; font-weight: 700; box-shadow: 0 14px 34px rgba(255, 90, 0, .35), inset 0 -4px 0 rgba(0,0,0,.08); white-space: nowrap; }
+  .sub { position: absolute; left: 72px; top: 568px; font-size: 25px; font-weight: 500; color: #3a3f52; }
+  .sub2 { position: absolute; left: 72px; top: 610px; font-size: 30px; font-weight: 700; color: #ff5a00; display: flex; align-items: center; gap: 18px; }
+  .sub2::before, .sub2::after { content: ""; width: 90px; height: 3px; background: #ff7a1a; border-radius: 3px; }
+
+  .seal { position: absolute; right: 64px; top: 430px; width: 200px; height: 200px; border-radius: 50%; background: #fff; border: 5px solid #ff6a00; box-shadow: 0 10px 30px rgba(255,90,0,.25); display: grid; place-items: center; text-align: center; transform: rotate(-8deg); }
+  .seal div { line-height: 1; }
+  .seal small { display: block; font-size: 24px; font-weight: 600; }
+  .seal b { display: block; font-size: 60px; font-weight: 800; color: #ff5a00; }
+  .seal em { display: block; font-size: 19px; font-weight: 700; font-style: normal; color: #ff5a00; }
+
+  .phone { position: absolute; left: 395px; top: 728px; width: 330px; height: 560px; border-radius: 52px; background: #1b1d22; padding: 12px; box-shadow: 0 30px 60px rgba(60, 20, 0, .35); transform: rotate(8deg); }
+  .screen { width: 100%; height: 100%; border-radius: 42px; background: #f6f7fb; overflow: hidden; position: relative; }
+  .notch { position: absolute; top: 10px; left: 50%; width: 96px; height: 26px; margin-left: -48px; background: #1b1d22; border-radius: 20px; z-index: 2; }
+  .status { display: flex; justify-content: space-between; padding: 14px 26px 0; font-size: 14px; font-weight: 700; }
+  .appbar { display: flex; align-items: center; gap: 8px; padding: 14px 18px 8px; }
+  .appbar img { height: 22px; }
+  .row { margin: 8px 14px; padding: 10px 12px; background: #fff; border-radius: 14px; display: flex; gap: 10px; align-items: center; box-shadow: 0 2px 6px rgba(0,0,0,.05); }
+  .thumb { width: 54px; height: 54px; border-radius: 10px; background: linear-gradient(135deg, #ffd0ad, #ff7a1a); flex: none; }
+  .row .t { flex: 1; min-width: 0; }
+  .row b { display: block; font-size: 15px; }
+  .row small { display: block; font-size: 12px; color: #6b7080; }
+  .chip { font-size: 11px; padding: 3px 8px; border-radius: 6px; background: #e8f0ff; color: #2d5bd7; font-weight: 600; }
+  .chip.g { background: #ddf7e5; color: #12894a; }
+  .call { width: 30px; height: 30px; border-radius: 50%; background: #2f80ed; display: grid; place-items: center; color: #fff; font-size: 14px; flex: none; }
+
+  .badge { position: absolute; display: flex; align-items: center; gap: 16px; padding: 18px 24px; border-radius: 22px; background: rgba(255,255,255,.96); box-shadow: 0 12px 34px rgba(60, 20, 0, .16); font-size: 27px; font-weight: 600; line-height: 1.15; }
+  .badge .ic { width: 46px; height: 46px; display: grid; place-items: center; color: #ff5a00; flex: none; }
+  .badge.l { left: 56px; top: 812px; }
+  .badge.r { right: 48px; top: 900px; }
+
+  .app { position: absolute; width: 104px; height: 104px; border-radius: 26px; display: grid; place-items: center; box-shadow: 0 14px 30px rgba(0,0,0,.2); }
+  .app svg { width: 62px; height: 62px; }
+  .wa { background: linear-gradient(160deg, #5be472, #1fa855); }
+  .fb { background: linear-gradient(160deg, #3b8cff, #1559d6); }
+  .ig { background: radial-gradient(circle at 30% 110%, #fdd36b 0%, #f5603b 40%, #d43381 65%, #7b3bd3 100%); }
+  .yt { background: linear-gradient(160deg, #ff4b4b, #d40000); }
+
+  /* WhatsApp-style chat on the phone */
+  .chat { padding: 8px 12px; display: grid; gap: 8px; }
+  .bub { max-width: 86%; padding: 8px 10px; border-radius: 10px; background: #fff; font-size: 13px; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+  .bub.out { justify-self: end; background: #d9fdd3; }
+  .bub .img { height: 86px; border-radius: 8px; background: linear-gradient(135deg, #ffcfa8, #ff7a1a); margin-bottom: 6px; }
+  .bub .btn { margin-top: 6px; padding-top: 6px; border-top: 1px solid #eee; text-align: center; color: #027eb5; font-weight: 600; font-size: 12px; }
+  .bar { margin: 10px 14px; padding: 12px; border-radius: 14px; background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,.05); font-size: 13px; }
+  .bar .track { height: 8px; border-radius: 8px; background: #eef0f4; margin-top: 8px; overflow: hidden; }
+  .bar .track span { display: block; height: 100%; width: 72%; background: linear-gradient(90deg, #25d366, #128c7e); }
+
+  /* AI video studio on the phone */
+  .player { margin: 10px 14px; height: 250px; border-radius: 16px; background: linear-gradient(160deg, #2b2f45, #121420); position: relative; overflow: hidden; }
+  .player .person { position: absolute; left: 50%; bottom: 0; width: 170px; height: 210px; margin-left: -85px; }
+  .player .rec { position: absolute; top: 12px; left: 12px; font-size: 11px; color: #fff; background: rgba(255,60,60,.9); padding: 3px 8px; border-radius: 6px; font-weight: 700; }
+  .player .cap { position: absolute; left: 12px; right: 12px; bottom: 12px; font-size: 12px; color: #fff; background: rgba(0,0,0,.55); padding: 6px 8px; border-radius: 8px; text-align: center; }
+  .chips { display: flex; gap: 6px; margin: 4px 14px; }
+  .chips span { font-size: 12px; padding: 5px 10px; border-radius: 99px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.08); font-weight: 600; }
+  .chips span.on { background: #ff6a00; color: #fff; }
+  .gen { margin: 10px 14px; padding: 12px; border-radius: 14px; background: linear-gradient(90deg, #ff4d00, #ff7a1a); color: #fff; font-weight: 700; text-align: center; font-size: 15px; }
+  .script { margin: 8px 14px; padding: 10px 12px; border-radius: 12px; background: #fff; font-size: 12px; color: #3a3f52; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+</style>
+</head>
+<body>
+<div class="bg"></div>
+<div class="glow"></div>
+<div class="wave b"></div>
+<div class="wave a"></div>
+<div id="root"></div>
+
+<script>
+const LOGO = "../../../public/images/mk_full_logo_tight.png";
+const ICON = {
+  wa: '<svg viewBox="0 0 24 24" fill="#fff"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2Zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8-.2-.1-.4-.1-.6.1l-.8 1c-.1.2-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.2-.4.3-.4.8-1.3.1-.2 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.8 11.9 11.9 0 0 0 4.6 4c1.7.7 2.4.8 3.2.7.5-.1 1.5-.6 1.8-1.2.2-.6.2-1.1.1-1.2l-.4-.2Z"/></svg>',
+  fb: '<svg viewBox="0 0 24 24" fill="#fff"><path d="M14 8h3V4h-3a4 4 0 0 0-4 4v2H8v4h2v8h4v-8h3l1-4h-4V8.5c0-.3.2-.5.5-.5H14Z"/></svg>',
+  ig: '<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4.2"/><circle cx="17.5" cy="6.5" r="1" fill="#fff"/></svg>',
+  yt: '<svg viewBox="0 0 24 24" fill="#fff"><path d="M9 7.5v9l7.5-4.5L9 7.5Z"/></svg>',
+  bars: '<svg viewBox="0 0 24 24" fill="#ff5a00"><rect x="3" y="13" width="4" height="8" rx="1"/><rect x="10" y="8" width="4" height="13" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/></svg>',
+  user: '<svg viewBox="0 0 24 24" fill="none" stroke="#ff5a00" stroke-width="2.2"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-4.5 4.3-6.5 8-6.5s7 2 8 6.5"/></svg>',
+  bot: '<svg viewBox="0 0 24 24" fill="none" stroke="#ff5a00" stroke-width="2.2"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M9 13h.01M15 13h.01"/></svg>',
+  send: '<svg viewBox="0 0 24 24" fill="none" stroke="#ff5a00" stroke-width="2.2"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z"/></svg>',
+  mic: '<svg viewBox="0 0 24 24" fill="none" stroke="#ff5a00" stroke-width="2.2"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4"/></svg>',
+  cam: '<svg viewBox="0 0 24 24" fill="none" stroke="#ff5a00" stroke-width="2.2"><path d="M3 7h12v10H3zM15 10l6-3v10l-6-3"/></svg>',
+};
+const phoneTop = `<div class="notch"></div><div class="status"><span>9:41</span><span>●●● ▮</span></div><div class="appbar"><img src="${LOGO}"></div>`;
+const lead = (n, p, d, chip, g) => `<div class="row"><div class="thumb"></div><div class="t"><b>${n}</b><small>${p}</small><small>Added · ${d}</small></div><span class="chip ${g ? "g" : ""}">${chip}</span></div>`;
+
+const P = {
+  meta: {
+    l1: "Get Daily", l2: "New Customers", l3: "via Social Media Ads.",
+    pill: "Get Trial Ad @ Just ₹1,499",
+    sub: "Price includes everything – Ad spend, design cost + GST", sub2: "No Hidden Cost",
+    seal: ["For First", "500", "Customers Only"],
+    badges: [["bars", "No Marketing<br>Skill Required"], ["user", "Get Dedicated<br>Account Manager"]],
+    apps: [["wa", 92, 680], ["ig", 872, 760], ["fb", 150, 960]],
+    screen: `${phoneTop}<div style="padding:0 18px 6px;font-weight:700;font-size:18px">Leads</div>
+      ${lead("Siddharth S.", "+91 99XXX XXX07", "Today", "New lead")}
+      ${lead("Krishna T.", "+91 80XXX XXX19", "Today", "Interested", true)}
+      ${lead("Rajesh K.", "+91 99XXX XXX36", "Yesterday", "New lead")}
+      ${lead("Prashanth P.", "+91 96XXX XXX34", "Yesterday", "New lead")}`,
+  },
+  whatsapp: {
+    l1: "Sell More on", l2: "WhatsApp", l3: "with the Official API.",
+    pill: "Campaigns · Chatbot · AI Agent",
+    sub: "Official Meta WhatsApp Business API with a shared team inbox", sub2: "Start in Minutes",
+    seal: null,
+    badges: [["send", "Send Offers to<br>All Customers"], ["bot", "24×7 Auto-Replies<br>with AI Agent"]],
+    apps: [["wa", 900, 640], ["fb", 150, 960], ["ig", 900, 300]],
+    screen: `${phoneTop}
+      <div class="bar"><b>Diwali Offer campaign</b><small style="display:block;color:#6b7080">Sending to your customers…</small><div class="track"><span></span></div></div>
+      <div class="chat">
+        <div class="bub"><div class="img"></div><b>Festive Sale is live! 🎉</b><br>Flat 30% off this week.<div class="btn">↗ Shop Now</div></div>
+        <div class="bub out">I want to order 👍</div>
+        <div class="bub">🤖 Sure! Which size do you need?</div>
+      </div>`,
+  },
+  ai_video: {
+    l1: "Create", l2: "AI Avatar Videos", l3: "in Minutes.",
+    pill: "Type a Script → Get a Video",
+    sub: "Your own avatar & voice – no camera, no studio", sub2: "Hindi, English & More",
+    seal: null,
+    badges: [["cam", "Photo to<br>Talking Avatar"], ["mic", "Clone Your<br>Own Voice"]],
+    apps: [["yt", 900, 650], ["ig", 900, 440], ["fb", 150, 960]],
+    screen: `${phoneTop}
+      <div class="player"><span class="rec">● AI</span>
+        <svg class="person" viewBox="0 0 170 210"><defs><linearGradient id="s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffb37a"/><stop offset="1" stop-color="#ff6a00"/></linearGradient></defs>
+          <circle cx="85" cy="70" r="40" fill="#f2c9a5"/><path d="M45 62c0-28 20-42 40-42s40 14 40 42c-8-12-22-18-40-18s-32 6-40 18Z" fill="#3b2a20"/>
+          <path d="M10 210c6-55 38-82 75-82s69 27 75 82Z" fill="url(#s)"/></svg>
+        <span class="cap">“Namaste! Aaj hum laaye hain…”</span></div>
+      <div class="chips"><span class="on">Hindi</span><span>English</span><span>Hinglish</span></div>
+      <div class="script">Script: Introduce our new store offer in 30 seconds…</div>
+      <div class="gen">▶ Generate Video</div>`,
+  },
+};
+
+const p = P[new URLSearchParams(location.search).get("p") || "meta"];
+const seal = p.seal ? `<div class="seal"><div><small>${p.seal[0]}</small><b>${p.seal[1]}</b><em>${p.seal[2]}</em></div></div>` : "";
+const apps = p.apps.map(([k, x, y]) => `<div class="app ${k}" style="left:${x}px;top:${y}px">${ICON[k]}</div>`).join("");
+document.getElementById("root").innerHTML = `
+  <header><img src="${LOGO}" alt="MarketingKart.ai"><div class="tag"><i></i><span>AI-Powered<br>Marketing Platform<b></b></span></div></header>
+  <h1><span class="l1">${p.l1}</span><span class="l2">${p.l2}</span><span class="l3">${p.l3}</span></h1>
+  <div class="pill">${p.pill}</div>
+  <div class="sub">${p.sub}</div>
+  <div class="sub2">${p.sub2}</div>
+  ${seal}
+  <div class="phone"><div class="screen">${p.screen}</div></div>
+  <div class="badge l"><span class="ic">${ICON[p.badges[0][0]]}</span><span>${p.badges[0][1]}</span></div>
+  <div class="badge r"><span class="ic">${ICON[p.badges[1][0]]}</span><span>${p.badges[1][1]}</span></div>
+  ${apps}`;
+</script>
+</body>
+</html>

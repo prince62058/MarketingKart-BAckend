@@ -7,6 +7,7 @@ const mongoose = require("mongoose");
 const { deleteFileFromObjectStorage } = require("../middlewares/multer");
 const { sendOtp, sendOtpInMail } = require("../helpers/sendOtpHelper");
 const otpService = require("../helpers/otpService");
+const welcomeWhatsapp = require("../services/whatsappWelcomeService");
 const {
   statusCodes,
   apiResponseStatusCode,
@@ -986,6 +987,8 @@ exports.verifyMobileOtpV2 = async (req, res) => {
 
   const userData = publicUser(user);
   userData.token = signLoginToken(user, "365d");
+  // The web panels name their product (WhatsApp Marketing); the super admin panel sends none.
+  welcomeWhatsapp.triggerWelcome(user, welcomeWhatsapp.productFrom(req.body?.product));
 
   return res
     .status(statusCodes.OK)
@@ -1082,6 +1085,8 @@ exports.verifyOtpV2 = async (req, res) => {
 
   const userData = publicUser(user);
   userData.token = signLoginToken(user, "60d");
+  // The MarketingKart app (Meta ads) signs in here.
+  welcomeWhatsapp.triggerWelcome(user, welcomeWhatsapp.productFrom(req.body?.product, "meta_ads"));
 
   return res
     .status(statusCodes.OK)
