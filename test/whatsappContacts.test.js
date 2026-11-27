@@ -76,6 +76,13 @@ test("a customer adds, edits, filters and deletes their own contacts", { skip },
   assert.equal(searched.body.data[0].name, "Amit K");
   const regexy = await h.call("GET", "/api/whatsapp/contacts?search=(.*", { token: alice });
   assert.equal(regexy.status, 200);
+  const today = new Date().toISOString().slice(0, 10);
+  const dated = await h.call("GET", `/api/whatsapp/contacts?from=${today}&to=${today}`, { token: alice });
+  assert.equal(dated.body.total, 2);
+  const future = await h.call("GET", "/api/whatsapp/contacts?from=2999-01-01", { token: alice });
+  assert.equal(future.body.total, 0);
+  const junk = await h.call("GET", "/api/whatsapp/contacts?from=not-a-date", { token: alice });
+  assert.equal(junk.body.total, 2, "an unreadable date is ignored");
   const unsub = await h.call("GET", "/api/whatsapp/contacts?status=unsub", { token: alice });
   assert.equal(unsub.body.total, 1);
 

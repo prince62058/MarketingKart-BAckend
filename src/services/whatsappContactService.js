@@ -58,7 +58,7 @@ function cleanCustom(custom, fields) {
   return out;
 }
 
-function buildFilter(userId, { search, group, source, status } = {}) {
+function buildFilter(userId, { search, group, source, status, from, to } = {}) {
   const filter = { userId };
   const term = String(search || "").trim().slice(0, 80);
   if (term) {
@@ -69,6 +69,14 @@ function buildFilter(userId, { search, group, source, status } = {}) {
   if (source && SOURCES.includes(source)) filter.source = source;
   if (status === "sub") filter.subscribed = { $ne: false };
   if (status === "unsub") filter.subscribed = false;
+  // Date range on when the contact was added; `to` is inclusive of that whole day.
+  const start = from ? new Date(`${from}T00:00:00.000Z`) : null;
+  const end = to ? new Date(`${to}T23:59:59.999Z`) : null;
+  if ((start && !Number.isNaN(start.getTime())) || (end && !Number.isNaN(end.getTime()))) {
+    filter.createdAt = {};
+    if (start && !Number.isNaN(start.getTime())) filter.createdAt.$gte = start;
+    if (end && !Number.isNaN(end.getTime())) filter.createdAt.$lte = end;
+  }
   return filter;
 }
 
