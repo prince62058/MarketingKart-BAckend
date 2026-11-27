@@ -69,6 +69,7 @@ const roleCache = new Map();
 const LIMITS = {
   apiPerMinute: { label: "API requests per minute", min: 1, max: 10000, system: 60 },
   dailyMessages: { label: "Messages per day (all sends from the number)", min: 1, max: 10000000, system: null },
+  monthlyMessages: { label: "Messages per month (all sends from the number)", min: 1, max: 100000000, system: null },
   campaignRatePerMinute: { label: "Campaign speed (messages per minute)", min: 1, max: 600, system: 600 },
   maxCampaignContacts: { label: "Contacts in one campaign", min: 1, max: 1000000, system: null },
 };

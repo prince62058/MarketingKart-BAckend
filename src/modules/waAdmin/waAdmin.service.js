@@ -603,6 +603,30 @@ async function numbers(query = {}) {
   return paged(rows, total, p);
 }
 
+// The message limits of one customer with how much of them is used (works with or without a number).
+async function customerLimits(userId) {
+  const id = oid(userId);
+  const user = await User.findById(id).select("name mobile email disable").lean();
+  if (!user) throw fail(404, "Customer not found");
+  const [account, control, limits] = await Promise.all([
+    Account.findOne({ userId: id }).select("phoneNumber phoneNumberId status messagingLimit").lean(),
+    controls.getControl(id, { fresh: true }),
+    controls.limitsFor(id),
+  ]);
+  const pn = account?.phoneNumberId;
+  const [today, month] = pn ? await Promise.all([
+    Message.countDocuments({ phoneNumberId: pn, direction: "OUTBOUND", createdAt: { $gte: sendGuard.dayStart() } }),
+    Message.countDocuments({ phoneNumberId: pn, direction: "OUTBOUND", createdAt: { $gte: sendGuard.monthStart() } }),
+  ]) : [0, 0];
+  return {
+    user: personOf(user),
+    number: account ? { phoneNumber: account.phoneNumber, status: account.status, messagingLimit: account.messagingLimit || null } : null,
+    own: control.limits, limits, specs: controls.LIMITS,
+    usage: { today, month },
+    blocked: control.numberBlocked, suspended: control.suspended,
+  };
+}
+
 // Meta's messaging tiers: how many people a number may start chats with in 24 hours.
 function tierLimit(tier) {
   const m = /^TIER_(\d+)(K)?$/i.exec(String(tier || ""));
@@ -668,6 +692,8 @@ async function numberDetail(userId) {
     limitSpecs: controls.LIMITS,
     usage: {
       sentToday, failedToday, dailyLimit: limits.dailyMessages.value,
+      sentThisMonth: await Message.countDocuments({ phoneNumberId: pn, direction: "OUTBOUND", createdAt: { $gte: sendGuard.monthStart() } }),
+      monthlyLimit: limits.monthlyMessages.value,
       tier: { name: account.messagingLimit || null, limit: tierLimit(account.messagingLimit), used24h: uniq24h },
       api: { perMinuteLimit: limits.apiPerMinute.value, packagePerMinute: pkg?.requestsPerMinute ?? null, thisMinute: apiWindow?.requests || 0, callsToday, activeKeys: keys, package: pkg || null },
     },
@@ -815,5 +841,5 @@ async function planOptions() {
 
 module.exports = {
   overview, customers, customer, adjustWallet, adjustCredits, grantPlan, extendPlan, cancelPlan, setControls, revokeKey, saveApiPackage,
-  messages, numbers, numberDetail, refreshFromMeta, meta, tierLimit, integrations, apiUsage, panelSettings, savePanelSettings, audit, planOptions,
+  messages, numbers, numberDetail, customerLimits, refreshFromMeta, meta, tierLimit, integrations, apiUsage, panelSettings, savePanelSettings, audit, planOptions,
 };

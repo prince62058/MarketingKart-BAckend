@@ -226,6 +226,24 @@ exports.createCampaign = async (req, res) => {
       });
     }
     if (caps.campaignRatePerMinute.value) ratePerMinute = Math.min(ratePerMinute, caps.campaignRatePerMinute.value);
+    // Message limits: refuse up front rather than failing half-way through the list.
+    if ((caps.dailyMessages.value || caps.monthlyMessages.value) && connectedAccount?.phoneNumberId && !startAt) {
+      const guard = require("../services/whatsappSendGuard");
+      const checks = [
+        [caps.dailyMessages.value, () => guard.sentToday(connectedAccount.phoneNumberId), "today"],
+        [caps.monthlyMessages.value, () => guard.sentThisMonth(connectedAccount.phoneNumberId), "this month"],
+      ];
+      for (const [limit, used, when] of checks) {
+        if (!limit) continue;
+        const left = Math.max(0, limit - (await used()).count);
+        if (contacts.length > left) {
+          return res.status(429).json({
+            success: false,
+            message: `Your message limit allows ${left.toLocaleString("en-IN")} more message${left === 1 ? "" : "s"} ${when}, but this campaign has ${contacts.length.toLocaleString("en-IN")} contacts. Send to fewer contacts or ask MarketingKart to raise the limit.`,
+          });
+        }
+      }
+    }
 
     const billCategory = whatsappBilling.categoryOf(template);
     if (req.user.userType !== "ADMIN") {

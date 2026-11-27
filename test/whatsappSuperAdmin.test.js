@@ -312,3 +312,24 @@ test("number detail shows usage against limits and Meta data, refreshed live", {
     service.meta.get = realGet;
   }
 });
+
+test("monthly message limit and the Set limit view", { skip }, async () => {
+  const guard = require("../src/services/whatsappSendGuard");
+  guard.reset();
+  const view = await call("GET", `/admin/whatsapp/customers/${alice._id}/limits`, adminToken);
+  assert.equal(view.status, 200, view.text);
+  assert.equal(view.body.data.number.phoneNumber, "+91 90000 22001");
+  assert.ok(view.body.data.specs.monthlyMessages);
+  const month = view.body.data.usage.month;
+  assert.ok(month >= 2);
+  assert.equal((await call("GET", `/admin/whatsapp/customers/${alice._id}/limits`, staffToken)).status, 403);
+  const saved = await call("PUT", `/admin/whatsapp/customers/${alice._id}/controls`, adminToken, { limits: { monthlyMessages: month + 1 } });
+  assert.equal(saved.body.data.limitsEffective.monthlyMessages.value, month + 1);
+  const account = { userId: alice._id, phoneNumberId: "pn-sa" };
+  await guard.assertCanSend(account);
+  await assert.rejects(guard.assertCanSend(account), { status: 429, code: "MONTHLY_LIMIT" });
+  await call("PUT", `/admin/whatsapp/customers/${alice._id}/controls`, adminToken, { limits: { monthlyMessages: null } });
+  guard.reset();
+  await guard.assertCanSend(account);
+  assert.equal(guard.monthStart(Date.UTC(2026, 10, 30, 20, 0)).toISOString(), "2026-11-30T18:30:00.000Z", "a new IST month starts at 18:30 UTC on the last day");
+});

@@ -17,6 +17,24 @@ function dayStart(now = Date.now()) {
   return new Date(Math.floor((now + IST_MS) / 86400000) * 86400000 - IST_MS);
 }
 
+// First moment of the current calendar month in India.
+function monthStart(now = Date.now()) {
+  const ist = new Date(now + IST_MS);
+  return new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), 1) - IST_MS);
+}
+
+const monthCounters = new Map(); // phoneNumberId -> { month, count, at }
+async function sentThisMonth(phoneNumberId) {
+  const month = monthStart().getTime();
+  const hit = monthCounters.get(phoneNumberId);
+  if (hit && hit.month === month && Date.now() - hit.at < RECOUNT_MS) return hit;
+  const count = await Message.countDocuments({ phoneNumberId, direction: "OUTBOUND", createdAt: { $gte: new Date(month) } });
+  const entry = { month, count: Math.max(count, hit?.month === month ? hit.count : 0), at: Date.now() };
+  monthCounters.set(phoneNumberId, entry);
+  if (monthCounters.size > 5000) monthCounters.delete(monthCounters.keys().next().value);
+  return entry;
+}
+
 async function sentToday(phoneNumberId) {
   const day = dayStart().getTime();
   const hit = counters.get(phoneNumberId);
@@ -37,15 +55,22 @@ async function assertCanSend(account) {
   if (control.suspended) {
     throw fail(423, "ACCOUNT_SUSPENDED", control.suspendReason || "This WhatsApp account is suspended. Contact support.");
   }
-  const limit = (await controls.limitsFor(account.userId)).dailyMessages.value;
-  if (!limit || !account.phoneNumberId) return;
-  const today = await sentToday(account.phoneNumberId);
-  if (today.count >= limit) {
-    throw fail(429, "DAILY_LIMIT", `Daily message limit reached (${limit.toLocaleString("en-IN")} a day). Sending starts again after midnight.`);
+  if (!account.phoneNumberId) return;
+  const limits = await controls.limitsFor(account.userId);
+  const perDay = limits.dailyMessages.value;
+  const perMonth = limits.monthlyMessages.value;
+  const today = perDay ? await sentToday(account.phoneNumberId) : null;
+  const month = perMonth ? await sentThisMonth(account.phoneNumberId) : null;
+  if (month && month.count >= perMonth) {
+    throw fail(429, "MONTHLY_LIMIT", `Monthly message limit reached (${perMonth.toLocaleString("en-IN")} a month). Ask MarketingKart to raise it.`);
   }
-  today.count += 1;
+  if (today && today.count >= perDay) {
+    throw fail(429, "DAILY_LIMIT", `Daily message limit reached (${perDay.toLocaleString("en-IN")} a day). Sending starts again after midnight.`);
+  }
+  if (today) today.count += 1;
+  if (month) month.count += 1;
 }
 
-function reset() { counters.clear(); }
+function reset() { counters.clear(); monthCounters.clear(); }
 
-module.exports = { assertCanSend, sentToday, dayStart, reset };
+module.exports = { assertCanSend, sentToday, sentThisMonth, dayStart, monthStart, reset };

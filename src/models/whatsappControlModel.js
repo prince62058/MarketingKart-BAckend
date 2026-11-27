@@ -17,6 +17,7 @@ const whatsappControlSchema = new mongoose.Schema(
     limits: {
       apiPerMinute: { type: Number, default: null },
       dailyMessages: { type: Number, default: null },
+      monthlyMessages: { type: Number, default: null },
       campaignRatePerMinute: { type: Number, default: null },
       maxCampaignContacts: { type: Number, default: null },
     },

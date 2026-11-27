@@ -31,6 +31,7 @@ router.post(`${base}/customers/:userId/credits`, admin, handle((req) => service.
 router.post(`${base}/customers/:userId/plan`, admin, handle((req) => service.grantPlan(who(req), req.params.userId, req.body)));
 router.post(`${base}/customers/:userId/plan/extend`, admin, handle((req) => service.extendPlan(who(req), req.params.userId, req.body)));
 router.post(`${base}/customers/:userId/plan/cancel`, admin, handle((req) => service.cancelPlan(who(req), req.params.userId, req.body)));
+router.get(`${base}/customers/:userId/limits`, admin, handle((req) => service.customerLimits(req.params.userId)));
 router.put(`${base}/customers/:userId/controls`, admin, handle((req) => service.setControls(who(req), req.params.userId, req.body)));
 router.post(`${base}/customers/:userId/keys/:keyId/revoke`, admin, handle((req) => service.revokeKey(who(req), req.params.userId, req.params.keyId)));
 router.put(`${base}/customers/:userId/api-package`, admin, handle((req) => service.saveApiPackage(who(req), req.params.userId, req.body)));
