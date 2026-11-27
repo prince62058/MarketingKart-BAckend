@@ -227,6 +227,7 @@ app.use("/api/premium-plan", require("./routes/premiumPlanRoute"));
 app.use("/api", require("./routes/pageLinkOAuthRoute"));
 app.use("/api", require("./routes/whatsappWalletRoute"));
 app.use("/api", require("./routes/whatsappAccountMenuRoute"));
+app.use("/api", require("./routes/whatsappPanelBrandRoute"));
 app.use("/api", require("./routes/whatsappContactRoute"));
 app.use("/api", require("./routes/whatsappBusinessProfileRoute"));
 app.use("/api", require("./routes/whatsappLinkRoute"));
