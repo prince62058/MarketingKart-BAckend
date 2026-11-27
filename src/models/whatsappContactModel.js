@@ -9,7 +9,7 @@ const whatsappContactSchema = new mongoose.Schema(
     groups: [{ type: mongoose.Schema.Types.ObjectId, ref: "whatsappContactGroup" }],
     source: {
       type: String,
-      enum: ["Direct", "Imported", "Organic", "API", "Lead Gen", "Click-to-WhatsApp", "Link & QR"],
+      enum: ["Direct", "Imported", "Organic", "API", "Lead Gen", "Click-to-WhatsApp", "Link & QR", "HubSpot", "Zoho CRM", "LeadSquared"],
       default: "Direct",
     },
     subscribed: { type: Boolean, default: true },

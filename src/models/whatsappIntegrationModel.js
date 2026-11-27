@@ -40,11 +40,16 @@ const whatsappIntegrationSchema = new mongoose.Schema(
     label: { type: String, default: "", maxlength: 200 },
     config: { type: mongoose.Schema.Types.Mixed, default: {} },
     mappings: { type: [mappingSchema], default: [] },
+    // CRM sync runs one at a time per connection.
+    syncLockUntil: { type: Date, default: null },
     stats: {
       events: { type: Number, default: 0 },
       sent: { type: Number, default: 0 },
       failed: { type: Number, default: 0 },
       imported: { type: Number, default: 0 },
+      // CRM apps: contacts sent to the CRM, and the ones it refused.
+      pushed: { type: Number, default: 0 },
+      pushFailed: { type: Number, default: 0 },
       lastEventAt: { type: Date, default: null },
       lastSyncAt: { type: Date, default: null },
       lastError: { type: String, default: "" },

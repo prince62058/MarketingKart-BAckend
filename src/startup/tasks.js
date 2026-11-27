@@ -72,6 +72,13 @@ async function initializeBackgroundTasks() {
         // Keep Meta spend live in DB (wallet Ad Spent + ads metrics) every 30s
         startLiveSpendSync(30 * 1000);
 
+        // HubSpot / Zoho CRM / LeadSquared contact sync every 15 minutes
+        try {
+            require("../services/whatsappCrmService").startScheduler();
+        } catch (error) {
+            console.error("❌ Failed to start CRM sync:", error.message);
+        }
+
         console.log("✅ Background tasks initialized successfully.");
     } catch (error) {
         console.error("❌ Failed to initialize background tasks:", error);

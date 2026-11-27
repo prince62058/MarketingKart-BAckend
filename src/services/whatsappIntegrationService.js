@@ -1,6 +1,6 @@
 // Integrations: store webhooks (Shopify, WooCommerce, Shiprocket) that send approved templates on
-// events, Google Sheets contact sync, and LeadSquared lead import. HubSpot, Zoho CRM and TallyPrime
-// are listed so the panel can show them, but need server-side app keys / a desktop add-on first.
+// events, Google Sheets contact sync, and the LeadSquared key check. CRM sync (HubSpot, Zoho CRM,
+// LeadSquared) lives in whatsappCrmService; TallyPrime is listed but needs a desktop add-on.
 const crypto = require("crypto");
 const axios = require("axios");
 const Integration = require("../models/whatsappIntegrationModel");
@@ -537,57 +537,10 @@ async function connectLeadSquared(userId, body = {}) {
   return view(doc);
 }
 
-/** Imports leads changed in the last `days` days as contacts (phone required). */
-async function syncLeadSquared(userId, days = 30) {
-  const doc = await Integration.findOne({ userId, app: "leadsquared" }).select("+credentials");
-  if (!doc) throw new IntegrationError(409, "Connect LeadSquared first.");
-  const { host, accessKey, secretKey } = JSON.parse(doc.credentials || "{}");
-  const to = new Date();
-  const from = new Date(Date.now() - days * 86400000);
-  const fmt = (d) => d.toISOString().replace("T", " ").slice(0, 19);
-  let imported = 0;
-  let skipped = 0;
-  try {
-    for (let page = 1; page <= 10; page += 1) {
-      const r = await axios.post(`https://${host}/v2/LeadManagement.svc/Leads.RecentlyModified`, {
-        Parameter: { FromDate: fmt(from), ToDate: fmt(to) },
-        Columns: { Include_CSV: "FirstName,LastName,Phone,Mobile,EmailAddress" },
-        Paging: { PageIndex: page, PageSize: 500 },
-      }, { params: { accessKey, secretKey }, timeout: 30000 });
-      const leads = r.data?.Leads || [];
-      const ops = [];
-      for (const lead of leads) {
-        const attrs = Object.fromEntries((lead.LeadPropertyList || []).map((p) => [p.Attribute, p.Value]));
-        const phone = normalizePhone(attrs.Mobile || attrs.Phone);
-        if (!phone) { skipped += 1; continue; }
-        const name = [attrs.FirstName, attrs.LastName].filter(Boolean).join(" ").slice(0, 120);
-        ops.push({ updateOne: { filter: { userId, phone }, update: { $setOnInsert: { name, source: "Imported", subscribed: true } }, upsert: true } });
-      }
-      if (ops.length) { await Contact.bulkWrite(ops, { ordered: false }); imported += ops.length; }
-      if (leads.length < 500) break;
-    }
-  } catch (error) {
-    await Integration.updateOne({ _id: doc._id }, { $set: { "stats.lastError": "LeadSquared sync failed." } });
-    throw new IntegrationError(502, "LeadSquared did not return the leads. Check the keys still work.");
-  }
-  await Integration.updateOne({ _id: doc._id }, { $inc: { "stats.imported": imported }, $set: { "stats.lastSyncAt": new Date(), "stats.lastError": "" } });
-  return { imported, skipped };
-}
-
-/** HubSpot and Zoho sign-in needs the app keys on the server; say so plainly until they exist. */
-function oauthStart(app) {
-  const spec = OTHER_APPS[app];
-  if (!spec?.oauthEnv) throw new IntegrationError(404, "Unknown app.");
-  if (!spec.oauthEnv.every((k) => process.env[k])) {
-    throw new IntegrationError(503, `${spec.name} sign-in is not set up on this server yet. The admin needs to add the ${spec.name} app keys (${spec.oauthEnv.join(", ")}).`);
-  }
-  throw new IntegrationError(501, `${spec.name} sign-in is coming soon.`);
-}
-
 module.exports = {
   IntegrationError, STORE_APPS, getPath, shopifyEvents, wooEvents, shiprocketEvents, hmacBase64,
   listIntegrations, connectStore, disconnect, addMapping, updateMapping, removeMapping,
   verifyWebhook, processEvent, sendTemplate,
   listSheets, createSheet, updateSheet, deleteSheet, receiveHeaders, receiveRows, syncSheet,
-  connectLeadSquared, syncLeadSquared, oauthStart,
+  connectLeadSquared,
 };
