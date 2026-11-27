@@ -11,6 +11,7 @@ router.get("/whatsapp/developer/overview", authUser, ctrl.overview);
 router.get("/whatsapp/developer/keys", authUser, ctrl.listKeys);
 router.post("/whatsapp/developer/keys", authUser, ctrl.createKey);
 router.post("/whatsapp/developer/keys/:keyId/revoke", authUser, ctrl.revokeKey);
+router.post("/whatsapp/developer/keys/:keyId/regenerate", authUser, ctrl.regenerateKey);
 router.get("/whatsapp/developer/webhook", authUser, ctrl.getWebhook);
 router.put("/whatsapp/developer/webhook", authUser, ctrl.saveWebhook);
 router.post("/whatsapp/developer/webhook/rotate", authUser, ctrl.rotateWebhook);

@@ -23,7 +23,9 @@ router.post("/chatbot/replies", (req, res, next) => {
 }, ctrl.chat);
 router.use(async (req, res, next) => {
   if (req.apiKey.service === "chatbot") return res.status(403).json({success:false,message:"WhatsApp access is missing from this key"});
-  try { await contract.authorize(req.user._id, "whatsapp"); next(); }
+  // Every customer can use the WhatsApp API: an API package pays for messages when
+  // one is active, otherwise template messages are charged to the WhatsApp wallet.
+  try { req.apiBilling = (await contract.hasActive(req.user._id, "whatsapp")) ? "package" : "wallet"; next(); }
   catch (error) { res.status(error.status || 500).json({success:false,message:error.message}); }
 });
 router.get("/account", ctrl.apiAccount);

@@ -39,6 +39,12 @@ async function authorize(userId, service, consume = false) {
   }
 }
 
+// True when an admin-assigned API package for this service is switched on and unexpired.
+// Without one, WhatsApp API calls still work and template messages are paid from the wallet.
+async function hasActive(userId, service) {
+  return Boolean(await Contract.exists({ userId, [service]: true, expiresAt: { $gt: new Date() } }));
+}
+
 async function profile(userId, input) {
   const filter = {userId, chatbot:true, expiresAt:{$gt:new Date()}};
   let query;
@@ -68,4 +74,4 @@ async function rateLimit(userId) {
     {new:true,upsert:true}).lean();
   if (window.requests > limit) throw fail(429,"Account request rate exceeded. Retry next minute.");
 }
-module.exports = { read, save, authorize, profile, rateLimit };
+module.exports = { read, save, authorize, hasActive, profile, rateLimit };

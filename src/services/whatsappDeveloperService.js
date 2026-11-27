@@ -187,6 +187,26 @@ async function revokeKey(actor, keyId) {
   return publicKey(doc);
 }
 
+// Swaps the secret of an active key. The old secret stops working at once; the name,
+// permissions and call history stay with the key.
+async function regenerateKey(actor, keyId) {
+  if (!mongoose.Types.ObjectId.isValid(keyId)) throw fail(404, "Key not found");
+  const doc = await Key.findById(keyId).lean();
+  if (!doc) throw fail(404, "Key not found");
+  if (String(doc.userId) !== String(actor._id) && !isAdmin(actor)) {
+    throw fail(403, "You can only regenerate your own key");
+  }
+  if (doc.revokedAt) throw fail(409, "A revoked key cannot be regenerated. Create a new key instead.");
+  const minted = generateKey();
+  const updated = await Key.findOneAndUpdate(
+    { _id: doc._id, revokedAt: null },
+    { $set: { prefix: minted.prefix, last4: minted.last4, hash: minted.hash, lastUsedAt: null } },
+    { new: true }
+  );
+  if (!updated) throw fail(409, "A revoked key cannot be regenerated. Create a new key instead.");
+  return { ...publicKey(updated), secret: minted.raw };
+}
+
 async function authenticate(raw) {
   const token = String(raw || "").trim();
   if (!token.startsWith("mk_live_")) return null;
@@ -459,24 +479,37 @@ async function sendForProject({ user, key, body, idempotencyKey }) {
     textBody = template.bodyText || templateName;
   }
 
+  const onPackage = await contract.hasActive(user._id, "whatsapp");
   let call;
   try {
     call = await Call.create({
       userId:user._id, keyId:key._id, idempotencyKey:cleanKey || undefined,
-      to, kind, templateName, category, status:"PROCESSING", billSource:"api_package",
+      to, kind, templateName, category, status:"PROCESSING", billSource:onPackage ? "api_package" : null,
     });
   } catch (error) {
     if (error.code === 11000 && cleanKey) throw fail(409,"This request has already been recorded. Check its status before retrying.");
     throw error;
   }
+  // An API package pays when one is active. Otherwise a template is billed exactly like a
+  // campaign message (plan credits first, then the WhatsApp wallet); a text reply can only
+  // go inside the customer's 24-hour window, which is free, as it is in the inbox.
+  let hold = null;
+  const charge = { source: onPackage ? "api_package" : "none", paise: 0 };
   try {
-    await contract.authorize(user._id, "whatsapp", true);
+    if (onPackage) {
+      await contract.authorize(user._id, "whatsapp", true);
+    } else if (kind === "template") {
+      hold = await billing.reserveCampaign({ userId: user._id, category, count: 1 });
+      const source = hold.sources?.[0] || null;
+      charge.source = source || (hold.customerManaged ? "customer" : "none");
+      charge.paise = source === "wallet" ? hold.sellPaise || 0 : 0;
+    }
   } catch (error) {
     await Call.deleteOne({_id:call._id, status:"PROCESSING"});
     throw error;
   }
   let providerAccepted = false;
-  const charge = { source: "api_package", paise: 0 };
+  const reserved = Boolean(hold?.sources?.[0]);
 
   try {
     const credentials = { accessToken: account.accessToken, phoneNumberId: account.phoneNumberId };
@@ -485,7 +518,7 @@ async function sendForProject({ user, key, body, idempotencyKey }) {
       : await cloud.sendTemplateMessage(to, templateName, language, components, credentials);
     const metaMessageId = meta?.messages?.[0]?.id || null;
     providerAccepted = true;
-    await Call.updateOne({_id:call._id},{$set:{metaMessageId,status:"SENT"}});
+    await Call.updateOne({_id:call._id},{$set:{metaMessageId,status:"SENT",billSource:charge.source,billPaise:charge.paise}});
     const message = await Message.create({
       to,
       phoneNumberId: account.phoneNumberId,
@@ -497,9 +530,9 @@ async function sendForProject({ user, key, body, idempotencyKey }) {
       metaMessageId,
       status: "SENT",
       sentAt: new Date(),
-      billingState: "none",
+      billingState: reserved ? "reserved" : "none",
       billCategory: category,
-      billSource: null,
+      billSource: reserved ? hold.sources[0] : null,
       billPaise: charge.paise,
       billUserId: user._id,
     });
@@ -516,6 +549,7 @@ async function sendForProject({ user, key, body, idempotencyKey }) {
   } catch (error) {
 
     if (!providerAccepted) {
+      if (hold) await billing.releaseHold(hold).catch(() => {});
       await Call.updateOne({_id:call._id},{$set:{status:"FAILED",errorMessage:"Provider request failed"}});
     }
     throw fail(error.status || 502, error.message || "WhatsApp did not accept the message");
@@ -556,6 +590,7 @@ async function accountView(user) {
     numberStatus:account?.status || "DISCONNECTED", verifiedName:account?.verifiedName || null,
     accountReviewStatus:account?.accountReviewStatus || null, codeVerificationStatus:account?.codeVerificationStatus || null,
     apiPackage:await contract.read(user._id),
+    billing:(await contract.hasActive(user._id, "whatsapp")) ? "api_package" : "wallet",
   };
 }
 
@@ -586,6 +621,7 @@ module.exports = {
   createKey,
   listKeys,
   revokeKey,
+  regenerateKey,
   authenticate,
   desk,
   listCalls,

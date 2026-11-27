@@ -34,6 +34,15 @@ exports.revokeKey = async (req, res) => {
   }
 };
 
+exports.regenerateKey = async (req, res) => {
+  try {
+    const data = await developer.regenerateKey(req.user, req.params.keyId);
+    return res.json({ success: true, data });
+  } catch (error) {
+    return sendError(res, error);
+  }
+};
+
 exports.desk = async (req, res) => {
   try {
     const data = await developer.desk(req.user, req.query.userId);
@@ -234,7 +243,6 @@ exports.panelSend = async (req,res) => {
     const key = await Key.findOne({_id:id,userId:req.user._id,revokedAt:null});
     if (!key || key.access === "read" || key.service === "chatbot") throw developer.fail(403,"A WhatsApp send key is required");
     await contract.rateLimit(req.user._id);
-    await contract.authorize(req.user._id,"whatsapp");
     const data = await developer.sendForProject({user:req.user,key,body:req.body.message,idempotencyKey:req.get("Idempotency-Key")});
     return res.status(data.replayed ? 200 : 202).json({success:true,data});
   } catch(error) { return sendError(res,error); }
