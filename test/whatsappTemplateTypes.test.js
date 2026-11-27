@@ -291,3 +291,129 @@ test("templates synced from Meta get their type and flow id", () => {
   assert.equal(types.detectTemplateType([{ type: "BODY" }], "MARKETING"), "DEFAULT");
   assert.equal(types.flowIdOf([{ type: "BODY" }]), null);
 });
+
+/* ---------- Newer shapes: named variables, copy code, form among buttons, LTO, carousel, location, one/zero-tap ---------- */
+const PHOTO = "https://cdn.example/offer.jpg";
+
+test("a {{named}} template sends named examples and named values", async () => {
+  const { res, sent, component } = await create({
+    name: "order_ready", category: "UTILITY", language: "en", templateType: "DEFAULT", parameterFormat: "NAMED",
+    bodyText: "Hi {{first_name}}, order {{order_id}} is ready.", exampleNamedValues: { first_name: "Asha", order_id: "A12" },
+  });
+  assert.equal(res.statusCode, 201, JSON.stringify(res.body));
+  assert.deepEqual(component("BODY").example, { body_text_named_params: [{ param_name: "first_name", example: "Asha" }, { param_name: "order_id", example: "A12" }] });
+  assert.deepEqual(buildComponents({ first_name: "Ravi", order_id: "B7" }, sent.components), [
+    { type: "body", parameters: [{ type: "text", parameter_name: "first_name", text: "Ravi" }, { type: "text", parameter_name: "order_id", text: "B7" }] },
+  ]);
+  const missing = await create({ name: "x", category: "UTILITY", templateType: "DEFAULT", parameterFormat: "NAMED", bodyText: "Hi {{first_name}} there.", exampleNamedValues: {} });
+  assert.equal(missing.res.statusCode, 400);
+  assert.match(missing.res.body.message, /first_name/);
+});
+
+test("copy code and a form button sit with other buttons, and sends fill them", async () => {
+  const { res, sent, saved, component } = await create({
+    name: "sale", category: "MARKETING", templateType: "DEFAULT", bodyText: "Big sale on now, come take a look.",
+    buttons: [
+      { type: "QUICK_REPLY", text: "Not now" },
+      { type: "COPY_CODE", example: "summer20" },
+      { type: "URL", text: "Shop", url: "https://shop.example" },
+      { type: "FLOW", text: "Book", flowId: FLOW_ID },
+    ],
+  });
+  assert.equal(res.statusCode, 201, JSON.stringify(res.body));
+  const types = component("BUTTONS").buttons.map((b) => b.type);
+  assert.deepEqual(types, ["COPY_CODE", "URL", "FLOW", "QUICK_REPLY"]);
+  assert.deepEqual(component("BUTTONS").buttons[0], { type: "COPY_CODE", example: "SUMMER20" });
+  assert.equal(component("BUTTONS").buttons[2].flow_id, "1673152217594150");
+  assert.deepEqual(saved.buttons[0], { type: "COPY_CODE", example: "SUMMER20" });
+  const send = buildComponents({}, sent.components);
+  assert.deepEqual(send[0], { type: "button", sub_type: "copy_code", index: "0", parameters: [{ type: "coupon_code", coupon_code: "SUMMER20" }] });
+  assert.equal(send[1].sub_type, "flow");
+  assert.equal(send[1].index, "2");
+  assert.equal(buildComponents({ coupon_code: "VIP50" }, sent.components)[0].parameters[0].coupon_code, "VIP50");
+  const two = await create({ name: "x", category: "MARKETING", templateType: "DEFAULT", bodyText: "Hello there friend.", buttons: [{ type: "COPY_CODE", example: "A" }, { type: "COPY_CODE", example: "B" }] });
+  assert.match(two.res.body.message, /only 1 copy code/);
+});
+
+test("a Limited-Time Offer is built in Meta's order and sends its expiry", async () => {
+  const body = {
+    name: "flash", category: "MARKETING", templateType: "DEFAULT", headerType: "IMAGE", headerMediaUrl: PHOTO,
+    bodyText: "Flash sale on everything in store.", limitedTimeOffer: { text: "Ends soon!", hasExpiration: true },
+    buttons: [{ type: "COPY_CODE", example: "FLASH10" }, { type: "URL", text: "Shop", url: "https://shop.example" }],
+  };
+  const { res, sent } = await create(body);
+  assert.equal(res.statusCode, 201, JSON.stringify(res.body));
+  assert.deepEqual(sent.components.map((c) => c.type), ["HEADER", "limited_time_offer", "BODY", "BUTTONS"]);
+  assert.deepEqual(sent.components[1].limited_time_offer, { text: "Ends soon!", has_expiration: true });
+  const at = Date.now() + 3 * 86400000;
+  const send = buildComponents({ offer_expires_at: String(at) }, sent.components, { headerMediaUrl: PHOTO });
+  assert.equal(send[0].type, "header");
+  assert.deepEqual(send.find((c) => c.type === "limited_time_offer").parameters[0].limited_time_offer, { expiration_time_ms: at });
+  assert.ok(send.some((c) => c.sub_type === "copy_code"));
+  const footer = await create({ ...body, footerText: "Thanks" });
+  assert.match(footer.res.body.message, /can't have a footer/);
+  const noCode = await create({ ...body, buttons: [{ type: "URL", text: "Shop", url: "https://shop.example" }] });
+  assert.match(noCode.res.body.message, /copy offer code button and a link button/);
+  const utility = await create({ ...body, category: "UTILITY", headerType: "NONE" });
+  assert.match(utility.res.body.message, /Marketing/);
+});
+
+test("a carousel keeps each card's media for sending and checks the cards match", async () => {
+  const card = (n) => ({ mediaType: "IMAGE", mediaUrl: `https://cdn.example/c${n}.jpg`, bodyText: `Course ${n} for {{1}}.`, exampleBodyValues: ["you"], buttons: [{ type: "QUICK_REPLY", text: "Enroll" }] });
+  const body = { name: "courses", category: "MARKETING", templateType: "DEFAULT", headerType: "CAROUSEL", bodyText: "Here are our courses.", cards: [card(1), card(2)] };
+  const { res, sent, saved } = await create(body);
+  assert.equal(res.statusCode, 201, JSON.stringify(res.body));
+  assert.equal(saved.headerType, "CAROUSEL");
+  assert.deepEqual(sent.components.map((c) => c.type), ["BODY", "carousel"]);
+  const first = sent.components[1].cards[0].components;
+  assert.deepEqual(first[0], { type: "header", format: "IMAGE", example: { header_handle: ["https://cdn.example/c1.jpg"] }, _mediaUrl: "https://cdn.example/c1.jpg" });
+  assert.deepEqual(first[1].example, { body_text: [["you"]] });
+  const send = buildComponents({ card2_1: "Ravi" }, sent.components);
+  const cards = send.find((c) => c.type === "carousel").cards;
+  assert.equal(cards.length, 2);
+  assert.deepEqual(cards[1].components[0], { type: "header", parameters: [{ type: "image", image: { link: "https://cdn.example/c2.jpg" } }] });
+  assert.equal(cards[1].components[1].parameters[0].text, "Ravi");
+  assert.deepEqual(cards[0].components[2], { type: "button", sub_type: "quick_reply", index: "0", parameters: [{ type: "payload", payload: "Enroll" }] });
+  const odd = await create({ ...body, cards: [card(1), { ...card(2), buttons: [{ type: "URL", text: "Go", url: "https://x.example" }] }] });
+  assert.match(odd.res.body.message, /same buttons/);
+  const one = await create({ ...body, cards: [card(1)] });
+  assert.match(one.res.body.message, /2 to 10 cards/);
+});
+
+test("a location header keeps the saved place and sends it", async () => {
+  const { res, sent } = await create({
+    name: "visit", category: "UTILITY", templateType: "DEFAULT", headerType: "LOCATION", bodyText: "Visit us at our new store.",
+    location: { name: "MK Store", address: "12 MG Road", latitude: "12.97", longitude: "77.59" },
+  });
+  assert.equal(res.statusCode, 201, JSON.stringify(res.body));
+  assert.deepEqual(sent.components[0], { type: "HEADER", format: "LOCATION", _location: { latitude: 12.97, longitude: 77.59, name: "MK Store", address: "12 MG Road" } });
+  assert.deepEqual(buildComponents({}, sent.components)[0], { type: "header", parameters: [{ type: "location", location: { latitude: "12.97", longitude: "77.59", name: "MK Store", address: "12 MG Road" } }] });
+  const bad = await create({ name: "x", category: "UTILITY", templateType: "DEFAULT", headerType: "LOCATION", bodyText: "Visit us at our store.", location: { latitude: "200", longitude: "1" } });
+  assert.match(bad.res.body.message, /latitude/);
+});
+
+test("zero-tap and one-tap codes name the Android app", async () => {
+  const app = { packageName: "com.marketingkart.app", signatureHash: "K8a/AINcGX7" };
+  const zero = await create({ name: "otp_zero", category: "AUTHENTICATION", language: "en_US", otpType: "ZERO_TAP", ...app, autofillText: "Fill code" });
+  assert.equal(zero.res.statusCode, 201, JSON.stringify(zero.res.body));
+  assert.deepEqual(zero.component("BUTTONS").buttons, [{
+    type: "OTP", otp_type: "ZERO_TAP", text: "Copy code", autofill_text: "Fill code",
+    supported_apps: [{ package_name: "com.marketingkart.app", signature_hash: "K8a/AINcGX7" }], zero_tap_terms_accepted: true,
+  }]);
+  const one = await create({ name: "otp_one", category: "AUTHENTICATION", language: "en_US", otpType: "ONE_TAP", ...app });
+  assert.equal(one.component("BUTTONS").buttons[0].otp_type, "ONE_TAP");
+  assert.equal(one.component("BUTTONS").buttons[0].zero_tap_terms_accepted, undefined);
+  const bad = await create({ name: "otp_bad", category: "AUTHENTICATION", language: "en_US", otpType: "ONE_TAP", packageName: "app", signatureHash: "x" });
+  assert.equal(bad.res.statusCode, 400);
+});
+
+test("named mapping keys survive variable resolution; numbered ones work as before", () => {
+  const { resolveVariables } = require("../src/services/whatsappCampaignService");
+  const contact = { name: "Asha", phone: "919800000000", city: "Pune" };
+  const named = resolveVariables(contact, { first_name: "name", city: "city", coupon_code: "VIP50" });
+  assert.equal(named.first_name, "Asha");
+  assert.equal(named.city, "Pune");
+  assert.equal(named.coupon_code, "VIP50");
+  assert.deepEqual(resolveVariables(contact, { "{{1}}": "name", var2: "city" }), { 1: "Asha", 2: "Pune" });
+  assert.deepEqual(resolveVariables(contact, [{ variable: "{{1}}", value: "name" }]), { 1: "Asha", 2: "919800000000" });
+});

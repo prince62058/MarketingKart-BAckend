@@ -41,7 +41,7 @@ const whatsappTemplateSchema = new mongoose.Schema(
     },
     headerType: {
       type: String,
-      enum: ["NONE", "TEXT", "IMAGE", "VIDEO", "DOCUMENT"],
+      enum: ["NONE", "TEXT", "IMAGE", "VIDEO", "DOCUMENT", "LOCATION", "CAROUSEL"],
       default: "NONE",
     },
     headerText: {
@@ -61,9 +61,11 @@ const whatsappTemplateSchema = new mongoose.Schema(
         {
           type: {
             type: String,
-            enum: ["QUICK_REPLY", "PHONE_NUMBER", "URL", "FLOW", "CATALOG", "OTP"],
+            enum: ["QUICK_REPLY", "PHONE_NUMBER", "URL", "FLOW", "CATALOG", "OTP", "COPY_CODE"],
           },
           text: String,
+          // The sample offer code of a COPY_CODE button, used when a send gives none.
+          example: String,
           phoneNumber: String,
           url: String,
           flowId: { type: mongoose.Schema.Types.ObjectId, ref: "whatsappFlow" },

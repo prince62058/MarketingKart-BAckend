@@ -325,6 +325,35 @@ const uploadTemplateHeaderSample = async ({ accessToken, sourceUrl }) => {
  * @param {Object} credentials - { accessToken, wabaId }
  * @returns {Object} { id, status } from Meta
  */
+
+/** Our copy of a template keeps private `_keys` (media links, location) for sending; Meta must not see them. */
+const stripPrivateKeys = (value) => {
+  if (Array.isArray(value)) return value.map(stripPrivateKeys);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).filter(([key]) => !key.startsWith("_")).map(([key, v]) => [key, stripPrivateKeys(v)]));
+  }
+  return value;
+};
+
+/**
+ * Copies the components for Meta: strips private keys and swaps any https link left in an
+ * `example.header_handle` (carousel cards, or a header not swapped yet) for a WhatsApp upload handle.
+ */
+const prepareComponentsForMeta = async (components, accessToken, upload = uploadTemplateHeaderSample) => {
+  const copy = stripPrivateKeys(Array.isArray(components) ? components : []);
+  const walk = async (node) => {
+    if (Array.isArray(node)) { for (const item of node) await walk(item); return; }
+    if (!node || typeof node !== "object") return;
+    const handles = node.example?.header_handle;
+    if (Array.isArray(handles)) {
+      node.example.header_handle = await Promise.all(handles.map((h) => (/^https:\/\//i.test(String(h || "")) ? upload({ accessToken, sourceUrl: h }) : h)));
+    }
+    for (const value of Object.values(node)) if (value && typeof value === "object") await walk(value);
+  };
+  await walk(copy);
+  return copy;
+};
+
 const uploadTemplateToMeta = async (templateData, credentials) => {
   const { accessToken, wabaId } = credentials || {};
   
@@ -334,14 +363,19 @@ const uploadTemplateToMeta = async (templateData, credentials) => {
 
   const url = `${BASE_URL}/${wabaId}/message_templates`;
 
+  const components = await prepareComponentsForMeta(templateData.components, accessToken);
+  const kinds = JSON.stringify(components);
   // A photo, video or file must stay in Marketing. WhatsApp rejects that file if it moves the template to Utility.
+  // Carousels and Limited-Time Offers only exist in Marketing, so they never move either.
+  const pinned = /"type":"(carousel|limited_time_offer)"/i.test(kinds);
   const payload = {
     name: templateData.name,
     category: templateData.category,
     language: templateData.language,
-    components: templateData.components,
-    allow_category_change: templateData.allow_category_change !== false,
+    components,
+    allow_category_change: templateData.allow_category_change !== false && !pinned,
   };
+  if (/_text_named_params/.test(kinds)) payload.parameter_format = "NAMED";
 
   console.log("[Meta API] Submitting template payload:", JSON.stringify(payload, null, 2));
 
@@ -419,4 +453,6 @@ module.exports = {
   uploadTemplateToMeta,
   uploadTemplateHeaderSample,
   fetchPhoneNumbersFromMeta,
+  prepareComponentsForMeta,
+  stripPrivateKeys,
 };

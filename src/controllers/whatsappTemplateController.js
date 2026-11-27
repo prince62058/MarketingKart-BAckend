@@ -46,6 +46,9 @@ exports.createTemplate = async (req, res) => {
   try {
     const { name, category, language, businessId, headerText, headerMediaUrl, footerText, buttons, marketingType, exampleBodyValues } = req.body;
     const { flowId, flowButtonText, catalogButtonText, addSecurityRecommendation, codeExpirationMinutes, otpButtonText } = req.body;
+    // Newer template shapes: {{named}} variables, location header, Limited-Time Offer, carousel, one/zero-tap codes.
+    const { exampleNamedValues, location, limitedTimeOffer, cards, otpType, packageName, signatureHash, autofillText } = req.body;
+    const named = String(req.body.parameterFormat || "").toUpperCase() === "NAMED";
 
     let templateType;
     let otpBody = null;
@@ -163,7 +166,7 @@ exports.createTemplate = async (req, res) => {
 
     if (templateType === "OTP") {
       try {
-        components = templateTypes.otpComponents({ addSecurityRecommendation, codeExpirationMinutes, otpButtonText });
+        components = templateTypes.otpComponents({ addSecurityRecommendation, codeExpirationMinutes, otpButtonText, otpType, packageName, signatureHash, autofillText });
       } catch (typeErr) {
         return res.status(400).json({ success: false, message: typeErr.message });
       }
@@ -171,15 +174,30 @@ exports.createTemplate = async (req, res) => {
     }
 
     // ===== HEADER COMPONENT =====
-    if (templateType !== "OTP" && headerType && headerType !== "NONE") {
+    if (templateType !== "OTP" && headerType && headerType !== "NONE" && headerType !== "CAROUSEL") {
       let headerComponent = { type: "HEADER", format: headerType };
       
-      if (headerType === "TEXT") {
+      if (headerType === "LOCATION") {
+        try {
+          headerComponent = templateTypes.locationHeader(location);
+        } catch (typeErr) {
+          return res.status(400).json({ success: false, message: typeErr.message });
+        }
+      } else if (headerType === "TEXT") {
         headerComponent.text = usableHeaderText || "";
         // Add example for TEXT header if it contains variables
-        const headerExamples = generateExampleValues(usableHeaderText);
-        if (headerExamples.length > 0) {
-          headerComponent.example = { header_text: headerExamples };
+        if (named) {
+          try {
+            const headerNamed = templateTypes.namedExamples(usableHeaderText, exampleNamedValues);
+            if (headerNamed.length > 0) headerComponent.example = { header_text_named_params: headerNamed };
+          } catch (typeErr) {
+            return res.status(400).json({ success: false, message: typeErr.message });
+          }
+        } else {
+          const headerExamples = generateExampleValues(usableHeaderText);
+          if (headerExamples.length > 0) {
+            headerComponent.example = { header_text: headerExamples };
+          }
         }
       } else if (["IMAGE", "VIDEO", "DOCUMENT"].includes(headerType)) {
         // Filled with a WhatsApp sample handle just before the Meta submit.
@@ -206,10 +224,35 @@ exports.createTemplate = async (req, res) => {
       ? exampleBodyValues
       : generateExampleValues(bodyText);
     
-    if (bodyExamples.length > 0) {
+    if (named) {
+      try {
+        const bodyNamed = templateTypes.namedExamples(bodyText, exampleNamedValues);
+        if (bodyNamed.length > 0) bodyComponent.example = { body_text_named_params: bodyNamed };
+      } catch (typeErr) {
+        return res.status(400).json({ success: false, message: typeErr.message });
+      }
+    } else if (bodyExamples.length > 0) {
       bodyComponent.example = { body_text: [bodyExamples] };
     }
     if (templateType !== "OTP") components.push(bodyComponent);
+
+    // ===== LIMITED-TIME OFFER / CAROUSEL =====
+    if (templateType === "DEFAULT" && (limitedTimeOffer || headerType === "CAROUSEL")) {
+      try {
+        if (limitedTimeOffer) {
+          const lto = templateTypes.limitedTimeOffer(limitedTimeOffer, { category, headerType, footerText: usableFooter, buttons: usableButtons || [], bodyText });
+          // Meta's order: header, limited_time_offer, body, buttons.
+          components.splice(components.indexOf(bodyComponent), 0, lto);
+        }
+        if (headerType === "CAROUSEL") {
+          if (String(usableFooter || "").trim()) throw new templateTypes.TemplateTypeError("Carousel templates can't have a footer.");
+          if ((usableButtons || []).length) throw new templateTypes.TemplateTypeError("In a carousel the buttons go on each card.");
+          components.push(templateTypes.carouselComponent(cards, { category, named }));
+        }
+      } catch (typeErr) {
+        return res.status(400).json({ success: false, message: typeErr.message });
+      }
+    }
 
     // ===== FOOTER COMPONENT =====
     if (templateType !== "OTP" && usableFooter && String(usableFooter).trim()) {
@@ -242,18 +285,21 @@ exports.createTemplate = async (req, res) => {
       components.push({ type: "call_permission_request" });
       savedButtons = [];
     } else if (templateType === "DEFAULT" && usableButtons && usableButtons.length > 0) {
-      const metaButtons = usableButtons.map(btn => {
-        if (btn.type === "QUICK_REPLY") return { type: "QUICK_REPLY", text: btn.text };
-        if (btn.type === "PHONE_NUMBER") return { type: "PHONE_NUMBER", text: btn.text, phone_number: btn.phoneNumber };
-        if (btn.type === "URL") {
-          const urlBtn = { type: "URL", text: btn.text, url: btn.url };
-          // The example is the full link with the variable filled, not a second website pasted in.
-          if (btn.url && btn.url.includes("{{")) {
-            urlBtn.example = [btn.url.replace(/\{\{\d+\}\}/g, "sample")];
-          }
-          return urlBtn;
-        }
-      }).filter(Boolean);
+      // A form button among other buttons opens one of the user's own published flows.
+      for (const btn of usableButtons.filter((b) => b.type === "FLOW")) {
+        const flow = await whatsappFlowModel.findOne({ _id: btn.flowId, userId: req.user._id });
+        if (!flow) return res.status(404).json({ success: false, message: "Flow not found." });
+        if (flow.status !== "PUBLISHED") return res.status(400).json({ success: false, message: "Publish the flow first, then add it to a template." });
+        btn.metaFlowId = String(flow.metaFlowId || "");
+        if (!btn.navigateScreen && flow.definition) btn.firstScreen = flowScreenId(0);
+      }
+      let metaButtons;
+      try {
+        metaButtons = usableButtons.map((btn) => templateTypes.metaButton(btn)).filter(Boolean);
+      } catch (typeErr) {
+        return res.status(400).json({ success: false, message: typeErr.message });
+      }
+      savedButtons = usableButtons.map(({ firstScreen, navigateScreen, ...btn }) => btn);
 
       if (metaButtons.length > 0) {
         components.push({ type: "BUTTONS", buttons: metaButtons });

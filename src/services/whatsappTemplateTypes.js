@@ -17,6 +17,7 @@ const TEMPLATE_TYPES = {
 };
 
 const BUTTON_TEXT_MAX = 25;
+const BUTTONS_MAX = 10;
 
 // WhatsApp writes the OTP sentence. These are the official lines for the
 // languages the app offers, so the saved copy matches what the customer reads.
@@ -118,14 +119,24 @@ function otpMinutes(value) {
 }
 
 /** Meta fixes the body of an authentication template; only these options can be set. */
-function otpComponents({ addSecurityRecommendation = true, codeExpirationMinutes, otpButtonText } = {}) {
+function otpComponents({ addSecurityRecommendation = true, codeExpirationMinutes, otpButtonText, otpType, packageName, signatureHash, autofillText } = {}) {
   const minutes = otpMinutes(codeExpirationMinutes);
   const components = [{ type: "BODY", add_security_recommendation: addSecurityRecommendation !== false }];
   if (minutes) components.push({ type: "FOOTER", code_expiration_minutes: minutes });
-  components.push({
-    type: "BUTTONS",
-    buttons: [{ type: "OTP", otp_type: "COPY_CODE", text: buttonText(otpButtonText, "Copy code") }],
-  });
+  const kind = String(otpType || "COPY_CODE").toUpperCase();
+  if (!["COPY_CODE", "ONE_TAP", "ZERO_TAP"].includes(kind)) throw new TemplateTypeError("Choose copy-code, one-tap or zero-tap delivery.");
+  const button = { type: "OTP", otp_type: kind, text: buttonText(otpButtonText, "Copy code") };
+  if (kind !== "COPY_CODE") {
+    // One-tap and zero-tap hand the code to the user's Android app, so Meta needs that app.
+    const pkg = String(packageName || "").trim();
+    const hash = String(signatureHash || "").trim();
+    if (!/^[a-zA-Z][\w]*(\.[a-zA-Z][\w]*)+$/.test(pkg)) throw new TemplateTypeError("Enter your Android app's package name, for example com.example.app.");
+    if (!/^[A-Za-z0-9+/]{11}$/.test(hash)) throw new TemplateTypeError("The app signature hash is 11 characters, from the Android app helper.");
+    button.autofill_text = buttonText(autofillText, "Autofill");
+    button.supported_apps = [{ package_name: pkg, signature_hash: hash }];
+    if (kind === "ZERO_TAP") button.zero_tap_terms_accepted = true;
+  }
+  components.push({ type: "BUTTONS", buttons: [button] });
   return components;
 }
 
@@ -229,9 +240,26 @@ function normalizeTemplateCopy({ bodyText, headerType, headerText, footerText, b
 
 function normalizeButtons(buttons) {
   if (!Array.isArray(buttons) || buttons.length === 0) return [];
-  if (buttons.length > 3) throw new TemplateTypeError("A template can have at most 3 buttons.");
+  if (buttons.length > BUTTONS_MAX) throw new TemplateTypeError(`A template can have at most ${BUTTONS_MAX} buttons.`);
+  const count = (type) => buttons.filter((b) => String(b?.type || "").toUpperCase() === type).length;
+  if (count("URL") > 2) throw new TemplateTypeError("A template can have at most 2 link buttons.");
+  if (count("PHONE_NUMBER") > 1) throw new TemplateTypeError("A template can have only 1 call button.");
+  if (count("COPY_CODE") > 1) throw new TemplateTypeError("A template can have only 1 copy code button.");
   const cleaned = buttons.map((btn) => {
     const type = String(btn?.type || "").toUpperCase();
+    if (type === "COPY_CODE") {
+      const example = String(btn.example || btn.code || "").trim().toUpperCase();
+      if (!/^[A-Z0-9]{1,15}$/.test(example)) throw new TemplateTypeError("The offer code is 1 to 15 letters or numbers, no spaces (e.g. SUMMER20).");
+      return { type: "COPY_CODE", example };
+    }
+    if (type === "FLOW") {
+      const flowId = String(btn.flowId || "");
+      if (!/^[a-f0-9]{24}$/i.test(flowId)) throw new TemplateTypeError("Choose a published form for the form button.");
+      const text = String(btn?.text || "").replace(/\s+/g, " ").trim().slice(0, 25);
+      if (!text) throw new TemplateTypeError("Every button needs a label.");
+      const screen = String(btn.navigateScreen || "").trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+      return { type: "FLOW", text, flowId, ...(screen ? { navigateScreen: screen } : {}) };
+    }
     const text = String(btn?.text || "").replace(/\s+/g, " ").trim().slice(0, 25);
     if (!text) throw new TemplateTypeError("Every button needs a label.");
     if (type === "URL") {
@@ -263,6 +291,7 @@ function normalizeButtons(buttons) {
 
   const labels = new Set();
   for (const button of cleaned) {
+    if (!button.text) continue;
     const label = button.text.toLowerCase();
     if (labels.has(label)) throw new TemplateTypeError("Two buttons cannot have the same label.");
     labels.add(label);
@@ -295,6 +324,121 @@ function flowIdOf(components = []) {
   return flowButton ? String(flowButton.flow_id) : null;
 }
 
+
+/* ---------- Named variables, Meta buttons, location, Limited-Time Offer, carousel ---------- */
+const NAMED_VAR = /\{\{\s*([a-z_][a-z0-9_]*)\s*\}\}/g;
+
+/** {{first_name}} style names in order of first use. */
+function namedVars(text) {
+  const out = [];
+  for (const m of String(text || "").matchAll(NAMED_VAR)) if (!out.includes(m[1])) out.push(m[1]);
+  return out;
+}
+
+/** Meta's named-parameter examples; every name needs a sample value. */
+function namedExamples(text, values = {}) {
+  return namedVars(text).map((name) => {
+    const example = String(values?.[name] ?? "").trim();
+    if (!example) throw new TemplateTypeError(`Add a sample value for {{${name}}}.`);
+    return { param_name: name, example };
+  });
+}
+
+/** A normalised button as Meta's template API wants it. FLOW buttons need `metaFlowId` set first. */
+function metaButton(btn) {
+  if (btn.type === "QUICK_REPLY") return { type: "QUICK_REPLY", text: btn.text };
+  if (btn.type === "PHONE_NUMBER") return { type: "PHONE_NUMBER", text: btn.text, phone_number: btn.phoneNumber };
+  if (btn.type === "COPY_CODE") return { type: "COPY_CODE", example: btn.example };
+  if (btn.type === "FLOW") {
+    if (!btn.metaFlowId) throw new TemplateTypeError("Choose a published form for the form button.");
+    const out = { type: "FLOW", text: btn.text, flow_id: String(btn.metaFlowId) };
+    const screen = btn.navigateScreen || btn.firstScreen;
+    if (screen) Object.assign(out, { flow_action: "navigate", navigate_screen: screen });
+    return out;
+  }
+  if (btn.type === "URL") {
+    const out = { type: "URL", text: btn.text, url: btn.url };
+    // The example is the full link with the variable filled, not a second website pasted in.
+    if (btn.url && btn.url.includes("{{")) out.example = [btn.url.replace(/\{\{\d+\}\}/g, "sample")];
+    return out;
+  }
+  return null;
+}
+
+/** A location header. `_location` stays in our copy so sends can fill it; it is stripped before Meta. */
+function locationHeader(location = {}) {
+  const latitude = Number(location.latitude);
+  const longitude = Number(location.longitude);
+  if (location.latitude === "" || location.latitude == null || !(latitude >= -90 && latitude <= 90)) throw new TemplateTypeError("Enter a latitude between -90 and 90.");
+  if (location.longitude === "" || location.longitude == null || !(longitude >= -180 && longitude <= 180)) throw new TemplateTypeError("Enter a longitude between -180 and 180.");
+  return {
+    type: "HEADER",
+    format: "LOCATION",
+    _location: { latitude, longitude, name: String(location.name || "").trim().slice(0, 1000), address: String(location.address || "").trim().slice(0, 1000) },
+  };
+}
+
+/** The limited_time_offer component, after checking the rest of the template fits Meta's LTO rules. */
+function limitedTimeOffer(lto = {}, { category, headerType, footerText, buttons = [], bodyText = "" } = {}) {
+  if (String(category || "").toUpperCase() !== "MARKETING") throw new TemplateTypeError("A Limited-Time Offer must be a Marketing template.");
+  const text = String(lto.text || "").trim();
+  if (!text || text.length > 16) throw new TemplateTypeError("Offer details text is 1 to 16 characters.");
+  if (!["NONE", "IMAGE", "VIDEO", ""].includes(String(headerType || "NONE").toUpperCase())) throw new TemplateTypeError("Limited-Time Offer templates can only have an image or video header.");
+  if (String(footerText || "").trim()) throw new TemplateTypeError("Limited-Time Offer templates can't have a footer.");
+  if (String(bodyText).length > 600) throw new TemplateTypeError("A Limited-Time Offer message can be at most 600 characters.");
+  const types = buttons.map((b) => b.type);
+  if (!types.includes("COPY_CODE") || !types.includes("URL")) throw new TemplateTypeError("A Limited-Time Offer needs a copy offer code button and a link button.");
+  if (types.some((t) => t !== "COPY_CODE" && t !== "URL")) throw new TemplateTypeError("A Limited-Time Offer can only have the copy code and link buttons.");
+  return { type: "limited_time_offer", limited_time_offer: { text, has_expiration: Boolean(lto.hasExpiration) } };
+}
+
+/**
+ * The carousel component: 2–10 cards, each a photo or video, a short text and 1–2 buttons,
+ * every card with the same button types in the same order. Card media links stay in
+ * `example.header_handle` (turned into WhatsApp handles at upload) and in `_mediaUrl` for sends.
+ */
+function carouselComponent(cards, { category, named = false } = {}) {
+  if (String(category || "").toUpperCase() !== "MARKETING") throw new TemplateTypeError("Carousel templates must be Marketing templates.");
+  if (!Array.isArray(cards) || cards.length < 2 || cards.length > 10) throw new TemplateTypeError("A carousel needs 2 to 10 cards.");
+  let shape = null;
+  const out = cards.map((card, i) => {
+    const n = i + 1;
+    const format = String(card?.mediaType || "IMAGE").toUpperCase();
+    if (!["IMAGE", "VIDEO"].includes(format)) throw new TemplateTypeError(`Card ${n}: choose an image or a video.`);
+    const mediaUrl = String(card?.mediaUrl || "").trim();
+    if (!/^https:\/\//i.test(mediaUrl)) throw new TemplateTypeError(`Card ${n}: upload the ${format === "IMAGE" ? "image" : "video"} first.`);
+    const text = renumberVariables(String(card?.bodyText || "").trim());
+    if (!text) throw new TemplateTypeError(`Card ${n}: write the card text.`);
+    if (text.length > 160) throw new TemplateTypeError(`Card ${n}: card text can be at most 160 characters.`);
+    const buttons = normalizeButtons(card?.buttons || []);
+    if (!buttons.length || buttons.length > 2) throw new TemplateTypeError(`Card ${n}: add 1 or 2 buttons.`);
+    if (buttons.some((b) => !["QUICK_REPLY", "URL", "PHONE_NUMBER"].includes(b.type))) throw new TemplateTypeError(`Card ${n}: card buttons can be quick reply, link or call.`);
+    const thisShape = buttons.map((b) => b.type).join(",");
+    if (shape === null) shape = thisShape;
+    else if (shape !== thisShape) throw new TemplateTypeError("Every carousel card must have the same buttons, in the same order.");
+    const body = { type: "body", text };
+    if (named) {
+      const ex = namedExamples(text, card.exampleNamedValues || {});
+      if (ex.length) body.example = { body_text_named_params: ex };
+    } else {
+      const vars = (text.match(/\{\{\d+\}\}/g) || []).length;
+      if (vars) {
+        const ex = (card.exampleBodyValues || []).map((v) => String(v || "").trim());
+        if (ex.length < vars || ex.slice(0, vars).some((v) => !v)) throw new TemplateTypeError(`Card ${n}: add a sample value for every variable.`);
+        body.example = { body_text: [ex.slice(0, vars)] };
+      }
+    }
+    return {
+      components: [
+        { type: "header", format, example: { header_handle: [mediaUrl] }, _mediaUrl: mediaUrl },
+        body,
+        { type: "buttons", buttons: buttons.map(metaButton) },
+      ],
+    };
+  });
+  return { type: "carousel", cards: out };
+}
+
 module.exports = {
   TEMPLATE_TYPES,
   TemplateTypeError,
@@ -307,4 +451,10 @@ module.exports = {
   flowIdOf,
   normalizeTemplateCopy,
   templateRejectText,
+  namedVars,
+  namedExamples,
+  metaButton,
+  locationHeader,
+  limitedTimeOffer,
+  carouselComponent,
 };

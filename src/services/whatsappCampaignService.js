@@ -114,13 +114,23 @@ const parsePhoneNumbers = (phoneNumbers) => {
  * 1. Array format from mobile: [ { variable: "{{1}}", value: "Rahul" }, { variable: "{{2}}", value: "11243" } ]
  * 2. Object format: { "1": "name", "2": "order_id" } or { "{{1}}": "Rahul" }
  */
+/**
+ * The key a mapping entry fills: "1" for {{1}} / "1" / "var1" (as before), or the name itself
+ * for a {{first_name}} template and the extra send values (coupon_code, offer_expires_at, card2_1…).
+ */
+const variableKey = (raw) => {
+  const text = String(raw || "").replace(/[{}\s]/g, "");
+  if (/^[a-z_][a-z0-9_]*$/.test(text) && !/^(var|variable)?_?\d+$/.test(text)) return text;
+  return text.replace(/\D/g, "");
+};
+
 const resolveVariables = (contact, variableMapping) => {
   const resolved = {};
 
   if (Array.isArray(variableMapping)) {
     for (const item of variableMapping) {
       if (!item) continue;
-      const pos = String(item.variable || "").replace(/\D/g, "");
+      const pos = variableKey(item.variable);
       if (!pos) continue;
 
       const rawVal = item.value !== undefined && item.value !== null ? String(item.value).trim() : "";
@@ -138,7 +148,7 @@ const resolveVariables = (contact, variableMapping) => {
     }
   } else if (variableMapping && typeof variableMapping === "object") {
     for (const [key, fieldName] of Object.entries(variableMapping)) {
-      const pos = String(key).replace(/\D/g, "");
+      const pos = variableKey(key);
       if (!pos) continue;
 
       if (typeof fieldName === "object" && fieldName !== null) {
@@ -198,11 +208,98 @@ const mediaHeaderComponent = (template, templateComponents = []) => {
   return { type: "header", parameters: [{ type, [type]: media }] };
 };
 
-const buildComponents = (variables, templateComponents = [], template = null) => {
-  const headerMedia = mediaHeaderComponent(template, templateComponents);
-  if (!variables || Object.keys(variables).length === 0) {
-    return [...(headerMedia ? [headerMedia] : []), ...flowButtonComponents(templateComponents)];
+/* ---------- Send-time values for the newer template shapes ---------- */
+const upper = (v) => String(v || "").toUpperCase();
+const componentOf = (list, type) => (list || []).find((c) => upper(c?.type) === type);
+
+/** A {{first_name}} template (Meta's parameter_format NAMED). */
+const isNamedTemplate = (templateComponents = []) => /_text_named_params/.test(JSON.stringify(templateComponents || []));
+
+const namesIn = (text) => {
+  const out = [];
+  for (const m of String(text || "").matchAll(/\{\{\s*([a-z_][a-z0-9_]*)\s*\}\}/g)) if (!out.includes(m[1])) out.push(m[1]);
+  return out;
+};
+
+const valueOr = (variables, key, fallback = "Customer") => {
+  const v = variables?.[key];
+  return v !== undefined && v !== null && String(v).trim() !== "" ? String(v).trim() : fallback;
+};
+
+/** The location header filled from the location saved on the template. */
+const locationHeaderComponent = (templateComponents = []) => {
+  const header = componentOf(templateComponents, "HEADER");
+  if (upper(header?.format) !== "LOCATION" || !header._location) return null;
+  const { latitude, longitude, name, address } = header._location;
+  return { type: "header", parameters: [{ type: "location", location: { latitude: String(latitude), longitude: String(longitude), ...(name ? { name } : {}), ...(address ? { address } : {}) } }] };
+};
+
+/** Header text and body for a named template: each value carries its parameter_name. */
+const buildNamedComponents = (variables, templateComponents, headerMedia) => {
+  const out = [];
+  const header = componentOf(templateComponents, "HEADER");
+  if (headerMedia) out.push(headerMedia);
+  else if (header?.text && namesIn(header.text).length) {
+    out.push({ type: "header", parameters: namesIn(header.text).map((n) => ({ type: "text", parameter_name: n, text: valueOr(variables, n) })) });
   }
+  const body = componentOf(templateComponents, "BODY");
+  if (body?.text && namesIn(body.text).length) {
+    out.push({ type: "body", parameters: namesIn(body.text).map((n) => ({ type: "text", parameter_name: n, text: valueOr(variables, n) })) });
+  }
+  return [...out, ...richSendComponents(variables, templateComponents)];
+};
+
+/** When a Limited-Time Offer ends: the send's offer_expires_at (ms or a date), else 24 hours from now. */
+const offerExpiry = (variables) => {
+  const raw = variables?.offer_expires_at;
+  const ms = /^\d{12,}$/.test(String(raw || "")) ? Number(raw) : Date.parse(raw || "");
+  return Number.isFinite(ms) && ms > Date.now() ? ms : Date.now() + 24 * 60 * 60 * 1000;
+};
+
+/** Carousel card i: its media, its body values (card{n}_{k}, else {k}) and its button payloads. */
+const carouselCards = (variables, carousel) => (carousel?.cards || []).map((card, i) => {
+  const parts = card.components || [];
+  const header = parts.find((c) => upper(c.type) === "HEADER");
+  const body = parts.find((c) => upper(c.type) === "BODY");
+  const buttons = parts.find((c) => upper(c.type) === "BUTTONS")?.buttons || [];
+  const link = header?._mediaUrl || header?.example?.header_handle?.[0];
+  const kind = upper(header?.format) === "VIDEO" ? "video" : "image";
+  const components = [{ type: "header", parameters: [{ type: kind, [kind]: { link } }] }];
+  const named = namesIn(body?.text);
+  const positions = (String(body?.text || "").match(/\{\{\d+\}\}/g) || []).map((m) => m.replace(/\D/g, ""));
+  if (named.length) components.push({ type: "body", parameters: named.map((n) => ({ type: "text", parameter_name: n, text: valueOr(variables, `card${i + 1}_${n}`, valueOr(variables, n)) })) });
+  else if (positions.length) components.push({ type: "body", parameters: positions.map((p) => ({ type: "text", text: valueOr(variables, `card${i + 1}_${p}`, valueOr(variables, p)) })) });
+  buttons.forEach((b, index) => {
+    if (upper(b.type) === "QUICK_REPLY") components.push({ type: "button", sub_type: "quick_reply", index: String(index), parameters: [{ type: "payload", payload: String(b.text || `card${i + 1}_${index}`) }] });
+    if (upper(b.type) === "URL" && String(b.url || "").includes("{{")) components.push({ type: "button", sub_type: "url", index: String(index), parameters: [{ type: "text", text: valueOr(variables, `card${i + 1}_url`, "sample") }] });
+  });
+  return { card_index: i, components };
+});
+
+/** Copy-code buttons, a Limited-Time Offer's expiry, carousel cards and form buttons. */
+const richSendComponents = (variables, templateComponents = []) => {
+  const out = [];
+  const lto = componentOf(templateComponents, "LIMITED_TIME_OFFER");
+  if (lto?.limited_time_offer?.has_expiration) {
+    out.push({ type: "limited_time_offer", parameters: [{ type: "limited_time_offer", limited_time_offer: { expiration_time_ms: offerExpiry(variables) } }] });
+  }
+  const carousel = componentOf(templateComponents, "CAROUSEL");
+  if (carousel) out.push({ type: "carousel", cards: carouselCards(variables, carousel) });
+  const buttons = componentOf(templateComponents, "BUTTONS")?.buttons || [];
+  buttons.forEach((b, index) => {
+    if (upper(b.type) === "COPY_CODE") {
+      out.push({ type: "button", sub_type: "copy_code", index: String(index), parameters: [{ type: "coupon_code", coupon_code: valueOr(variables, "coupon_code", String(b.example || "")) }] });
+    }
+  });
+  return [...out, ...flowButtonComponents(templateComponents)];
+};
+
+const buildComponents = (variables, templateComponents = [], template = null) => {
+  const headerMedia = mediaHeaderComponent(template, templateComponents) || locationHeaderComponent(templateComponents);
+  if (!variables || Object.keys(variables).length === 0) {
+    return [...(headerMedia ? [headerMedia] : []), ...richSendComponents({}, templateComponents)];
+  }
+  if (isNamedTemplate(templateComponents)) return buildNamedComponents(variables, templateComponents, headerMedia);
 
   const finalComponents = [];
 
@@ -263,7 +360,7 @@ const buildComponents = (variables, templateComponents = [], template = null) =>
     finalComponents.push({ type: "body", parameters: params });
   }
 
-  return [...finalComponents, ...flowButtonComponents(templateComponents)];
+  return [...finalComponents, ...richSendComponents(variables, templateComponents)];
 };
 
 /** Messages per minute we fall back to when a campaign does not ask for one. */
@@ -709,4 +806,5 @@ module.exports = {
   requeueQueuedMessages,
   deleteCampaign,
   buildComponents,
+  resolveVariables,
 };
