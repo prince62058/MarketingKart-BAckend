@@ -40,8 +40,8 @@ const {
     }
     if (search && search.trim()) {
       obj.$or = [
-        { question: { $regex: search.trim(), $options: "i" } },
-        { answer: { $regex: search.trim(), $options: "i" } }
+        { question: { $regex: require("../helpers/escapeRegex")(search.trim()), $options: "i" } },
+        { answer: { $regex: require("../helpers/escapeRegex")(search.trim()), $options: "i" } }
       ];
     }
     const data = await faqService.getAllFaq(obj, skip, parsedLimit);

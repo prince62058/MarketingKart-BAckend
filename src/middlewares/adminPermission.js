@@ -28,3 +28,12 @@ exports.requirePermission = (code) => async (req, res, next) => {
     return next(error);
   }
 };
+
+/**
+ * For routes customers also use (e.g. add-money with or without a userId): customers pass through to
+ * the controller, which decides; an admin caller must hold the staff permission code.
+ */
+exports.staffPermission = (code) => {
+  const check = exports.requirePermission(code);
+  return (req, res, next) => ((req.authUser || req.user)?.userType === "ADMIN" ? check(req, res, next) : next());
+};

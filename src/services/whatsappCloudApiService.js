@@ -246,7 +246,9 @@ const uploadTemplateHeaderSample = async ({ accessToken, sourceUrl }) => {
 
   let file;
   try {
-    file = await axios.get(sourceUrl, {
+    const { assertPublicUrl, publicFetchOptions } = require("../helpers/safeUrl");
+    file = await axios.get(assertPublicUrl(sourceUrl), {
+      ...publicFetchOptions(),
       responseType: "arraybuffer",
       timeout: 30000,
       maxContentLength: 16 * 1024 * 1024,

@@ -33,7 +33,8 @@ exports.sendOtp = (mobile, otp) => {
     port: null,
     path: "/api/v5/flow/",
     headers: {
-      authkey: "384292AwWekgBJSf635f77feP1",
+      // TODO(security): set MSG91_AUTH_KEY on the server, rotate the key in MSG91, then delete this fallback.
+      authkey: process.env.MSG91_AUTH_KEY || "384292AwWekgBJSf635f77feP1",
       "content-type": "application/json",
     },
   };
@@ -174,7 +175,7 @@ exports.sendOtp = (mobile, otp) => {
 exports.sendOtpInMail = (email, otp) => {
   async function main() {
     const user = process.env.EMAIL_USER || "ayotrix1@gmail.com";
-    const pass = process.env.EMAIL_PASS || "ijewaofeggqbwmmm";
+    const pass = process.env.EMAIL_PASS;
 
     const transporter = nodemailer.createTransport({
       service: "gmail",

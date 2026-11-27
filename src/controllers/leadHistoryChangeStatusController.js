@@ -59,7 +59,28 @@ exports.updateLeadHistory = async (req, res) => {
 
 exports.createLeadHistoryWithTransferAndRevolked = async (req, res) => {
   const { leadId=[], transferId,assignLead } = req.body;
-  console.log(leadId)
+  // Every lead must belong to a business the caller can act on, and the person it is pinned to
+  // must be that business's owner or one of its team members.
+  const mongoose = require("mongoose");
+  const { canAccessBusiness } = require("../helpers/businessAccess");
+  const leadModel = require("../models/leadModel");
+  const businessModel = require("../models/businessModel");
+  const userModel = require("../models/userModel");
+  const caller = req.authUser || req.user;
+  const ids = Array.isArray(leadId) ? leadId : [];
+  if (!mongoose.isValidObjectId(transferId) || ids.length > 500 || ids.some((id) => !mongoose.isValidObjectId(id))) {
+    return res.status(400).json({ success: false, message: "Invalid lead or user" });
+  }
+  const target = await userModel.findById(transferId).select("_id businessId").lean();
+  if (!target) return res.status(404).json({ success: false, message: "Not found" });
+  for (const id of ids) {
+    const lead = await leadModel.findById(id).select("businessId").lean();
+    const businessId = lead?.businessId;
+    if (!businessId || !(await canAccessBusiness(caller, businessId))) return res.status(404).json({ success: false, message: "Not found" });
+    const targetBelongs = (target.businessId || []).some((b) => String(b) === String(businessId))
+      || Boolean(await businessModel.exists({ _id: businessId, userId: target._id }));
+    if (!targetBelongs) return res.status(403).json({ success: false, message: "That person is not part of this business" });
+  }
   for(let i=0;i<leadId.length;i++){
   if(!assignLead){
     await pinnedLeadsModel.findOneAndDelete({userId:transferId,leadId:leadId[i]})

@@ -182,8 +182,12 @@ exports.createCampaigns = async (req, res) => {
     }
     let fb_exchange_token = metaAccessToken;
     let fb_exchange_token1 = pageAccessToken;
-    let client_id = "1569095363786954";
-    let client_secret = "0dd5ddd645af8441f5bc2aeca97d8997";
+    // App credentials come from the server env, never from source code.
+    let client_id = process.env.LEGACY_META_CLIENT_ID || process.env.clientId;
+    let client_secret = process.env.LEGACY_META_CLIENT_SECRET || process.env.clientSecret;
+    if (!client_id || !client_secret) {
+      return res.status(503).json({ success: false, message: "Facebook is not configured on the server." });
+    }
     let grant_type = "fb_exchange_token";
     let response = await fetch(
       `https://graph.facebook.com/oauth/access_token?client_id=${client_id}&client_secret=${client_secret}&grant_type=${grant_type}&fb_exchange_token=${fb_exchange_token}`

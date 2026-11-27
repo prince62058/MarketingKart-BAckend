@@ -3,12 +3,12 @@ const controller = require("../controllers/countryController");
 const router = express.Router();
 const { upload } = require("../middlewares/multer");
 const { countryMid } = require("../middlewares/countryMidd");
-const { authUser } = require("../middlewares/authMidd");
+const { authUser, adminOnly } = require("../middlewares/authMidd");
 const asyncHandler = require("../utils/asyncHandler");
 
 router.post(
   "/country/createCountry",
-  asyncHandler(authUser),
+  ...adminOnly,
   upload.single("icon"),
   asyncHandler(controller.createCountry)
 );
@@ -19,13 +19,13 @@ router.get(
 );
 router.put(
   "/country/disableCountry/:countryId",
-  asyncHandler(authUser),
+  ...adminOnly,
   asyncHandler(countryMid),
   asyncHandler(controller.disableCountry)
 );
 router.put(
   "/country/updateCountry/:countryId",
-  asyncHandler(authUser),
+  ...adminOnly,
   asyncHandler(countryMid),
   upload.single("icon"),
   asyncHandler(controller.updateCountry)

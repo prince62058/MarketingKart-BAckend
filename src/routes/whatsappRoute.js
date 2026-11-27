@@ -19,7 +19,15 @@ router.get("/whatsapp/stats", authUser, campaignController.getWhatsAppStats);
 router.post("/whatsapp/account/connect", authUser, isAdmin, accountController.connectAccount);
 router.post("/whatsapp/account/connect-facebook", authUser, (_req, res) => res.status(410).json({success:false,message:'Update MarketingKart and use Connect WhatsApp to select your own business number.'}));
 router.get("/whatsapp/account", authUser, accountController.getAccountDetails);
-router.put("/whatsapp/account/billing-mode", authUser, accountController.setBillingMode);
+// "Pay Meta directly" (CUSTOMER) means MarketingKart charges nothing per message, so only an
+// admin may switch an account to it; anyone may go back to wallet billing (PLATFORM).
+router.put("/whatsapp/account/billing-mode", authUser, (req, res, next) => {
+  // Same test the controller uses: only the exact value "CUSTOMER" switches to Meta billing.
+  if (req.user?.userType !== "ADMIN" && req.body?.billingMode === "CUSTOMER") {
+    return res.status(403).json({ success: false, message: "Contact MarketingKart support to bill messages to your own Meta account." });
+  }
+  return next();
+}, accountController.setBillingMode);
 router.post("/whatsapp/account/disconnect", authUser, accountController.disconnectAccount);
 
 // ─── Meta OAuth / Embedded Signup Flow ──────────────────────────────────────
@@ -39,7 +47,16 @@ router.post("/whatsapp/templates/ai-generate", authUser, templateController.aiGe
 router.post("/whatsapp/templates", authUser, templateController.createTemplate);
 router.get("/whatsapp/templates", authUser, templateController.getAllTemplates);
 router.get("/whatsapp/templates/:templateId", authUser, templateController.getTemplateById);
-router.put("/whatsapp/templates/:templateId", authUser, templateController.updateTemplate);
+// Status, category and Meta ids come from Meta (template sync), never from the customer: billing
+// is priced by category, and status decides what may be sent.
+const TEMPLATE_LOCKED_FIELDS = ["status", "category", "metaTemplateId", "wabaId", "phoneNumberId", "createdBy", "businessId", "disable", "deskReview", "rejectedReason", "qualityScore", "quality", "_id"];
+function lockTemplateFields(req, _res, next) {
+  if (req.user?.userType !== "ADMIN" && req.body && typeof req.body === "object") {
+    for (const k of TEMPLATE_LOCKED_FIELDS) delete req.body[k];
+  }
+  next();
+}
+router.put("/whatsapp/templates/:templateId", authUser, lockTemplateFields, templateController.updateTemplate);
 router.delete("/whatsapp/templates/:templateId", authUser, templateController.deleteTemplate);
 router.post("/whatsapp/templates/upload-media", authUser, uploadWhatsAppMedia.single("media"), templateController.uploadMedia);
 

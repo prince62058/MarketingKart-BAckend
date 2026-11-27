@@ -3,12 +3,12 @@ const controller = require("../controllers/businessCategoryController");
 const router = express.Router();
 const { categoryMid } = require("../middlewares/businessCategoryMid");
 const { upload } = require("../middlewares/multer");
-const { authUser } = require("../middlewares/authMidd");
+const { authUser, adminOnly } = require("../middlewares/authMidd");
 const asyncHandler = require("../utils/asyncHandler");
 
 router.post(
   "/category/createCategory",
-  asyncHandler(authUser),
+  ...adminOnly,
   upload.single("icon"),
   asyncHandler(controller.createCategory)
 );
@@ -29,14 +29,14 @@ router.get(
 );
 router.put(
   "/category/updateCategory/:categoryId",
-  asyncHandler(authUser),
+  ...adminOnly,
   asyncHandler(categoryMid),
   upload.single("icon"),
   asyncHandler(controller.updateCategory)
 );
 router.put(
   "/category/disbaleCategory/:categoryId",
-  asyncHandler(authUser),
+  ...adminOnly,
   asyncHandler(categoryMid),
   asyncHandler(controller.disableCategory)
 );

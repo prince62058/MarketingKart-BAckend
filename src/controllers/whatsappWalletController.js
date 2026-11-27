@@ -122,7 +122,7 @@ exports.addMoney = async (req, res) => {
       user = await User.findOne({
         $or: [
           { email: targetId.trim().toLowerCase() },
-          { name: { $regex: new RegExp(`^${targetId.trim()}$`, "i") } }
+          { name: { $regex: new RegExp(`^${require("../helpers/escapeRegex")(targetId.trim())}$`, "i") } }
         ]
       }).session(session);
     }
@@ -232,7 +232,7 @@ exports.getTransactions = async (req, res) => {
     }
     if (type) query.type = type;
     if (mode) query.mode = mode;
-    if (search) query.transactionId = { $regex: search, $options: "i" };
+    if (search) query.transactionId = { $regex: require("../helpers/escapeRegex")(search), $options: "i" };
 
     const skip = (parseInt(page) - 1) * limit;
     const [data, total] = await Promise.all([
@@ -278,15 +278,15 @@ exports.getAllTransactions = async (req, res) => {
       const isNum = /^[0-9]+$/.test(s);
       const matchingUsers = await User.find({
         $or: [
-          { name: { $regex: s, $options: "i" } },
+          { name: { $regex: require("../helpers/escapeRegex")(s), $options: "i" } },
           ...(isNum ? [{ mobile: parseInt(s) }] : []),
         ],
       }).select("_id");
       const userIds = matchingUsers.map((u) => u._id);
 
       query.$or = [
-        { transactionId: { $regex: s, $options: "i" } },
-        { description: { $regex: s, $options: "i" } },
+        { transactionId: { $regex: require("../helpers/escapeRegex")(s), $options: "i" } },
+        { description: { $regex: require("../helpers/escapeRegex")(s), $options: "i" } },
         ...(userIds.length > 0 ? [{ userId: { $in: userIds } }] : []),
       ];
     }

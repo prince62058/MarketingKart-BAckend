@@ -127,8 +127,8 @@ exports.getAllTickets = async (req, res) => {
     if (priority) filter.priority = priority;
     if (search) {
       filter.$or = [
-        { subject: { $regex: search, $options: "i" } },
-        { message: { $regex: search, $options: "i" } },
+        { subject: { $regex: require("../helpers/escapeRegex")(search), $options: "i" } },
+        { message: { $regex: require("../helpers/escapeRegex")(search), $options: "i" } },
       ];
     }
 

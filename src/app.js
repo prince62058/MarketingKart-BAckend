@@ -24,7 +24,8 @@ const faqRoute = require("./routes/faqRoute");
 const videoYoutubeRoute = require("./routes/videoYoutubeRoute");
 const companyRoute = require("./routes/companyRoute");
 const videoRoute = require("./routes/videoRoute");
-const phonePayRoute = require("./routes/phonePayRoute");
+// PhonePe was never used by the apps; its routes stay unmounted.
+// const phonePayRoute = require("./routes/phonePayRoute");
 const adminDashboard = require("./routes/adminDashboard");
 const recentAdsDesignRoute = require("./routes/recentAdsDesignsRoute");
 const notificationRoute = require("./routes/notificationRoute");
@@ -55,9 +56,15 @@ const cors = require("cors"); // Import cors
 const errorMiddleware = require("./middlewares/errorMiddleware");
 
 const app = express();
+const security = require("./middlewares/security");
 
-// Enable CORS for all routes
-app.use(cors()); // Allows requests from all origins by default. You can configure specific origins if needed.
+// Behind the hosting proxy: req.ip / req.secure come from X-Forwarded-* (needed for rate limits).
+app.set("trust proxy", 1);
+app.disable("x-powered-by");
+app.use(security.securityHeaders);
+// CORS: every origin unless CORS_ORIGINS lists the allowed sites.
+app.use(security.corsPolicy());
+app.use(security.globalLimit);
 
 // Middleware for parsing JSON bodies
 // `verify` stashes the raw request bytes on req.rawBody so webhook handlers
@@ -78,8 +85,10 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.urlencoded({ extended: true }));
+app.use(security.sanitizeInput);
 
-app.use(express.static("public")); // serve static files from 'public' folder
+// Only the public images folder is served. Exports and anything else in public/ stay private.
+app.use("/images", express.static("public/images"));
 
 const { getLandingHtml } = require("./views/landingPage");
 const {
@@ -181,7 +190,7 @@ app.use("/api", faqRoute);
 app.use("/api", companyRoute);
 app.use("/api", require("./routes/moduleFlagsRoute"));
 app.use("/api", videoRoute);
-app.use("/api", phonePayRoute);
+// app.use("/api", phonePayRoute);
 app.use("/api", adminDashboard);
 app.use("/api", notificationRoute);
 app.use("/api", homePageRoute);

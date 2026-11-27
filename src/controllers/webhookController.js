@@ -3,7 +3,7 @@ const whatsappLinkService = require("../services/whatsappLinkService");
 const crypto = require("crypto");
 const mongoose = require("mongoose");
 const webhookModel = require("../models/webhookModel");
-const VERIFY_TOKEN = process.env.META_LEAD_WEBHOOK_VERIFY_TOKEN || "da21e0d80f1d406e99ff7b518fd3936b";
+const VERIFY_TOKEN = process.env.META_LEAD_WEBHOOK_VERIFY_TOKEN;
 const businessModel = require("../models/businessModel");
 const leadModel = require("../models/leadModel");
 const leadFormModel = require("../models/leadFormsModel");
@@ -106,8 +106,8 @@ exports.getWebhook = (req, res) => {
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
-  if (mode && token === VERIFY_TOKEN) {
-    res.status(200).send(challenge);
+  if (mode === "subscribe" && VERIFY_TOKEN && token === VERIFY_TOKEN) {
+    res.status(200).type("text/plain").send(String(challenge || ""));
   } else {
     res.sendStatus(403);
   }
@@ -115,6 +115,13 @@ exports.getWebhook = (req, res) => {
 
 // Endpoint to handle webhook events
 exports.postWebhook = async (req, res) => {
+  // Meta signs lead webhooks with the app secret. Until META_LEAD_WEBHOOK_REQUIRE_SIGNATURE=true is
+  // set (after checking the live app secret matches), a bad signature is logged, not refused, so a
+  // wrong secret in the server env cannot silently stop leads.
+  if (!isValidMetaSignature(req)) {
+    if (process.env.META_LEAD_WEBHOOK_REQUIRE_SIGNATURE === "true") return res.sendStatus(401);
+    console.warn("[Lead Webhook] Missing or invalid X-Hub-Signature-256");
+  }
   const payload = req.body;
 
   if (payload.entry) {
@@ -269,8 +276,9 @@ exports.getWhatsAppWebhook = (req, res) => {
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
-  if (mode === "subscribe" && token === process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN) {
-    return res.status(200).send(challenge);
+  const expected = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
+  if (mode === "subscribe" && expected && token === expected) {
+    return res.status(200).type("text/plain").send(String(challenge || ""));
   }
   return res.sendStatus(403);
 };
@@ -871,7 +879,7 @@ exports.getAllLeadsByPagination = async (req, res) => {
     const leads = await leadModel
       .find(query)
       .skip(skip)
-      .populate("businessId")
+      .populate("businessId", "-metaAccessToken -pageAccessToken")
       .populate("statusUpdatedBy", "name image mobile")
       .limit(parseInt(limit))
       .sort({ createdAt: -1 });
@@ -1105,7 +1113,7 @@ exports.getSingleLeadDetail = async (req, res) => {
   const { leadId } = req.query;
 
   try {
-    const lead = await leadModel.findById(leadId).populate("businessId");
+    const lead = await leadModel.findById(leadId).populate("businessId", "-metaAccessToken -pageAccessToken");
 
     if (!lead) {
       return res.status(404).json({
@@ -1542,19 +1550,23 @@ exports.getLeadOfYourBusinessByMemberIdExcel = async (req, res) => {
     const excelBuffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
     const csvData = XLSX.utils.sheet_to_csv(worksheet);
 
-    const timestamp = Date.now();
+    // The app opens these links directly, so they stay public; a random name keeps one business's
+    // lead list from being found by guessing a timestamp.
+    const timestamp = `${Date.now()}_${crypto.randomBytes(24).toString("hex")}`;
 
     // Upload Excel and CSV to DigitalOcean Spaces
     const excelUpload = uploadBuffer(excelBuffer, {
       folder: "MARKETINGKART/EXPORTS",
       resourceType: "raw",
       publicId: `leads_${timestamp}_excel`,
+      mimetype: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     });
 
     const csvUpload = uploadBuffer(Buffer.from(csvData), {
       folder: "MARKETINGKART/EXPORTS",
       resourceType: "raw",
       publicId: `leads_${timestamp}_csv`,
+      mimetype: "text/csv",
     });
 
     const [excelResult, csvResult] = await Promise.all([excelUpload, csvUpload]);

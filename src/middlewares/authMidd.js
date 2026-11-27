@@ -85,14 +85,40 @@ exports.authUser = async (req, res, next) => {
 
 // Use after authUser on routes that must be restricted to admin accounts. Reads the caller
 // (req.authUser) rather than req.user, which userMid may have replaced with another account.
-exports.isAdmin = (req, res, next) => {
-  if ((req.authUser || req.user)?.userType !== "ADMIN") {
-    return res
-      .status(statusCodes?.["Unauthorized"] || 403)
-      .json(responseBuilder(apiResponseStatusCode[401], "Admin access required"));
+// A staff member switched off in the admin panel keeps userType ADMIN on older records, so the
+// staff record decides too. Cached briefly: this runs on every admin request.
+const inactiveStaffCache = new Map();
+async function isInactiveStaff(userId) {
+  const key = String(userId);
+  const hit = inactiveStaffCache.get(key);
+  if (hit && Date.now() - hit.at < 30 * 1000) return hit.value;
+  const staff = await require("../models/staffModel").findOne({ userId }).select("isActive").lean();
+  const value = Boolean(staff && staff.isActive === false);
+  inactiveStaffCache.set(key, { at: Date.now(), value });
+  if (inactiveStaffCache.size > 2000) inactiveStaffCache.delete(inactiveStaffCache.keys().next().value);
+  return value;
+}
+
+exports.isAdmin = async (req, res, next) => {
+  const caller = req.authUser || req.user;
+  const denied = () => res
+    .status(statusCodes?.["Unauthorized"] || 403)
+    .json(responseBuilder(apiResponseStatusCode[401], "Admin access required"));
+  if (caller?.userType !== "ADMIN") return denied();
+  try {
+    if (await isInactiveStaff(caller._id)) return denied();
+  } catch (error) {
+    return next(error);
   }
-  next();
+  return next();
 };
 
 // authUser then isAdmin, ready to drop into a route: router.post("/x", adminOnly, handler).
 exports.adminOnly = [asyncHandler(exports.authUser), exports.isAdmin];
+
+// For public forms: a request with a bearer token is authenticated (so the record can name the
+// account); one without passes through as anonymous.
+exports.optionalAuth = (req, res, next) => {
+  if (!req.headers.authorization) return next();
+  return asyncHandler(exports.authUser)(req, res, next);
+};

@@ -102,16 +102,8 @@ function registerSocketHandlers(io, socket) {
     });
   }
 
-  // Chat relay for client-to-client use. Only a socket that is already inside a room may speak into it.
-  socket.on("sendMessage", (data) => {
-    if (!data || typeof data !== "object") return;
-    for (const kind of ["conversation", "business"]) {
-      const id = data[`${kind}Id`];
-      if (id && socket.rooms.has(`${kind}:${id}`)) {
-        io.to(`${kind}:${id}`).emit("newWhatsAppMessage", data);
-      }
-    }
-  });
+  // No client-to-client relay: message events come only from the server (webhooks, sends), so a
+  // socket cannot push fake "new message" events to other people in a room.
 
   socket.on("disconnect", () => {
     console.log("User disconnected:", socket.id);

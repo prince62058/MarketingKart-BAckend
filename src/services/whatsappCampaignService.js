@@ -454,7 +454,7 @@ const getAllCampaigns = async ({ page = 1, status = "", businessId, createdBy, s
   if (status) query.status = status;
   if (businessId) query.businessId = businessId;
   if (createdBy) query.createdBy = createdBy;
-  if (search) query.name = { $regex: search, $options: "i" };
+  if (search) query.name = { $regex: require("../helpers/escapeRegex")(search), $options: "i" };
 
   const limit = 20;
   const skip = (page - 1) * limit;

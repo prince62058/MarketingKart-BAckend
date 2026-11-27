@@ -18,6 +18,8 @@ const { findOrCreateUserByMobile } = require("../helpers/mobileAccountHelper");
 const { validateEmail } = require("../utils/emailValidetionHandler");
 const staffModel = require("../models/staffModel");
 const userModel = require("../models/userModel");
+const jwtSecret = require("../helpers/jwtSecret");
+const { hashPassword, verifyPassword } = require("../helpers/passwordHash");
 const { checkPermissions } = require("../helpers/checkPermission");
 const permissionModel = require("../models/permissionModel");
 const internalCampiagnModel = require("../models/internalCampiagnModel");
@@ -179,7 +181,7 @@ const checkMobileOtp = async (req, res) => {
 const signLoginToken = (user, expiresIn) =>
   jwt.sign(
     { User: user._id, userId: user._id },
-    process.env.JWT_SECRET || process.env.TOKEN_KEY || "SECRETEKEY",
+    jwtSecret(),
     { expiresIn },
   );
 
@@ -256,6 +258,12 @@ exports.updateProfile = async (req, res) => {
 
 exports.disableUser = async (req, res) => {
   const user = req.user;
+  // Only a super admin (an admin without a staff record) may switch another admin account off,
+  // so a staff member cannot lock the owner out.
+  if (user?.userType === "ADMIN" && String(user._id) !== String(req.authUser?._id)) {
+    const callerIsStaff = await staffModel.exists({ userId: req.authUser?._id });
+    if (callerIsStaff) return res.status(403).json(responseBuilder(apiResponseStatusCode[401], "Only a super admin can disable an admin account"));
+  }
   // The admin panel sends the state it wants ("make this user Inactive"), not a
   // flip. Toggling regardless meant clicking Deactivate on an already-disabled
   // user quietly re-enabled them. An absent flag still toggles, for old callers.
@@ -429,7 +437,7 @@ exports.getAllUser = async (req, res) => {
         // Convert to Number for exact match
         obj.mobile = Number(trimmedSearch);
       } else {
-        const regex = new RegExp(trimmedSearch, "i");
+        const regex = new RegExp(require("../helpers/escapeRegex")(trimmedSearch), "i");
         obj.$or = [{ name: { $regex: regex } }, { email: { $regex: regex } }];
       }
     }
@@ -582,10 +590,11 @@ exports.verifyEmailOtp = async (req, res) => {
   // claim any business by id. Attaching to a business is the owner's job.
   user = await userService.finOne(
     { email: email },
-    { emailVerified: true, userType: "SUBUSER" },
+    // A business owner signing in by email stays an owner; only other accounts become team members.
+    { emailVerified: true, ...(user.userType !== "USER" && { userType: "SUBUSER" }) },
   );
 
-  const generate = await jwt.sign({ User: user._id }, process.env.JWT_SECRET || "SECRETEKEY", {
+  const generate = await jwt.sign({ User: user._id }, jwtSecret(), {
     expiresIn: "60d",
   });
 
@@ -617,13 +626,10 @@ exports.CreateSubUser = async (req, res) => {
   //   .status(400)
   //   .send({ success: false, message: "Access denied"});
   // }
-  const SECRET_KEY = process.env.JWT_SECRET || "SECRETEKEY";
+  const SECRET_KEY = jwtSecret();
   // const token = req.headers["authorization"];
   let check = jwt.verify(memberToken, SECRET_KEY);
-  const cyperOtp = CryptoJS.AES.encrypt(
-    password.toString(),
-    "CRYPTOKEY",
-  ).toString();
+  const cyperOtp = hashPassword(password);
   let data = await userService.checkData({ _id: check ? check?.User : userId });
   let image = req.file ? req.file.location : data.image;
   if (req.file && data?.image != null) {
@@ -693,6 +699,7 @@ exports.getAllSubUserByBusinessId = async (req, res) => {
   const { businessId, page = 1 } = req.query;
   const skip = (page - 1) * 20;
   let businessData = await businessModel.findById(businessId);
+  if (!businessData) return res.status(404).json({ success: false, message: "Not found" });
   let data = await permissionModel
     .find({ businessId: businessId, userId: { $ne: businessData.userId } })
     .populate("userId", "name image mobile")
@@ -715,6 +722,16 @@ exports.getAllSubUserByBusinessId = async (req, res) => {
     );
 };
 
+// Compares a login password with the stored one (scrypt, or the old AES format, which is upgraded).
+async function checkPassword(user, password) {
+  const stored = await userModel.findById(user._id).select("+password").lean();
+  const result = verifyPassword(password, stored?.password);
+  if (result.ok && result.upgrade) {
+    await userModel.updateOne({ _id: user._id }, { $set: { password: hashPassword(password) } }).catch(() => {});
+  }
+  return result.ok;
+}
+
 exports.LogIn = async (req, res) => {
   const { email, password } = req.body;
 
@@ -724,11 +741,14 @@ exports.LogIn = async (req, res) => {
       .json(responseBuilder(apiResponseStatusCode[400], "email is required"));
   }
 
-  validateEmail(email, res);
+  if (typeof email !== "string" || typeof password !== "string" || validateEmail(email, res)) {
+    if (!res.headersSent) return res.status(statusCodes["Bad Request"]).json(responseBuilder(apiResponseStatusCode[400], "Please Provide Valied Email And Password"));
+    return;
+  }
 
   let user = await userService.checkData({ email: email });
 
-  if (!user) {
+  if (!user || user.disable) {
     return res
       .status(statusCodes["Bad Request"])
       .json(
@@ -739,11 +759,7 @@ exports.LogIn = async (req, res) => {
       );
   }
 
-  let bytes = CryptoJS.AES.decrypt(user.password.toString(), "CRYPTOKEY");
-
-  let originalText = bytes.toString(CryptoJS.enc.Utf8);
-
-  if (originalText != password.toString()) {
+  if (!(await checkPassword(user, password))) {
     return res
       .status(statusCodes["Bad Request"])
       .json(
@@ -753,7 +769,7 @@ exports.LogIn = async (req, res) => {
         ),
       );
   }
-  const generate = await jwt.sign({ User: user._id }, process.env.JWT_SECRET || "SECRETEKEY", {
+  const generate = await jwt.sign({ User: user._id }, jwtSecret(), {
     expiresIn: "365d",
   });
 
@@ -776,8 +792,11 @@ exports.adminLogIn = async (req, res) => {
       .status(statusCodes["Bad Request"])
       .json(responseBuilder(apiResponseStatusCode[400], "email is required"));
   }
-  validateEmail(email, res);
-  if (!password) {
+  if (typeof email !== "string" || validateEmail(email, res)) {
+    if (!res.headersSent) return res.status(statusCodes["Bad Request"]).json(responseBuilder(apiResponseStatusCode[400], "Please Provide Valied Admin Email"));
+    return;
+  }
+  if (!password || typeof password !== "string") {
     return res
       .status(statusCodes["Bad Request"])
       .json(
@@ -803,9 +822,12 @@ exports.adminLogIn = async (req, res) => {
         responseBuilder(apiResponseStatusCode[400], "You Are Not Valied Admin"),
       );
   }
-  let bytes = CryptoJS.AES.decrypt(user.password.toString(), "CRYPTOKEY");
-  let originalText = bytes.toString(CryptoJS.enc.Utf8);
-  if (originalText != password?.toString()) {
+  // A disabled account or a deactivated staff member cannot sign in.
+  const staffRecord = await staffModel.findOne({ userId: user._id }).select("isActive").lean();
+  if (user.disable || (staffRecord && staffRecord.isActive === false)) {
+    return res.status(403).json(responseBuilder(apiResponseStatusCode[401], "This admin account is disabled"));
+  }
+  if (!(await checkPassword(user, password))) {
     return res
       .status(statusCodes["Bad Request"])
       .json(
@@ -817,7 +839,7 @@ exports.adminLogIn = async (req, res) => {
   }
   const generate = await jwt.sign(
     { User: user._id, userType: "ADMIN" },
-    process.env.JWT_SECRET || "SECRETEKEY",
+    jwtSecret(),
     {
       expiresIn: "30d",
     },
@@ -871,7 +893,7 @@ exports.verifyAdminEmailOtp = async (req, res) => {
 
   const generate = await jwt.sign(
     { User: user._id, userType: "ADMIN" },
-    process.env.JWT_SECRET || "SECRETEKEY",
+    jwtSecret(),
     {
       expiresIn: "30d",
     },
@@ -899,7 +921,7 @@ exports.CreateAdminSubAdmin = async (req, res) => {
       .status(statusCodes["Bad Request"])
       .json(responseBuilder(apiResponseStatusCode[400], "email is required"));
   }
-  validateEmail(email, res);
+  if (typeof email !== "string" || validateEmail(email, res)) { if (!res.headersSent) res.status(400).json({ success: false, message: "Enter a valid email" }); return; }
   if (!password) {
     return res
       .status(statusCodes["Bad Request"])
@@ -918,10 +940,7 @@ exports.CreateAdminSubAdmin = async (req, res) => {
         ),
       );
   }
-  const cyperOtp = CryptoJS.AES.encrypt(
-    password.toString(),
-    "CRYPTOKEY",
-  ).toString();
+  const cyperOtp = hashPassword(password);
   console.log("email", email);
   user = await userModel.create({
     name: name,
@@ -1106,7 +1125,7 @@ exports.getByIdUserForAdmin = async (req, res) => {
     let businessFilter = { userId };
 
     if (search) {
-      const regex = new RegExp(search, "i");
+      const regex = new RegExp(require("../helpers/escapeRegex")(search), "i");
       const isNumber = /^[0-9]+$/.test(search);
 
       businessFilter.$or = [
@@ -1246,30 +1265,14 @@ exports.getAllUsersWithBusiness = async (req, res) => {
     });
     const csvData = XLSX.utils.sheet_to_csv(worksheet);
 
-    const timestamp = Date.now();
-    const excelFileName = `users_with_business_${timestamp}.xlsx`;
-    const csvFileName = `users_with_business_${timestamp}.csv`;
-
-    const exportsDir = path.join(__dirname, "../../public/exports");
-    if (!fs.existsSync(exportsDir)) {
-      fs.mkdirSync(exportsDir, { recursive: true });
+    // Sent straight to the admin who asked; never written to a folder the web server publishes.
+    const stamp = new Date().toISOString().slice(0, 10);
+    if (String(req.query.format || "").toLowerCase() === "csv") {
+      res.attachment(`users_with_business_${stamp}.csv`);
+      return res.type("text/csv").send(csvData);
     }
-
-    const excelPath = path.join(exportsDir, excelFileName);
-    const csvPath = path.join(exportsDir, csvFileName);
-
-    // Save locally
-    fs.writeFileSync(excelPath, excelBuffer);
-    fs.writeFileSync(csvPath, csvData);
-
-    const baseUrl = `${req.protocol}://${req.get("host")}`;
-
-    return res.status(200).json({
-      success: true,
-      message: "Files generated successfully",
-      excelDownloadUrl: `${baseUrl}/exports/${excelFileName}`,
-      csvDownloadUrl: `${baseUrl}/exports/${csvFileName}`,
-    });
+    res.attachment(`users_with_business_${stamp}.xlsx`);
+    return res.type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet").send(excelBuffer);
   } catch (error) {
     return res.status(500).json({
       success: false,

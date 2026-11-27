@@ -318,7 +318,7 @@ exports.generateInvoice = async (
 
     // Send Email
     const user = process.env.EMAIL_USER || "ayotrix1@gmail.com";
-    const pass = process.env.EMAIL_PASS || "ijewaofeggqbwmmm";
+    const pass = process.env.EMAIL_PASS;
 
     const transporter = nodemailer.createTransport({
       service: "gmail",
@@ -450,10 +450,15 @@ exports.getInvoiceByBusinessId = async (req, res) => {
     const totalInvoices = await invoiceModel.countDocuments({ userId });
     const totalPages = Math.ceil(totalInvoices / parseInt(limit));
 
+    // The app opens invoiceURL when present: give it a signed link to the invoice page.
+    const { invoiceLinkParams } = require("../helpers/invoiceLink");
+    const base = `${req.protocol}://${req.get("host")}/api/getInvoiceHTML`;
+    const data = invoices.map((inv) => ({ ...(inv.toObject ? inv.toObject() : inv), invoiceURL: `${base}?${invoiceLinkParams(inv._id)}` }));
+
     return res.status(200).json({
       success: true,
       message: "Invoices fetched successfully",
-      data: invoices,
+      data,
     });
   } catch (error) {
     return res.status(500).json({
@@ -484,10 +489,12 @@ exports.getInvoiceDetails = async (req, res) => {
       });
     }
 
+    const { invoiceLinkParams } = require("../helpers/invoiceLink");
+    const invoiceURL = `${req.protocol}://${req.get("host")}/api/getInvoiceHTML?${invoiceLinkParams(invoice._id)}`;
     return res.status(200).json({
       success: true,
       message: "Invoice details fetched successfully",
-      data: invoice,
+      data: { ...(invoice.toObject ? invoice.toObject() : invoice), invoiceURL },
     });
   } catch (error) {
     return res.status(500).json({
@@ -1082,15 +1089,24 @@ function sendHtml(res, html) {
 exports.getInvoiceHTML = async (req, res) => {
   try {
     const invoiceId = req.query.invoiceId || req.params.invoiceId;
+    // A signed link (from the invoice list) always works. Old unsigned links keep working until
+    // INVOICE_LINKS_REQUIRE_SIGNATURE=true, which is meant for once every app build sends signed ones.
+    const { checkInvoiceLink } = require("../helpers/invoiceLink");
+    const link = checkInvoiceLink(invoiceId, req.query.exp, req.query.sig);
+    if (link === "invalid" || (link === "missing" && process.env.INVOICE_LINKS_REQUIRE_SIGNATURE === "true")) {
+      return res.status(403).send("This invoice link has expired. Open the invoice again from the app.");
+    }
+    if (!require("mongoose").isValidObjectId(invoiceId)) return res.status(404).send("Invoice not found");
     const invoice = await invoiceModel
       .findById(invoiceId)
-      .populate("userId")
-      .populate("businessId")
+      .populate("userId", "name email mobile")
+      .populate("businessId", "-metaAccessToken -pageAccessToken")
       .populate("adsTypeId", "title");
     if (!invoice) return res.status(404).send("Invoice not found");
     return sendHtml(res, await renderStoredInvoice(invoice));
   } catch (error) {
-    return res.status(500).send(error.message);
+    console.error("[invoice html]", error);
+    return res.status(500).send("Could not open this invoice");
   }
 };
 

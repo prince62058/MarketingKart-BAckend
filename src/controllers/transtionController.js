@@ -40,10 +40,16 @@
         return res.status(400).json({ success: false, message: "Invalid amount" });
       }
 
+      const value = Number(amount);
+      if (!Number.isFinite(value) || value > 1000000) {
+        return res.status(400).json({ success: false, message: "Invalid amount" });
+      }
       const order = await getRazorpayClient().orders.create({
-        amount: amount * 100,
+        amount: Math.round(value * 100),
         currency: "INR",
-        receipt: `receipt_${Date.now()}`  
+        receipt: `receipt_${Date.now()}`,
+        // Ties the order to the buyer so nobody else can spend this payment.
+        notes: { userId: String(req.user._id) },
       });
 
       res.status(201).json({ 
@@ -61,6 +67,8 @@
 
 
 const createTransactions = async (req, res) => {
+  // The payment-claim collection must exist before the transaction that writes to it starts.
+  await require("../helpers/paymentClaim").ensureCollection();
   const session = await mongoose.startSession();
   
   try {
@@ -96,8 +104,17 @@ const createTransactions = async (req, res) => {
     const resolvedWalletType = walletType?.toUpperCase() === "WHATSAPP" ? "WHATSAPP" : "MAIN";
 
     // Check if caller is admin
-    const isAdmin = req.user?.userType === "ADMIN" || req.user?.role === 2 || req.user?.role === "ADMIN";
+    const caller = req.authUser || req.user;
+    const isAdmin = caller?.userType === "ADMIN";
     const isAdminAction = Boolean(req.body.userId) && isAdmin;
+    if (isAdminAction) {
+      // Moving money for someone else needs the TRANSACTION permission (super admins have every one).
+      const staff = await require("../models/staffModel").findOne({ userId: caller._id }).select("permissions isActive").lean();
+      const perms = (staff?.permissions || []).map((p) => String(p).toUpperCase());
+      if (staff && (staff.isActive === false || !(perms.includes("ALL") || perms.includes("*") || perms.includes("TRANSACTION")))) {
+        throw Object.assign(new Error("You do not have permission to change wallets"), { status: 403 });
+      }
+    }
     const targetUserId = isAdminAction ? req.body.userId : req.user._id;
 
     let verifiedOrderId = null;
@@ -122,6 +139,9 @@ const createTransactions = async (req, res) => {
       if (verifiedOrder.status !== "paid" || !verifiedOrder.amount_paid) {
         throw new Error("Payment not confirmed by Razorpay");
       }
+      const { assertOrderOwner, claimPayment } = require("../helpers/paymentClaim");
+      assertOrderOwner(verifiedOrder, req.user._id);
+      await claimPayment({ paymentId, orderId, userId: req.user._id, purpose: "wallet" }, session);
       roundedAmount = parseFloat((verifiedOrder.amount_paid / 100).toFixed(2));
       verifiedOrderId = orderId;
     }
@@ -346,15 +366,15 @@ function getTransactionMessage(type, paymentId, isAdminAction, walletType) {
       if (search) {
         const users = await User.find({
           $or: [
-            { name: { $regex: search, $options: 'i' } },
-            { email: { $regex: search, $options: 'i' } }
+            { name: { $regex: require("../helpers/escapeRegex")(search), $options: 'i' } },
+            { email: { $regex: require("../helpers/escapeRegex")(search), $options: 'i' } }
           ]
         }).select('_id');
         const userIds = users.map(u => u._id);
         
         filter.$or = [
           { userId: { $in: userIds } },
-          { transactionId: { $regex: search, $options: 'i' } }
+          { transactionId: { $regex: require("../helpers/escapeRegex")(search), $options: 'i' } }
         ];
       }
 
@@ -417,7 +437,9 @@ function getTransactionMessage(type, paymentId, isAdminAction, walletType) {
         .populate("buinessId", "businessName")
         .populate("addTypeId", "advertisementType");
 
-      if (!transaction) {
+      const viewer = req.authUser || req.user;
+      const ownerId = transaction?.userId?._id || transaction?.userId;
+      if (!transaction || (viewer?.userType !== "ADMIN" && String(ownerId) !== String(viewer?._id))) {
         return res.status(404).json({
           success: false,
           message: "Transaction not found",

@@ -12,7 +12,7 @@ const userModel = require("../models/userModel");
 // Sub User in whole api
 
 exports.checkPermissions = async function (requestedPermissions, token) {
-  const SECRET_KEY = process.env.JWT_SECRET || "SECRETEKEY";
+  const SECRET_KEY = process.env.JWT_SECRET || process.env.TOKEN_KEY;
   const decoded = jwt.verify(token, SECRET_KEY);
   const userData = await userModel.findById(decoded.User).populate("roleId");
 

@@ -41,7 +41,7 @@ test("mobile OTP: texted to the number, random, and never in the response", { sk
   const sms = lastSms(mobile);
   assert.match(sms.otp, /^\d{4}$/);
 
-  const doc = await User.findOne({ mobile }).lean();
+  const doc = await User.findOne({ mobile }).select("+otp").lean();
   assert.ok(doc.otp.startsWith("v2$"), "stored as a salted hash");
   assert.ok(!doc.otp.includes(sms.otp));
   assert.equal(doc.otp2, undefined, "the readable copy of the OTP is gone");
@@ -302,7 +302,7 @@ test("fixed-OTP bridge (ALLOW_FIXED_DEV_OTP=true): today's 1234 login keeps work
       assert.equal(sent.body.data, undefined, "the OTP is still never in a response");
       assert.equal(h.sent.sms.length, smsBefore, "no SMS while the bridge is on");
 
-      const doc = await User.findOne({ mobile }).lean();
+      const doc = await User.findOne({ mobile }).select("+otp").lean();
       assert.ok(doc.otp.startsWith("v2$"), "still stored hashed");
 
       const login = await h.call("POST", verify, { body: { mobile, otp: "1234" } });

@@ -95,6 +95,35 @@ const ADMIN_ONLY = [
   ["POST", "/api/createVideo", {}],
   ["PUT", "/api/updateVideo", {}],
   ["DELETE", "/api/deleteVideo", undefined],
+  // Catalog content the apps only read.
+  ["POST", "/api/city/createCity", {}],
+  ["PUT", `/api/city/updateCity/${someId}`, {}],
+  ["PUT", `/api/city/disable/${someId}`, {}],
+  ["POST", "/api/country/createCountry", {}],
+  ["PUT", `/api/country/disableCountry/${someId}`, {}],
+  ["POST", `/api/state/createState/${someId}`, {}],
+  ["PUT", `/api/state/disable/${someId}`, {}],
+  ["POST", "/api/category/createCategory", {}],
+  ["PUT", `/api/category/updateCategory/${someId}`, {}],
+  ["PUT", `/api/category/disbaleCategory/${someId}`, {}],
+  ["POST", "/api/offering/createOffering", {}],
+  ["PUT", `/api/offering/updateOffering/${someId}`, {}],
+  ["PUT", `/api/offering/disableOffering/${someId}`, {}],
+  ["POST", "/api/aiImagePlan/createAiImagePlan", {}],
+  ["POST", "/api/imageCategory/createImageCategory", {}],
+  ["PUT", `/api/imageCategory/updateimageCategory/${someId}`, {}],
+  ["POST", "/api/faq/createFaq", {}],
+  ["PUT", `/api/faq/updatefaq/${someId}`, {}],
+  ["DELETE", `/api/faq/deleteFaq/${someId}`],
+  ["POST", "/api/imageBusiness/createImageBusiness", {}],
+  ["PUT", `/api/imageBusiness/disableImageBusiness/${someId}`, {}],
+];
+
+// Unmounted: answered 404 whoever asks.
+const REMOVED = [
+  ["POST", "/api/PhonePayGateway", {}],
+  ["GET", "/api/PhonePayGatewayCheckStatus"],
+  ["GET", "/api/callback?code=x"],
 ];
 
 // Any signed-in account may call these (the controller then limits them to their own data).
@@ -102,9 +131,6 @@ const SIGNED_IN = [
   ["PUT", `/api/user/updateProfile/${someId}`, { name: "x" }],
   ["POST", "/api/ai", {}],
   ["POST", "/api/imageVideoUpload"],
-  ["POST", "/api/PhonePayGateway", {}],
-  ["POST", "/api/PhonePayGatewayStatus", {}],
-  ["GET", "/api/PhonePayGatewayCheckStatus"],
   ["PUT", "/api/business/unLinkPage", { businessId: someId }],
   ["POST", "/api/business/unLinkPage", { businessId: someId }],
   ["POST", `/api/createCall/${someId}`, {}],
@@ -190,12 +216,17 @@ test("every admin-only route still reaches its controller for an admin", { skip 
 
 test("signed-in routes turn an anonymous caller away and let a customer through to the controller", { skip }, async () => {
   for (const entry of SIGNED_IN) {
-    // PhonePayGatewayStatus starts a poll against PhonePe, so only the anonymous refusal is exercised for it.
     const anonymous = await call(entry);
     assert.equal(anonymous.status, 401, `${entry[0]} ${entry[1]} answered ${anonymous.status} without a login`);
-    if (entry[1].includes("PhonePayGatewayStatus")) continue;
     const signedIn = await call(entry, customerToken);
     assert.ok(![401].includes(signedIn.status), `${entry[0]} ${entry[1]} answered ${signedIn.status} for a customer`);
+  }
+});
+
+test("removed routes are gone", { skip }, async () => {
+  for (const entry of REMOVED) {
+    const res = await call(entry, customerToken);
+    assert.equal(res.status, 404, `${entry[0]} ${entry[1]} answered ${res.status}`);
   }
 });
 
@@ -233,7 +264,7 @@ test("staff routes: a staff member limited to USERS can read staff but not creat
 
   const created = await h.call("POST", "/api/staff", {
     token: adminToken,
-    body: { name: "Real Staff", email: "real.staff@example.test", mobile: 9876500003, permissions: ["USERS"] },
+    body: { name: "Real Staff", email: "real.staff@example.test", mobile: 9876500003, password: "Staff login 2026", permissions: ["USERS"] },
   });
   assert.equal(created.status, 201, created.text);
 });

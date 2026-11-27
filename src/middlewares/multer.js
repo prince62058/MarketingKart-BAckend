@@ -71,8 +71,36 @@ function folderForMimetype(mimetype = "") {
 }
 
 // Multer Storage Configuration
+// Files land in a public bucket and are served with the type the client sent, so anything a
+// browser would run (HTML, SVG, XML, scripts) is refused; photos, videos, audio, PDFs and office
+// files are what the apps upload.
+const SAFE_DOCUMENT_TYPES = new Set([
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "text/csv",
+  "text/plain",
+  "application/octet-stream",
+  "application/zip",
+]);
+const BLOCKED_EXTENSIONS = /\.(html?|xhtml|svg|svgz|xml|js|mjs|php|exe|sh|bat)$/i;
+function safeUploadFilter(_req, file, cb) {
+  const type = String(file.mimetype || "").toLowerCase();
+  const media = /^(image|video|audio)\//.test(type) && !type.includes("svg");
+  if ((media || SAFE_DOCUMENT_TYPES.has(type)) && !BLOCKED_EXTENSIONS.test(file.originalname || "")) return cb(null, true);
+  const error = new Error("This file type is not allowed. Upload a photo, video, PDF or office file.");
+  error.status = 400;
+  return cb(error, false);
+}
+
 const upload = multer({
   storage: new SpacesMulterStorage({ folder: (req, file) => folderForMimetype(file.mimetype) }),
+  fileFilter: safeUploadFilter,
+  limits: { fileSize: 300 * 1024 * 1024, files: 20 },
 });
 
 // Export the upload function

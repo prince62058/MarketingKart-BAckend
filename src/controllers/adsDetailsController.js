@@ -4047,7 +4047,8 @@ async function fetchFacebookAdInterests(searchKeywords) {
 
 async function processSingle(url, index) {
   try {
-    const response = await axios.get(url, { responseType: "arraybuffer" });
+    const { assertPublicUrl, publicFetchOptions } = require("../helpers/safeUrl");
+    const response = await axios.get(assertPublicUrl(url), { ...publicFetchOptions(), responseType: "arraybuffer", timeout: 30000, maxContentLength: 50 * 1024 * 1024 });
     const contentType = response.headers["content-type"];
     const fileTimestamp = `${Date.now()}_${index}`;
 
@@ -4821,7 +4822,7 @@ exports.getAllAdsListByAdmin = async (req, res) => {
 
     // ✅ Search logic
     if (search) {
-      const regex = new RegExp(search.trim(), "i");
+      const regex = new RegExp(require("../helpers/escapeRegex")(search.trim()), "i");
       const matchedBusinesses = await businessModel.find(
         { businessName: { $regex: regex } },
         { _id: 1 },

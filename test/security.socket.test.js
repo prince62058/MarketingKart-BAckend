@@ -139,7 +139,7 @@ test("messages pushed into a room reach members only", { skip }, async () => {
   assert.equal(await outsider.next("newWhatsAppMessage"), null, "the refused socket hears nothing");
 });
 
-test("the chat relay only speaks into rooms the sender is in", { skip }, async () => {
+test("sockets cannot relay messages: only the server pushes new-message events", { skip }, async () => {
   const room = String(business._id);
   const member = await as(owner);
   await member.emit("joinBusinessRoom", room);
@@ -151,5 +151,5 @@ test("the chat relay only speaks into rooms the sender is in", { skip }, async (
   const teammateSocket = await as(teammate);
   await teammateSocket.emit("joinBusinessRoom", room);
   teammateSocket.send("sendMessage", { businessId: room, text: "from a member" });
-  assert.deepEqual(await member.next("newWhatsAppMessage"), [{ businessId: room, text: "from a member" }]);
+  assert.equal(await member.next("newWhatsAppMessage"), null, "a member cannot fake a message either");
 });

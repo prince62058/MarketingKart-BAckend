@@ -15,7 +15,7 @@ const router = express.Router();
 router.get('/getAllContactUs', adminOnly, getAllContactUs);
 
 // POST request to submit contact us form
-router.post('/createContactUs', createContactUs);
+router.post('/createContactUs', require('../middlewares/rateLimit').limits.publicForm, require('../middlewares/authMidd').optionalAuth, createContactUs);
 
 // DELETE request to delete contact submission
 router.delete('/deleteContactUs/:id', adminOnly, deleteContactUs);

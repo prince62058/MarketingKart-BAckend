@@ -54,6 +54,11 @@ exports.createBusiness = async (req, res) => {
       .status(statusCodes["Bad Request"])
       .json(responseBuilder(apiResponseStatusCode[400], "userId is required"));
   }
+  // Only an admin may create a business for someone else.
+  const creator = req.authUser || req.user;
+  if (creator?.userType !== "ADMIN" && String(userId) !== String(creator?._id)) {
+    return res.status(403).json(responseBuilder(apiResponseStatusCode[401], "You can only create a business for your own account"));
+  }
 
   let resolvedCategoryId = businessCategoryId;
   if (!resolvedCategoryId || !mongoose.Types.ObjectId.isValid(resolvedCategoryId)) {
@@ -181,7 +186,27 @@ exports.updateBusiness = async (req, res) => {
       await deleteFileFromObjectStorage(business.businessImage);
     }
 
+    // A customer may not move the business to another owner or write Meta tokens / ad account
+    // ids directly; those come from Meta below or from an admin.
+    const callerIsAdmin = (req.authUser || req.user)?.userType === "ADMIN";
+    if (!callerIsAdmin) {
+      for (const k of ["userId", "pageAccessToken", "metaAdAccountId", "isFacebookPageLinked"]) delete req.body[k];
+      if (req.body.pageId) {
+        const pageId = String(req.body.pageId);
+        if (!/^\d{5,25}$/.test(pageId)) return res.status(400).json({ success: false, message: "Invalid Facebook Page" });
+        const taken = await businessModel.exists({ pageId, _id: { $ne: business._id } });
+        if (taken) return res.status(409).json({ success: false, message: "This Facebook Page is already linked to another business" });
+        if (!req.body.metaAccessToken) return res.status(400).json({ success: false, message: "Sign in with Facebook to link this Page" });
+        // The Page must be one this Facebook login can manage.
+        const owned = await resolvePageAccessToken(pageId, req.body.metaAccessToken).catch(() => null);
+        if (!owned?.token) return res.status(403).json({ success: false, message: "This Facebook account cannot manage that Page" });
+        req.body.pageId = pageId;
+        req.body.pageAccessToken = owned.token;
+      }
+    }
+
     const updateData = extractUpdateData(req.body, businessImage);
+    if (!callerIsAdmin) delete updateData.userId;
 
     // If pageId is provided, explicitly mark the business as Facebook page linked
     if (req.body.pageId) {
@@ -893,7 +918,7 @@ exports.getByIdBusiness = async (req, res) => {
   // if (req.bussiness.metaAccessToken) {
   //   console.log(req.bussiness.metaAccessToken);
   //   const response = await axios.post(
-  //     `https://graph.facebook.com/v21.0/299039119952016/instagram_accounts?access_token=EAAOmDJUkZC6ABO9bLwbXWWi0pjdkfo04GzfmqrNtB9ibp7SQBZAtBcgW1A1ofpJevMGPOJKVGIoHC6bWUWpAIt3v6gR69CXBCmXA4cEZAtHbpb9OXNjbDxkSZCeYVjyHLZAsFKT3ake4jUh1eEwqpKrxsSNGlOrJN4Kh0Dq2dSLkI0pYucxo7vx4TXC9LsiZAJZBYZBUW6RlRZBqVezLL&fields=id,username,profile_pic`
+  //     `https://graph.facebook.com/v21.0/299039119952016/instagram_accounts?access_token=<removed>&fields=id,username,profile_pic`
   //   );
   //   console.log("Response Data:", response.data);
   // }

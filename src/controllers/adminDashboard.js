@@ -573,10 +573,10 @@ exports.linkMetaAdToCampaign = async (req, res) => {
     let bizDoc = null;
     if (businessPhone) {
       const mobile = businessPhone.replace(/\D/g, "");
-      bizDoc = await businessModel.findOne({ mobile: { $regex: mobile.slice(-10) } }).lean();
+      bizDoc = await businessModel.findOne({ mobile: { $regex: require("../helpers/escapeRegex")(mobile.slice(-10)) } }).lean();
     }
     if (!bizDoc && businessName) {
-      bizDoc = await businessModel.findOne({ businessName: { $regex: businessName, $options: "i" } }).lean();
+      bizDoc = await businessModel.findOne({ businessName: { $regex: require("../helpers/escapeRegex")(businessName), $options: "i" } }).lean();
     }
 
     // 2. Fetch campaign info from Meta

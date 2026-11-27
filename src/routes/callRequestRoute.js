@@ -17,11 +17,11 @@ const asyncHandler = require("../utils/asyncHandler");
 
 router.post("/createCall/:userId", asyncHandler(authUser), asyncHandler(userMid), createCall);
 router.get("/listCallRequest", adminOnly, listCallRequest);
-router.put("/updateCallRequestStatus", asyncHandler(authUser), updateCallRequestStatus);
-router.put("/pushFollowUp", asyncHandler(authUser), pushFollowUp);
-router.put("/assignCallRequest", asyncHandler(authUser), assignCallRequest);
-router.delete("/deleteFollowUp", asyncHandler(authUser), deleteFollowUp);
-router.delete("/deleteCallRequest", asyncHandler(authUser), deleteCallRequest);
-router.put("/autoAssignAllCallRequests", asyncHandler(authUser), autoAssignAll);
+router.put("/updateCallRequestStatus", adminOnly, updateCallRequestStatus);
+router.put("/pushFollowUp", adminOnly, pushFollowUp);
+router.put("/assignCallRequest", adminOnly, assignCallRequest);
+router.delete("/deleteFollowUp", adminOnly, deleteFollowUp);
+router.delete("/deleteCallRequest", adminOnly, deleteCallRequest);
+router.put("/autoAssignAllCallRequests", adminOnly, autoAssignAll);
 
 module.exports = router;

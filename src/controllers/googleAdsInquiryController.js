@@ -4,7 +4,7 @@ const nodemailer = require("nodemailer");
 // Nodemailer Transporter
 const getTransporter = () => {
   const user = process.env.EMAIL_USER || "ayotrix1@gmail.com";
-  const pass = process.env.EMAIL_PASS || "ijewaofeggqbwmmm";
+  const pass = process.env.EMAIL_PASS;
 
   return {
     transporter: nodemailer.createTransport({
@@ -18,7 +18,19 @@ const getTransporter = () => {
 /**
  * Send email alerts when a new Google Ads inquiry is created
  */
-async function sendInquiryEmails(inquiry) {
+// Every field comes from a public form, so it is escaped before going into the email HTML.
+const escapeHtml = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function escapeInquiry(raw) {
+  const src = typeof raw?.toObject === "function" ? raw.toObject() : { ...raw };
+  const out = {};
+  for (const [k, v] of Object.entries(src)) out[k] = typeof v === "string" ? escapeHtml(v) : v;
+  out.websiteUrl = /^https?:\/\//i.test(String(src.websiteUrl || "")) ? escapeHtml(src.websiteUrl) : "";
+  out.phone = escapeHtml(src.phone || "");
+  return out;
+}
+
+async function sendInquiryEmails(rawInquiry) {
+  const inquiry = escapeInquiry(rawInquiry);
   try {
     const { transporter, fromUser } = getTransporter();
     const adminEmail = process.env.ADMIN_EMAIL || fromUser;
@@ -224,17 +236,18 @@ exports.createGoogleAdsInquiry = async (req, res) => {
     }
 
     const newInquiry = new GoogleAdsInquiry({
-      businessName: businessName.trim(),
-      contactPerson: (contactPerson || businessName).trim(),
-      phone: phone.trim(),
+      businessName: String(businessName).trim().slice(0, 200),
+      contactPerson: String(contactPerson || businessName).trim().slice(0, 200),
+      phone: String(phone).trim().slice(0, 20),
       email: (email || "").trim(),
       websiteUrl: (websiteUrl || "").trim(),
       campaignGoal: campaignGoal || "Lead Generation",
       monthlyBudget: monthlyBudget || "₹10,000 - ₹25,000",
       targetLocation: (targetLocation || "Pan India").trim(),
-      notes: (notes || "").trim(),
-      userId: userId || null,
-      businessId: businessId || null,
+      notes: String(notes || "").trim().slice(0, 2000),
+      // Only a signed-in caller is tied to the inquiry; a public form cannot name another account.
+      userId: req.user?._id || null,
+      businessId: req.user ? businessId || null : null,
     });
 
     await newInquiry.save();
@@ -271,11 +284,11 @@ exports.getAllGoogleAdsInquiries = async (req, res) => {
 
     if (search) {
       query.$or = [
-        { businessName: { $regex: search, $options: "i" } },
-        { contactPerson: { $regex: search, $options: "i" } },
-        { phone: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } },
-        { campaignGoal: { $regex: search, $options: "i" } },
+        { businessName: { $regex: require("../helpers/escapeRegex")(search), $options: "i" } },
+        { contactPerson: { $regex: require("../helpers/escapeRegex")(search), $options: "i" } },
+        { phone: { $regex: require("../helpers/escapeRegex")(search), $options: "i" } },
+        { email: { $regex: require("../helpers/escapeRegex")(search), $options: "i" } },
+        { campaignGoal: { $regex: require("../helpers/escapeRegex")(search), $options: "i" } },
       ];
     }
 

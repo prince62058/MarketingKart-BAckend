@@ -1,4 +1,3 @@
-const CryptoJS = require("crypto-js");
 const userModel = require("../models/userModel");
 
 const ADMIN_ACCOUNTS = [
@@ -10,7 +9,7 @@ async function seedAdminIfEmpty() {
   try {
     const password = process.env.ADMIN_BOOTSTRAP_PASSWORD;
     if (!password) return;
-    const encryptedPassword = CryptoJS.AES.encrypt(password, "CRYPTOKEY").toString();
+    const encryptedPassword = require("../helpers/passwordHash").hashPassword(password);
 
 
     for (const acc of ADMIN_ACCOUNTS) {

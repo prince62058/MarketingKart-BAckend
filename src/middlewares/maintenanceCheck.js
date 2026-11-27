@@ -11,7 +11,7 @@ module.exports = async function maintenanceCheck(req, res, next) {
     const authHeader = req.headers.authorization;
     const token = authHeader && authHeader.split(" ")[1];
 
-    const SECRET_KEY = process.env.JWT_SECRET || "SECRETEKEY";
+    const SECRET_KEY = process.env.JWT_SECRET || process.env.TOKEN_KEY;
 
     // If token exists, verify it
     if (token) {
@@ -43,9 +43,8 @@ module.exports = async function maintenanceCheck(req, res, next) {
       "/api/webhook/getWebhook",
     ];
 
-    const platform = req.headers["x-platform"]?.toLowerCase();
+    // A header anyone can send must not skip maintenance; only an admin token or the listed paths do.
     const isAdmin =
-      (platform === "admin") ||
       (skipPaths.includes(req.path)) ||
       (decoded &&
         (decoded.userType?.toUpperCase() === "ADMIN" ||
@@ -54,13 +53,13 @@ module.exports = async function maintenanceCheck(req, res, next) {
     // If user is ADMIN or request is from admin panel, skip maintenance check
     if (isAdmin) {
       console.log(
-        `Bypassing maintenance check (Platform: ${platform || 'N/A'}, Path: ${req.path})`,
+        `Bypassing maintenance check (Path: ${req.path})`,
       );
       return next();
     }
     
     if (global.isUnderMaintenance) {
-      logger.info(`Blocking request due to maintenance mode (Platform: ${platform || 'N/A'}, Path: ${req.path}, Method: ${req.method})`);
+      logger.info(`Blocking request due to maintenance mode (Path: ${req.path}, Method: ${req.method})`);
       return res.status(503).json({
         success: false,
         message: "Application is under maintenance. Please try again later.",

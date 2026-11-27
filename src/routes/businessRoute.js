@@ -31,6 +31,7 @@ router.get(
 router.get(
   "/business/getByIdBussiness/:businessId",
   asyncHandler(authUser),
+  requireBusinessAccess("params", "businessId"),
   asyncHandler(businessMid),
   asyncHandler(controller.getByIdBusiness)
 );
@@ -44,7 +45,7 @@ router.put(
 );
 router.put(
   "/business/disableBussiness/:businessId",
-  asyncHandler(authUser),
+  adminOnly,
   asyncHandler(businessMid),
   asyncHandler(controller.disableBusiness)
 );
@@ -61,13 +62,13 @@ router.post(
 
 router.get(
   "/business/getBusinessIdForAdmin",
-  asyncHandler(authUser),
+  adminOnly,
   asyncHandler(controller.getBusinessIdForAdmin)
 );
 
 router.get(
   "/business/getBusinessListForAdmin",
-  asyncHandler(authUser),
+  adminOnly,
   asyncHandler(controller.getBusinessListForAdmin)
 );
 
@@ -79,49 +80,50 @@ router.get(
 
 router.put(
   "/business/updateBusinessStatus",
-  asyncHandler(authUser),
+  adminOnly,
   asyncHandler(controller.updateBusinessStatus)
 );
 
 router.put(
   "/business/addBusinessFollowUp",
-  asyncHandler(authUser),
+  adminOnly,
   asyncHandler(controller.addBusinessFollowUp)
 );
 
 router.delete(
   "/business/deleteBusinessFollowUp",
-  asyncHandler(authUser),
+  adminOnly,
   asyncHandler(controller.deleteBusinessFollowUp)
 );
 
 router.put(
   "/business/assignBusiness",
-  asyncHandler(authUser),
+  adminOnly,
   asyncHandler(controller.assignBusiness)
 );
 
 router.delete(
   "/business/deleteBusiness",
-  asyncHandler(authUser),
+  adminOnly,
   asyncHandler(controller.deleteBusiness)
 );
 
 router.post(
   "/business/linkMetaAd",
-  asyncHandler(authUser),
+  adminOnly,
   asyncHandler(controller.linkMetaAd)
 );
 
 router.post(
   "/business/repairFacebookPageLink",
   asyncHandler(authUser),
+  requireBusinessAccess("body", "businessId"),
   asyncHandler(controller.repairFacebookPageLink)
 );
 
 router.post(
   "/business/forceLinkFacebookPage",
-  asyncHandler(authUser),
+  adminOnly,
   asyncHandler(controller.forceLinkFacebookPage)
 );
 

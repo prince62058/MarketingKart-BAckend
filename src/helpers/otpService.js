@@ -110,7 +110,8 @@ async function issueOtp(user, identity, { allowFixedDev = false } = {}) {
  * Resolves to { ok: true } or { ok: false, reason: "none" | "expired" | "locked" | "wrong" }.
  */
 async function verifyOtp(user, identity, entered) {
-  const stored = user.otp;
+  // The OTP hash is not selected by default, so read it here.
+  const stored = user.otp !== undefined ? user.otp : (await userModel.findById(user._id).select("+otp").lean())?.otp;
   // An OTP that does not carry the current format came from before this service existed. Those
   // never expired and (for the dev login) were the same for every account, so they are not honoured.
   if (!stored || !String(stored).startsWith(`${FORMAT}$`)) return { ok: false, reason: "none" };

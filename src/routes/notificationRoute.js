@@ -13,13 +13,14 @@ const {
 } = require('../controllers/notificationController');
 const { upload } = require('../middlewares/multer');
 const { authUser, adminOnly } = require('../middlewares/authMidd');
+const { requirePermission } = require("../middlewares/adminPermission");
 const asyncHandler = require('../utils/asyncHandler');
 
 // Route to send notification to all users
-router.post('/send-to-all-users',adminOnly,upload.single("image") ,sendNotificationToAllUsersBusiness);
-router.post('/sendNotificationToSingleUserAndBusiness',adminOnly,upload.single("image"),sendNotificationToSingleUserAndBusiness);
+router.post('/send-to-all-users',adminOnly,requirePermission("COMPANY"), upload.single("image") ,sendNotificationToAllUsersBusiness);
+router.post('/sendNotificationToSingleUserAndBusiness',adminOnly,requirePermission("COMPANY"), upload.single("image"),sendNotificationToSingleUserAndBusiness);
 // Route to send notification to users of a specific business
-router.post('/send-to-business-users', adminOnly, upload.single("image") ,sendNotificationToBusinessUsers);
+router.post('/send-to-business-users', adminOnly, requirePermission("COMPANY"), upload.single("image") ,sendNotificationToBusinessUsers);
 
 // Route to get notifications by userId and businessId (optional)
 router.get('/get-notifications', asyncHandler(authUser), getNotificationsByUserIdBusinessId);
@@ -34,6 +35,6 @@ router.put('/mark-as-read', asyncHandler(authUser), markNotificationAsRead);
 router.delete('/clear-notifications', asyncHandler(authUser), clearNotifications);
 
 // Route to send notification to all users with condition
-router.post('/send-to-all-users-with-condition',adminOnly,upload.single("image") , sendNotificationToAllUsersWithCondition);
+router.post('/send-to-all-users-with-condition',adminOnly,requirePermission("COMPANY"), upload.single("image") , sendNotificationToAllUsersWithCondition);
 
 module.exports = router;

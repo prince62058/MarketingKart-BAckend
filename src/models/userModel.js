@@ -28,7 +28,7 @@ const userModel = mongoose.Schema(
       default: "USER",
       trim: true,
     },
-     otp2:String,
+     otp2: { type: String, select: false },
 	  callRequest: {
       type: Boolean,
       default: false,
@@ -43,8 +43,9 @@ const userModel = mongoose.Schema(
       default: false,
       trim: true,
     },
-    password: { type: String, default: null, trim: true },
-    otp: { type: String, default: null, trim: true },
+    // Never returned unless a query asks for it with .select("+password") / ("+otp").
+    password: { type: String, default: null, trim: true, select: false },
+    otp: { type: String, default: null, trim: true, select: false },
     // Login OTP bookkeeping (see helpers/otpService.js). `otp` holds a salted hash, never the code.
     otpExpiresAt: { type: Date, default: null },
     otpAttempts: { type: Number, default: 0 },

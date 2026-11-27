@@ -1,12 +1,12 @@
 const express = require("express");
 const controller = require("../controllers/aiImagePlanController");
 const router = express.Router();
-const { authUser } = require("../middlewares/authMidd");
+const { authUser, adminOnly } = require("../middlewares/authMidd");
 const asyncHandler = require("../utils/asyncHandler");
 
 router.post(
   "/aiImagePlan/createAiImagePlan",
-  asyncHandler(authUser),
+  ...adminOnly,
   asyncHandler(controller.createAiImage)
 );
 

@@ -63,13 +63,17 @@ function computeMonthlyAmount(tier, addons = [], lock) {
   return base + addonTotal;
 }
 
-async function razorpayOrderPaise(orderId) {
+async function razorpayOrder(orderId) {
   const keyId = process.env.RAZORPAY_KEY_ID;
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
   if (!keyId || !keySecret) return null;
   const razorpay = new Razorpay({ key_id: keyId, key_secret: keySecret });
-  const order = await razorpay.orders.fetch(orderId);
-  return Number(order.amount);
+  return razorpay.orders.fetch(orderId);
+}
+
+async function razorpayOrderPaise(orderId) {
+  const order = await razorpayOrder(orderId);
+  return order ? Number(order.amount) : null;
 }
 
 async function assignManager() {
@@ -96,6 +100,9 @@ exports.createSubscription = async (req, res) => {
     if (!["starter", "standard", "premium"].includes(tier)) {
       return res.status(400).json({ success: false, message: "Invalid plan tier" });
     }
+    if (businessId && !(await require("../helpers/businessAccess").canAccessBusiness(req.user, businessId))) {
+      return res.status(403).json({ success: false, message: "You can only subscribe for your own business" });
+    }
 
     const lock = await PlanPriceLock.findOne({ userId: req.user._id });
     if (lock?.frozen && lock.minTier && TIER_RANK[tier] < TIER_RANK[lock.minTier]) {
@@ -116,13 +123,22 @@ exports.createSubscription = async (req, res) => {
     if (!verifyRazorpaySignature({ orderId, paymentId, signature })) {
       return res.status(400).json({ success: false, message: "Payment verification failed" });
     }
-    const paidPaise = await razorpayOrderPaise(orderId);
+    const paidOrder = await razorpayOrder(orderId);
+    const paidPaise = paidOrder ? Number(paidOrder.amount) : null;
     if (paidPaise !== Math.round(monthlyAmount * 100)) {
       return res.status(400).json({ success: false, message: "Paid amount does not match the locked plan price" });
     }
     const existingPayment = await Subscription.findOne({ "lastPayment.paymentId": paymentId });
     if (existingPayment) {
       return res.status(400).json({ success: false, message: "This payment has already been processed" });
+    }
+    // The same payment must not also credit a wallet or another subscription, and must be the caller's.
+    try {
+      const { assertOrderOwner, claimPayment } = require("../helpers/paymentClaim");
+      assertOrderOwner(paidOrder, req.user._id);
+      await claimPayment({ paymentId, orderId, userId: req.user._id, purpose: "subscription" });
+    } catch (error) {
+      return res.status(400).json({ success: false, message: error.message });
     }
 
     const manager = await assignManager();

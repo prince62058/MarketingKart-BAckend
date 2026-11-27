@@ -9,10 +9,11 @@ const { requirePermission } = require('../middlewares/adminPermission');
 // make themselves an admin.
 const manageStaff = [adminOnly, requirePermission('STAFF')];
 router.post('/', manageStaff, staffController.addStaff);
+// Every admin reads the list: the call-request page assigns calls from it. It no longer carries passwords.
 router.get('/', adminOnly, staffController.getAllStaff);
-router.get('/:staffId', adminOnly, staffController.getStaff);
+router.get('/:staffId', manageStaff, staffController.getStaff);
 router.put('/:staffId', manageStaff, staffController.updateStaff);
 router.delete('/:staffId', manageStaff, staffController.deleteStaff);
-router.get('/:staffId/businesses', adminOnly, staffController.getStaffBusinesses);
+router.get('/:staffId/businesses', manageStaff, staffController.getStaffBusinesses);
 
 module.exports = router;

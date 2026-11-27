@@ -2,7 +2,7 @@ const express = require("express");
 const controller = require("../controllers/webhookController");
 
 const asyncHandler = require("../utils/asyncHandler");
-const { authUser } = require("../middlewares/authMidd");
+const { authUser, adminOnly } = require("../middlewares/authMidd");
 const { requireBusinessAccess, requireLeadAccess } = require("../middlewares/businessAccessMidd");
 const { upload } = require("../middlewares/multer");
 const router = express.Router();
@@ -15,6 +15,8 @@ router.post(
 router.post(
   "/user/uploadLeadDocument",
   asyncHandler(authUser),
+  // Refuse before the file is stored when the lead id is in the query; the body form is checked after.
+  (req, res, next) => (req.query.leadId ? requireLeadAccess("query", "leadId")(req, res, next) : next()),
   upload.single("document"),
   requireLeadAccess("body", "leadId"),
   asyncHandler(controller.uploadLeadDocument)
@@ -36,11 +38,12 @@ router.get(
 router.get(
   "/getSingleLeadDetail",
   asyncHandler(authUser),
+  requireLeadAccess("query", "leadId"),
   asyncHandler(controller.getSingleLeadDetail)
 );
 router.get(
   "/getAllLeadsByPagination",
-  asyncHandler(authUser),
+  adminOnly,
   asyncHandler(controller.getAllLeadsByPagination)
 );
 
@@ -67,11 +70,13 @@ router.get(
 router.get(
   "/getLeadDetails",
   asyncHandler(authUser),
+  requireLeadAccess("query", "leadId"),
   asyncHandler(controller.getLeadDetails)
 );
 
 router.put('/updateLeadDetails',
 asyncHandler(authUser),
+requireLeadAccess("query", "leadId"),
 asyncHandler(controller.updateLeadDetails)
 )
 
@@ -83,6 +88,7 @@ router.put('/updateLeadSeenStatus',
 
 router.post('/bulkImportLeads',
   asyncHandler(authUser),
+  requireBusinessAccess("body", "businessId"),
   asyncHandler(controller.bulkImportLeads)
 )
 

@@ -3,8 +3,10 @@ const ContactUs = require('../models/contactUsModel');
 // Create a new contact us entry
 exports.createContactUs = async (req, res) => {
     try {
-        const { name, email, phone, message, userId, status = "PENDING" } = req.body;
-        const newContactUs = new ContactUs({ name, email, phone, message, userId, status });
+        // Public form: status is always PENDING and the account comes from the token, never the body.
+        const text = (v, n) => (v === undefined || v === null ? undefined : String(v).slice(0, n));
+        const { name, email, phone, message } = req.body;
+        const newContactUs = new ContactUs({ name: text(name, 200), email: text(email, 200), phone: text(phone, 20), message: text(message, 5000), userId: req.user?._id, status: "PENDING" });
         await newContactUs.save();
         res.status(201).json({
             success: true,
@@ -26,10 +28,10 @@ exports.getAllContactUs = async (req, res) => {
         let query = {};
         if (search && search.trim()) {
             query.$or = [
-                { name: { $regex: search.trim(), $options: 'i' } },
-                { email: { $regex: search.trim(), $options: 'i' } },
-                { phone: { $regex: search.trim(), $options: 'i' } },
-                { message: { $regex: search.trim(), $options: 'i' } }
+                { name: { $regex: require("../helpers/escapeRegex")(search.trim()), $options: 'i' } },
+                { email: { $regex: require("../helpers/escapeRegex")(search.trim()), $options: 'i' } },
+                { phone: { $regex: require("../helpers/escapeRegex")(search.trim()), $options: 'i' } },
+                { message: { $regex: require("../helpers/escapeRegex")(search.trim()), $options: 'i' } }
             ];
         }
 

@@ -35,7 +35,10 @@ exports.createOrderHistory = async (req, res) => {
       description: `Order purchase - ${orderData.orderId || ''}`.trim()
     }, session);
 
-    // 4. Update user wallet (precise calculation)
+    // 4. Update user wallet (precise calculation). A wallet never goes below zero.
+    if (!(Number(amount) > 0) || Number(user.wallet || 0) < Number(amount)) {
+      throw Object.assign(new Error("Insufficient wallet balance"), { status: 400 });
+    }
     user.wallet = parseFloat((user.wallet - amount).toFixed(2));
     await user.save({ session });
 

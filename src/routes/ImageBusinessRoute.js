@@ -3,12 +3,12 @@ const controller = require("../controllers/ImageBusinessController");
 const router = express.Router();
 const { upload } = require("../middlewares/multer");
 const { imageBusinessMid } = require("../middlewares/ImageBusinessMidd");
-const { authUser } = require("../middlewares/authMidd");
+const { authUser, adminOnly } = require("../middlewares/authMidd");
 const asyncHandler = require("../utils/asyncHandler");
 
 router.post(
   "/imageBusiness/createImageBusiness",
-  asyncHandler(authUser),
+  ...adminOnly,
   upload.single("image"),
   asyncHandler(controller.createImageBusiness)
 );
@@ -25,13 +25,13 @@ router.get(
   );
 router.put(
   "/imageBusiness/disableImageBusiness/:imageBusinessId",
-  asyncHandler(authUser),
+  ...adminOnly,
   asyncHandler(imageBusinessMid),
   asyncHandler(controller.disableImageBusiness)
 );
 router.put(
   "/imageBusiness/updateimageBusiness/:imageBusinessId",
-  asyncHandler(authUser),
+  ...adminOnly,
   asyncHandler(imageBusinessMid),
   upload.single("image"),
   asyncHandler(controller.updateImageBusiness)

@@ -2,7 +2,7 @@ const Staff = require("../models/staffModel");
 const User = require("../models/userModel");
 const Business = require("../models/businessModel");
 const mongoose = require('mongoose');
-const CryptoJS = require('crypto-js');
+const { hashPassword } = require('../helpers/passwordHash');
 const { rebalanceAllAssignments } = require("../services/autoAssignService");
 
 // Add new staff member (Admin only)
@@ -11,7 +11,13 @@ const addStaff = async (req, res) => {
   session.startTransaction();
   
   try {
-    const { userId, role = 'STAFF', permissions = [], ...userData } = req.body;
+    const { userId, role = 'STAFF', permissions = [] } = req.body;
+    // Only these fields describe the new staff login; nothing else from the body reaches the user.
+    const userData = {
+      name: typeof req.body.name === 'string' ? req.body.name.trim().slice(0, 80) : undefined,
+      email: typeof req.body.email === 'string' ? req.body.email.trim().toLowerCase().slice(0, 120) : undefined,
+      mobile: req.body.mobile,
+    };
     
 
     
@@ -23,12 +29,13 @@ const addStaff = async (req, res) => {
     
     if (!user) {
       // Create new user if not exists
-      const rawPassword = (userData.password || "Staff@123").toString();
-      // Encrypt password before saving
-      const encryptedPassword = CryptoJS.AES.encrypt(
-        rawPassword,
-        'CRYPTOKEY'
-      ).toString();
+      // A new staff login needs its own password of at least 8 characters (no shared default).
+      if (typeof req.body.password !== 'string' || req.body.password.length < 8) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({ status: false, message: 'Set a password of at least 8 characters for this staff member' });
+      }
+      const encryptedPassword = hashPassword(req.body.password);
       
       user = new User({
         _id: (userId && mongoose.Types.ObjectId.isValid(userId)) ? userId : new mongoose.Types.ObjectId(),
@@ -105,7 +112,10 @@ const updateStaff = async (req, res) => {
       return res.status(400).json({ status: false, message: 'Invalid staff ID' });
     }
 
-    const { password, ...updates } = req.body;
+    const { password } = req.body;
+    // Only the staff record's own settings may change here.
+    const updates = {};
+    for (const k of ['role', 'isActive', 'permissions', 'businesses']) if (req.body[k] !== undefined) updates[k] = req.body[k];
     
     // Find staff
     const staff = await Staff.findById(staffId).session(session);
@@ -124,17 +134,20 @@ const updateStaff = async (req, res) => {
 
     // Handle password update
     if (password) {
-      const encryptedPassword = CryptoJS.AES.encrypt(
-        password.toString(),
-        'CRYPTOKEY'
-      ).toString();
-      userUpdates.password = encryptedPassword;
+      if (typeof password !== 'string' || password.length < 8) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({ status: false, message: 'Password must be at least 8 characters' });
+      }
+      userUpdates.password = hashPassword(password);
       shouldUpdateUser = true;
     }
 
     // Handle isActive status
     if (updates.isActive !== undefined) {
+      // A deactivated staff member is no longer an admin anywhere.
       userUpdates.role = updates.isActive ? 1 : 0;
+      userUpdates.userType = updates.isActive ? 'ADMIN' : 'USER';
       shouldUpdateUser = true;
     }
 
@@ -191,7 +204,7 @@ const getStaff = async (req, res) => {
       _id: staffId,
       isActive: true
     })
-    .populate('userId', 'name email mobile password')
+    .populate('userId', 'name email mobile')
     .populate('businesses', 'name description')
     .populate('updatedBy', 'name');
 
@@ -229,8 +242,8 @@ const getAllStaff = async (req, res) => {
     if (search) {
       const users = await User.find({
         $or: [
-          { name: { $regex: search, $options: 'i' } },
-          { email: { $regex: search, $options: 'i' } }
+          { name: { $regex: require("../helpers/escapeRegex")(search), $options: 'i' } },
+          { email: { $regex: require("../helpers/escapeRegex")(search), $options: 'i' } }
         ]
       }).select('_id');
       const userIds = users.map(u => u._id);
@@ -245,27 +258,12 @@ const getAllStaff = async (req, res) => {
       .limit(parseInt(limit))
       .skip((parseInt(page) - 1) * parseInt(limit))
       .sort({ createdAt: -1 })
-      .populate('userId', 'name email mobile password')
+      .populate('userId', 'name email mobile')
       .populate('businesses', 'name');
 
     const count = await Staff.countDocuments(query);
 
-    // ✅ Decrypt password for each staff user
-    staff = staff.map(s => {
-      const staffObj = s.toObject ? s.toObject() : { ...s };
-      if (staffObj.userId && staffObj.userId.password) {
-        try {
-          let bytes = CryptoJS.AES.decrypt(staffObj.userId.password.toString(), "CRYPTOKEY");
-          const decrypted = bytes.toString(CryptoJS.enc.Utf8);
-          if (decrypted) {
-            staffObj.userId.password = decrypted;
-          }
-        } catch (e) {
-          console.log("Decrypt error:", e);
-        }
-      }
-      return staffObj;
-    });
+    staff = staff.map((s) => (s.toObject ? s.toObject() : { ...s }));
 
     res.json({
       status: true,
@@ -313,7 +311,7 @@ const deleteStaff = async (req, res) => {
     // Update user role
     await User.findByIdAndUpdate(
       staff.userId,
-      { $set: { role: 3 } },
+      { $set: { role: 0, userType: 'USER' } },
       { session }
     );
 

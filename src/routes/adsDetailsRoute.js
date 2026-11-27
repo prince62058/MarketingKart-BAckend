@@ -42,9 +42,10 @@ router.post(
     asyncHandler(authUser), isAdmin, asyncHandler(requireDeliveryAccess),
     controller.updateAddAmountInsights
   );
+// Admin only: the old self-serve renewal charged a client-sent amount. Customers renew through a new ad request.
 router.put(
   "/resetAd",
-    asyncHandler(authUser), asyncHandler(requireDeliveryAccess),
+    asyncHandler(authUser), isAdmin, asyncHandler(requireDeliveryAccess),
   controller.resetAd
 );
 router.post(
@@ -83,14 +84,16 @@ router.get(
 router.get(
   "/getInternalCampiagnDataById",
   asyncHandler(authUser),
+  requireCampaignAccess("query", "internalCampaignId"),
   controller.getInternalCampiagnById
 );
 router.get(
   "/getAdInsightsReport",
   asyncHandler(authUser),
+  requireCampaignAccess("query", "internalCampaignId"),
   controller.getAdInsightsReport
 );
-router.post("/scheduleDeliveryOfAdd", asyncHandler(authUser), asyncHandler(requireDeliveryAccess), controller.scheduleDeliveryOfAdd);
+router.post("/scheduleDeliveryOfAdd", asyncHandler(authUser), isAdmin, asyncHandler(requireDeliveryAccess), controller.scheduleDeliveryOfAdd);
 
 router.get("/searchTargetArea", asyncHandler(authUser), controller.targetingLocation);
 router.get("/targetingInterest", asyncHandler(authUser), controller.targetingInterest);

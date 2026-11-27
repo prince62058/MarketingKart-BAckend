@@ -22,6 +22,10 @@ exports.createCall = async (req, res) => {
       });
     }
 
+    // The caller (checked by userMid) may only attach a business they can act on.
+    if (businessId && !(await require("../helpers/businessAccess").canAccessBusiness(req.authUser || user, businessId))) {
+      return res.status(403).json({ success: false, message: "You do not have access to this business" });
+    }
     let resolvedBusinessId = businessId;
     if (!resolvedBusinessId) {
       const biz = await businessModel.findOne({ userId, disable: false }).sort({ createdAt: -1 });
@@ -45,9 +49,9 @@ exports.createCall = async (req, res) => {
     // Fetch updated data with assignedStaff & business populated
     const updatedData = await callRequestModel
       .findById(data._id)
-      .populate("userId")
-      .populate("businessId")
-      .populate("assignedStaff");
+      .populate("userId", "name email mobile")
+      .populate("businessId", "businessName businessContact businessEmail")
+      .populate("assignedStaff", "name email mobile");
 
     res.status(201).json({
       success: true,
@@ -78,8 +82,8 @@ exports.listCallRequest = async (req, res) => {
   try {
     const rawData = await callRequestModel
       .find(filter)
-      .populate("userId")
-      .populate("businessId")
+      .populate("userId", "-otp -otp2 -password")
+      .populate("businessId", "-metaAccessToken -pageAccessToken")
       .populate({ path: "assignedStaff", populate: { path: "userId", select: "name email mobile" } })
       .populate("statusUpdatedBy", "name image mobile")
       .sort({ createdAt: parseInt(sort) })
