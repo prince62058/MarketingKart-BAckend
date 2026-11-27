@@ -209,3 +209,106 @@ test("monitoring lists messages, numbers, API keys, and an admin can revoke a ke
   assert.equal((await h.call("GET", "/api/v1/account", { headers: { authorization: `Bearer ${apiSecret}` } })).status, 401);
   assert.equal((await call("GET", "/admin/whatsapp/integrations", adminToken)).status, 200);
 });
+
+test("limits: validated, global defaults, per-customer override, API rate limit and daily cap", { skip }, async () => {
+  assert.equal((await call("PUT", "/admin/whatsapp/panel", adminToken, { limits: { apiPerMinute: 0 } })).status, 400);
+  assert.equal((await call("PUT", "/admin/whatsapp/panel", adminToken, { limits: { nope: 5 } })).status, 400);
+  assert.equal((await call("PUT", `/admin/whatsapp/customers/${alice._id}/controls`, adminToken, { limits: { campaignRatePerMinute: 9999 } })).status, 400);
+  const g = await call("PUT", "/admin/whatsapp/panel", adminToken, { limits: { apiPerMinute: 30, campaignRatePerMinute: 120 } });
+  assert.equal(g.status, 200, g.text);
+  assert.equal(g.body.data.limits.apiPerMinute, 30);
+  const controls = require("../src/services/whatsappControls");
+  let l = await controls.limitsFor(alice._id);
+  assert.deepEqual(l.apiPerMinute, { value: 30, source: "global" });
+  assert.deepEqual(l.dailyMessages, { value: null, source: "system" });
+  const c = await call("PUT", `/admin/whatsapp/customers/${alice._id}/controls`, adminToken, { limits: { apiPerMinute: 1, dailyMessages: 2 } });
+  assert.equal(c.status, 200, c.text);
+  assert.deepEqual(c.body.data.limitsEffective.apiPerMinute, { value: 1, source: "customer" });
+  assert.deepEqual(c.body.data.limitsEffective.campaignRatePerMinute, { value: 120, source: "global" });
+
+  // API: a fresh customer limited to one request a minute.
+  const carol = await require("./helpers/securityFixtures").makeUser({ name: "Carol" });
+  await call("PUT", `/admin/whatsapp/customers/${carol._id}/controls`, adminToken, { limits: { apiPerMinute: 1 } });
+  const contract = require("../src/services/developerContract");
+  const minute = Math.floor(Date.now() / 60000);
+  await contract.rateLimit(carol._id);
+  const second = contract.rateLimit(carol._id);
+  if (Math.floor(Date.now() / 60000) === minute) await assert.rejects(second, { status: 429 });
+  else await second.catch(() => {});
+
+  // Daily cap: two messages already went out today from Alice's number.
+  const guard = require("../src/services/whatsappSendGuard");
+  guard.reset();
+  const Message = require("../src/models/whatsappMessageModel");
+  const sentToday = await Message.countDocuments({ phoneNumberId: "pn-sa", direction: "OUTBOUND", createdAt: { $gte: guard.dayStart() } });
+  const account = { userId: alice._id, phoneNumberId: "pn-sa" };
+  await call("PUT", `/admin/whatsapp/customers/${alice._id}/controls`, adminToken, { limits: { dailyMessages: sentToday + 1 } });
+  await guard.assertCanSend(account);
+  await assert.rejects(guard.assertCanSend(account), { status: 429, code: "DAILY_LIMIT" });
+  await call("PUT", `/admin/whatsapp/customers/${alice._id}/controls`, adminToken, { limits: { apiPerMinute: null, dailyMessages: null } });
+  guard.reset();
+  await guard.assertCanSend(account);
+
+  const audit = await call("GET", `/admin/whatsapp/audit?action=limits.`, adminToken);
+  assert.ok(audit.body.data.rows.some((r) => r.action === "limits.global"));
+  assert.ok(audit.body.data.rows.some((r) => r.action === "limits.update" && r.userId === String(alice._id)));
+  await call("PUT", "/admin/whatsapp/panel", adminToken, { limits: { apiPerMinute: null, campaignRatePerMinute: null } });
+});
+
+test("blocking a number stops every send from it until unblocked", { skip }, async () => {
+  const guard = require("../src/services/whatsappSendGuard");
+  const account = { userId: alice._id, phoneNumberId: "pn-sa" };
+  assert.equal((await call("PUT", `/admin/whatsapp/customers/${alice._id}/controls`, adminToken, { numberBlocked: true })).status, 400);
+  const b = await call("PUT", `/admin/whatsapp/customers/${alice._id}/controls`, adminToken, { numberBlocked: true, numberBlockReason: "Spam complaints" });
+  assert.equal(b.status, 200, b.text);
+  await assert.rejects(guard.assertCanSend(account), (e) => e.status === 423 && e.code === "NUMBER_BLOCKED" && /Spam complaints/.test(e.message));
+  // The real send path refuses before Meta is called.
+  const cloud = require("../src/services/whatsappCloudApiService");
+  await assert.rejects(cloud.sendTextMessage("919800000009", "hi", { accessToken: "x", phoneNumberId: "pn-sa" }), { code: "NUMBER_BLOCKED" });
+  const list = await call("GET", "/admin/whatsapp/numbers?state=blocked", adminToken);
+  assert.equal(list.body.data.total, 1);
+  assert.equal(list.body.data.rows[0].blocked, true);
+  await call("PUT", `/admin/whatsapp/customers/${alice._id}/controls`, adminToken, { numberBlocked: false });
+  await guard.assertCanSend(account);
+  const audit = await call("GET", `/admin/whatsapp/audit?userId=${alice._id}&action=number.`, adminToken);
+  assert.deepEqual(audit.body.data.rows.map((r) => r.action), ["number.unblock", "number.block"]);
+});
+
+test("number detail shows usage against limits and Meta data, refreshed live", { skip }, async () => {
+  const d = await call("GET", `/admin/whatsapp/numbers/${alice._id}`, adminToken);
+  assert.equal(d.status, 200, d.text);
+  assert.ok(!d.text.includes("meta-secret-token"));
+  assert.equal(d.body.data.account.phoneNumber, "+91 90000 22001");
+  assert.equal(d.body.data.perDay.length, 14);
+  assert.equal(typeof d.body.data.usage.sentToday, "number");
+  assert.equal(d.body.data.usage.api.perMinuteLimit, 60);
+  assert.ok(d.body.data.limitSpecs.dailyMessages);
+  assert.equal((await call("GET", `/admin/whatsapp/numbers/${bobToken ? "6b0000000000000000000000" : ""}`, adminToken)).status, 404);
+
+  const service = require("../src/modules/waAdmin/waAdmin.service");
+  assert.equal(service.tierLimit("TIER_1K"), 1000);
+  assert.equal(service.tierLimit("TIER_250"), 250);
+  assert.equal(service.tierLimit("TIER_UNLIMITED"), null);
+  const seen = [];
+  const realGet = service.meta.get;
+  service.meta.get = async (url, opts) => {
+    seen.push([url, opts.params.fields.split(",").length]);
+    if (url.endsWith("/pn-sa") && seen.length === 1) throw Object.assign(new Error("bad field"), { response: { data: { error: { code: 100, message: "Unknown field" } } } });
+    if (url.endsWith("/pn-sa")) return { data: { display_phone_number: "+91 90000 22001", quality_rating: "GREEN", messaging_limit_tier: "TIER_10K", throughput: { level: "STANDARD" }, name_status: "APPROVED" } };
+    return { data: { name: "Alice WABA", currency: "INR", account_review_status: "APPROVED" } };
+  };
+  try {
+    const r = await call("POST", `/admin/whatsapp/numbers/${alice._id}/refresh`, adminToken, {});
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.body.data.phone.throughput.level, "STANDARD");
+    assert.equal(r.body.data.waba.name, "Alice WABA");
+    assert.ok(seen[0][1] > seen[1][1], "retried with fewer fields after an unknown-field error");
+    assert.equal(seen[0][0].includes("graph.facebook.com"), true);
+    const after = (await call("GET", `/admin/whatsapp/numbers/${alice._id}`, adminToken)).body.data;
+    assert.equal(after.account.qualityRating, "GREEN");
+    assert.equal(after.usage.tier.limit, 10000);
+    assert.equal(after.meta.phone.name_status, "APPROVED");
+  } finally {
+    service.meta.get = realGet;
+  }
+});

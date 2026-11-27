@@ -65,6 +65,37 @@ let globalCache = null;
 const userCache = new Map();
 const roleCache = new Map();
 
+// Limits an admin can set for everyone (panel config) or one customer (control). null = no admin limit.
+const LIMITS = {
+  apiPerMinute: { label: "API requests per minute", min: 1, max: 10000, system: 60 },
+  dailyMessages: { label: "Messages per day (all sends from the number)", min: 1, max: 10000000, system: null },
+  campaignRatePerMinute: { label: "Campaign speed (messages per minute)", min: 1, max: 600, system: 600 },
+  maxCampaignContacts: { label: "Contacts in one campaign", min: 1, max: 1000000, system: null },
+};
+const LIMIT_KEYS = Object.keys(LIMITS);
+
+function readLimits(raw) {
+  const out = {};
+  for (const k of LIMIT_KEYS) {
+    const v = raw?.[k];
+    out[k] = Number.isInteger(v) && v > 0 ? v : null;
+  }
+  return out;
+}
+
+function cleanLimits(input, current) {
+  const next = { ...current };
+  for (const [k, v] of Object.entries(input || {})) {
+    if (!LIMIT_KEYS.includes(k)) throw fail(400, `Unknown limit: ${k}`);
+    if (v === null || v === "" || v === "default") { next[k] = null; continue; }
+    const n = Number(v);
+    const spec = LIMITS[k];
+    if (!Number.isInteger(n) || n < spec.min || n > spec.max) throw fail(400, `${spec.label} must be a whole number from ${spec.min} to ${spec.max.toLocaleString("en-IN")}`);
+    next[k] = n;
+  }
+  return next;
+}
+
 const DEFAULT_MESSAGE = "This feature is switched off for your account. Contact support to turn it on.";
 const SUSPENDED_MESSAGE = "Your WhatsApp account is suspended. Contact support.";
 
@@ -93,6 +124,7 @@ function viewGlobal(doc) {
       linkLabel: a.linkLabel || "", linkUrl: a.linkUrl || "", startsAt: a.startsAt || null, endsAt: a.endsAt || null,
     },
     menu: { hidden: (doc?.menu?.hidden || []).filter((p) => MENU_PATHS.has(p)), labels: plainMap(doc?.menu?.labels) },
+    limits: readLimits(doc?.limits),
     updatedAt: doc?.updatedAt || null,
   };
 }
@@ -111,8 +143,24 @@ function viewControl(doc) {
     suspendReason: doc?.suspendReason || "",
     features: Object.fromEntries(Object.entries(plainMap(doc?.features)).filter(([k, v]) => FEATURE_KEYS.has(k) && typeof v === "boolean")),
     note: doc?.note || "",
+    numberBlocked: Boolean(doc?.numberBlocked),
+    numberBlockReason: doc?.numberBlockReason || "",
+    numberBlockedAt: doc?.numberBlockedAt || null,
+    limits: readLimits(doc?.limits),
     updatedAt: doc?.updatedAt || null,
   };
+}
+
+// Effective limits for one customer: their own value, else the global default, else the system value.
+async function limitsFor(userId) {
+  const [global, control] = await Promise.all([getGlobal(), getControl(userId)]);
+  const out = {};
+  for (const k of LIMIT_KEYS) {
+    const own = control.limits[k];
+    const def = global.limits[k];
+    out[k] = { value: own ?? def ?? LIMITS[k].system, source: own != null ? "customer" : def != null ? "global" : "system" };
+  }
+  return out;
 }
 
 async function getControl(userId, { fresh = false } = {}) {
@@ -283,6 +331,7 @@ async function updateGlobal(input, adminId) {
     }
     set.menu = { hidden, labels };
   }
+  if (input.limits && typeof input.limits === "object") set.limits = cleanLimits(input.limits, current.limits);
   await PanelConfig.findOneAndUpdate({ key: "global" }, { $set: set, $setOnInsert: { key: "global" } }, { upsert: true, new: true, runValidators: true });
   invalidate();
   return { before: current, after: await getGlobal({ fresh: true }) };
@@ -306,13 +355,19 @@ async function updateControl(userId, input, adminId) {
     set.features = next;
   }
   if (typeof input.note === "string") set.note = cleanText(input.note, 2000);
+  if (typeof input.numberBlocked === "boolean") {
+    set.numberBlocked = input.numberBlocked;
+    set.numberBlockReason = input.numberBlocked ? cleanText(input.numberBlockReason, 300) : "";
+    set.numberBlockedAt = input.numberBlocked ? new Date() : null;
+  }
+  if (input.limits && typeof input.limits === "object") set.limits = cleanLimits(input.limits, before.limits);
   await Control.findOneAndUpdate({ userId }, { $set: set, $setOnInsert: { userId } }, { upsert: true, new: true, runValidators: true });
   invalidate(userId);
   return { before, after: await getControl(userId, { fresh: true }) };
 }
 
 module.exports = {
-  FEATURES, MENU, SUSPENDED_ALLOWED,
-  getGlobal, getControl, effective, panelConfig, featureForPath, check, guard,
+  FEATURES, MENU, SUSPENDED_ALLOWED, LIMITS,
+  getGlobal, getControl, effective, limitsFor, panelConfig, featureForPath, check, guard,
   updateGlobal, updateControl, invalidate, announcementLive,
 };

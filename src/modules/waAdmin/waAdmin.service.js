@@ -24,6 +24,8 @@ const ChatbotSub = require("../../models/whatsappChatbotSubscriptionModel");
 const Control = require("../../models/whatsappControlModel");
 const Audit = require("../../models/whatsappAdminAuditModel");
 const controls = require("../../services/whatsappControls");
+const sendGuard = require("../../services/whatsappSendGuard");
+const axios = require("axios");
 const contract = require("../../services/developerContract");
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -374,7 +376,7 @@ async function customer(userId) {
       package: apiPackage || null,
     },
     support: tickets.map((t) => ({ id: String(t._id), subject: t.subject, category: t.category, status: t.status, priority: t.priority, at: t.createdAt })),
-    controls: { ...control, effective: effective.features },
+    controls: { ...control, effective: effective.features, limitsEffective: await controls.limitsFor(id) },
     audit: audit.map(auditView),
   };
 }
@@ -467,6 +469,7 @@ async function setControls(admin, userId, body = {}) {
   const id = oid(userId);
   if (!(await User.exists({ _id: id }))) throw fail(404, "Customer not found");
   if (body.suspended === true && !String(body.suspendReason || "").trim()) throw fail(400, "Write the reason the customer will see");
+  if (body.numberBlocked === true && !String(body.numberBlockReason || "").trim()) throw fail(400, "Write why the number is being blocked");
   const { before, after } = await controls.updateControl(id, body, admin?._id);
   const changes = {};
   if (before.suspended !== after.suspended) changes.suspended = after.suspended;
@@ -480,7 +483,13 @@ async function setControls(admin, userId, body = {}) {
     const action = "suspended" in changes ? (after.suspended ? "account.suspend" : "account.unsuspend") : "controls.update";
     await record(admin, action, id, changes);
   }
-  return { ...after, effective: (await controls.effective(id)).features };
+  if (before.numberBlocked !== after.numberBlocked) {
+    await record(admin, after.numberBlocked ? "number.block" : "number.unblock", id, { reason: after.numberBlockReason });
+  }
+  const limitChanges = {};
+  for (const k of Object.keys(controls.LIMITS)) if (before.limits[k] !== after.limits[k]) limitChanges[k] = { from: before.limits[k], to: after.limits[k] };
+  if (Object.keys(limitChanges).length) await record(admin, "limits.update", id, limitChanges);
+  return { ...after, effective: (await controls.effective(id)).features, limitsEffective: await controls.limitsFor(id) };
 }
 
 async function revokeKey(admin, userId, keyId) {
@@ -550,6 +559,8 @@ async function numbers(query = {}) {
   if (["CONNECTED", "DISCONNECTED"].includes(query.status)) filter.status = query.status;
   if (["GREEN", "YELLOW", "RED"].includes(query.quality)) filter.qualityRating = query.quality;
   if (query.quality === "UNKNOWN") filter.qualityRating = { $in: [null, "", "UNKNOWN"] };
+  if (query.state === "blocked") filter.userId = { $in: await Control.distinct("userId", { numberBlocked: true }) };
+  if (query.state === "suspended") filter.userId = { $in: await Control.distinct("userId", { suspended: true }) };
   const q = String(query.q || "").trim();
   if (q) {
     const rx = new RegExp(escapeRegex(q), "i");
@@ -567,7 +578,21 @@ async function numbers(query = {}) {
     { $group: { _id: "$phoneNumberId", sent: { $sum: 1 }, failed: { $sum: { $cond: [{ $eq: ["$status", "FAILED"] }, 1, 0] } } } },
   ]);
   const usageMap = new Map(usage.map((u) => [u._id, u]));
+  const pns = docs.map((d) => d.phoneNumberId).filter(Boolean);
+  const [todayRows, tierRows, ctrlRows] = await Promise.all([
+    Message.aggregate([{ $match: { phoneNumberId: { $in: pns }, direction: "OUTBOUND", createdAt: { $gte: sendGuard.dayStart() } } }, { $group: { _id: "$phoneNumberId", n: { $sum: 1 } } }]),
+    Message.aggregate([{ $match: { phoneNumberId: { $in: pns }, direction: "OUTBOUND", type: "TEMPLATE", createdAt: { $gte: new Date(Date.now() - DAY) } } }, { $group: { _id: { pn: "$phoneNumberId", to: "$to" } } }, { $group: { _id: "$_id.pn", n: { $sum: 1 } } }]),
+    Control.find({ userId: { $in: docs.map((d) => d.userId) } }).select("userId suspended numberBlocked limits").lean(),
+  ]);
+  const todayMap = new Map(todayRows.map((r) => [r._id, r.n]));
+  const tierMap = new Map(tierRows.map((r) => [r._id, r.n]));
+  const ctrlMap = new Map(ctrlRows.map((c) => [String(c.userId), c]));
+  const limitsByUser = new Map(await Promise.all(docs.map(async (d) => [String(d.userId), await controls.limitsFor(d.userId)])));
   const rows = docs.map((d) => ({
+    blocked: Boolean(ctrlMap.get(String(d.userId))?.numberBlocked), suspended: Boolean(ctrlMap.get(String(d.userId))?.suspended),
+    sentToday: todayMap.get(d.phoneNumberId) || 0, dailyLimit: limitsByUser.get(String(d.userId)).dailyMessages.value,
+    apiPerMinute: limitsByUser.get(String(d.userId)).apiPerMinute.value,
+    tier: { limit: tierLimit(d.messagingLimit), used24h: tierMap.get(d.phoneNumberId) || 0 },
     userId: String(d.userId), user: personOf(owners.get(String(d.userId))), phoneNumber: d.phoneNumber, verifiedName: d.verifiedName, businessName: d.businessName,
     status: d.status, qualityRating: d.qualityRating || null, qualityEvent: d.qualityEvent || null, messagingLimit: d.messagingLimit || null,
     accountReviewStatus: d.accountReviewStatus || null, codeVerificationStatus: d.codeVerificationStatus || null, billingMode: d.billingMode, onboardingMode: d.onboardingMode,
@@ -576,6 +601,127 @@ async function numbers(query = {}) {
     sent7d: usageMap.get(d.phoneNumberId)?.sent || 0, failed7d: usageMap.get(d.phoneNumberId)?.failed || 0, updatedAt: d.updatedAt, connectedAt: d.createdAt,
   }));
   return paged(rows, total, p);
+}
+
+// Meta's messaging tiers: how many people a number may start chats with in 24 hours.
+function tierLimit(tier) {
+  const m = /^TIER_(\d+)(K)?$/i.exec(String(tier || ""));
+  if (!m) return null;
+  return Number(m[1]) * (m[2] ? 1000 : 1);
+}
+
+async function numberDetail(userId) {
+  const id = oid(userId);
+  const [user, account] = await Promise.all([
+    User.findById(id).select("name mobile email disable whatsappWallet createdAt").lean(),
+    Account.findOne({ userId: id }).select(`${ACCOUNT_FIELDS} metaSnapshot tokenExpiresAt`).lean(),
+  ]);
+  if (!user) throw fail(404, "Customer not found");
+  if (!account) throw fail(404, "This customer has no WhatsApp number");
+  const pn = account.phoneNumberId || "__none__";
+  const today = sendGuard.dayStart();
+  const since14 = new Date(Date.now() - 13 * DAY);
+  since14.setUTCHours(0, 0, 0, 0);
+  const minute = Math.floor(Date.now() / 60000);
+  const Window = require("../../models/developerRequestWindowModel");
+  const [control, limits, sentToday, failedToday, uniq24h, perDay, templates, campaigns, failures, topErrors, apiWindow, callsToday, keys, pkg] = await Promise.all([
+    controls.getControl(id, { fresh: true }),
+    controls.limitsFor(id),
+    Message.countDocuments({ phoneNumberId: pn, direction: "OUTBOUND", createdAt: { $gte: today } }),
+    Message.countDocuments({ phoneNumberId: pn, direction: "OUTBOUND", status: "FAILED", createdAt: { $gte: today } }),
+    Message.distinct("to", { phoneNumberId: pn, direction: "OUTBOUND", type: "TEMPLATE", createdAt: { $gte: new Date(Date.now() - DAY) } }).then((r) => r.length),
+    Message.aggregate([
+      { $match: { phoneNumberId: pn, createdAt: { $gte: since14 } } },
+      { $group: { _id: { day: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, direction: "$direction", status: "$status" }, count: { $sum: 1 } } },
+    ]),
+    Template.aggregate([{ $match: { createdBy: id } }, { $group: { _id: "$status", count: { $sum: 1 } } }]),
+    Campaign.find({ createdBy: id, status: { $in: ["RUNNING", "QUEUED", "SCHEDULED", "PAUSED"] } }).sort({ createdAt: -1 }).limit(8).select("name status totalContacts sendRatePerMinute stats scheduledAt createdAt").lean(),
+    Message.find({ phoneNumberId: pn, status: "FAILED" }).sort({ createdAt: -1 }).limit(10).select("to templateName errorCode errorMessage source createdAt").lean(),
+    Message.aggregate([
+      { $match: { phoneNumberId: pn, status: "FAILED", createdAt: { $gte: new Date(Date.now() - 7 * DAY) } } },
+      { $group: { _id: { code: "$errorCode", message: "$errorMessage" }, count: { $sum: 1 } } }, { $sort: { count: -1 } }, { $limit: 5 },
+    ]),
+    Window.findById(`${id}:${minute}`).lean(),
+    Call.countDocuments({ userId: id, createdAt: { $gte: today } }),
+    Key.countDocuments({ userId: id, revokedAt: null }),
+    contract.read(id),
+  ]);
+  const series = new Map(lastDays(14).map((d) => [d, { day: d, sent: 0, delivered: 0, read: 0, failed: 0, received: 0 }]));
+  for (const r of perDay) {
+    const slot = series.get(r._id.day);
+    if (!slot) continue;
+    if (r._id.direction === "INBOUND") slot.received += r.count;
+    else if (r._id.status === "FAILED") slot.failed += r.count;
+    else if (r._id.status === "READ") slot.read += r.count;
+    else if (r._id.status === "DELIVERED") slot.delivered += r.count;
+    else slot.sent += r.count;
+  }
+  const { metaSnapshot, ...acct } = account;
+  return {
+    userId: String(id),
+    user: personOf(user),
+    wallet: round2(user.whatsappWallet),
+    account: { ...acct, _id: undefined, userId: undefined, healthEvents: (account.healthEvents || []).slice(-12).reverse() },
+    meta: metaSnapshot || null,
+    control: { suspended: control.suspended, suspendReason: control.suspendReason, numberBlocked: control.numberBlocked, numberBlockReason: control.numberBlockReason, numberBlockedAt: control.numberBlockedAt, limits: control.limits },
+    limits,
+    limitSpecs: controls.LIMITS,
+    usage: {
+      sentToday, failedToday, dailyLimit: limits.dailyMessages.value,
+      tier: { name: account.messagingLimit || null, limit: tierLimit(account.messagingLimit), used24h: uniq24h },
+      api: { perMinuteLimit: limits.apiPerMinute.value, packagePerMinute: pkg?.requestsPerMinute ?? null, thisMinute: apiWindow?.requests || 0, callsToday, activeKeys: keys, package: pkg || null },
+    },
+    perDay: [...series.values()],
+    templates: Object.fromEntries(templates.map((r) => [r._id || "UNKNOWN", r.count])),
+    campaigns: campaigns.map((c) => ({ id: String(c._id), name: c.name, status: c.status, totalContacts: c.totalContacts, ratePerMinute: c.sendRatePerMinute, stats: c.stats || {}, at: c.scheduledAt || c.createdAt })),
+    failures: failures.map((f) => ({ to: f.to, templateName: f.templateName || "", errorCode: f.errorCode || null, errorMessage: f.errorMessage || "", source: f.source || "", at: f.createdAt })),
+    topErrors: topErrors.map((e) => ({ code: e._id.code || null, message: e._id.message || "No reason recorded", count: e.count })),
+  };
+}
+
+// Overridable for tests: the Graph API reader.
+const meta = { get: (url, options) => axios.get(url, options) };
+const GRAPH = "https://graph.facebook.com/v22.0";
+const PHONE_FIELDS = ["display_phone_number,verified_name,quality_rating,messaging_limit_tier,throughput,name_status,code_verification_status,platform_type,status,account_mode,is_official_business_account,health_status,last_onboarded_time", "display_phone_number,verified_name,quality_rating,messaging_limit_tier,throughput,name_status,code_verification_status,status"];
+const WABA_FIELDS = ["name,currency,timezone_id,message_template_namespace,account_review_status,business_verification_status,health_status", "name,currency,timezone_id,account_review_status"];
+
+async function graphRead(id, fieldSets, token) {
+  let last;
+  for (const fields of fieldSets) {
+    try {
+      const { data } = await meta.get(`${GRAPH}/${id}`, { params: { fields }, headers: { Authorization: `Bearer ${token}` }, timeout: 12000 });
+      return data;
+    } catch (error) {
+      last = error;
+      if (error?.response?.data?.error?.code !== 100) break; // only an unknown field is worth retrying with fewer
+    }
+  }
+  const e = last?.response?.data?.error;
+  throw fail(502, e?.message ? `Meta: ${e.message}` : "Could not reach Meta");
+}
+
+async function refreshFromMeta(admin, userId) {
+  const id = oid(userId);
+  const account = await Account.findOne({ userId: id });
+  if (!account) throw fail(404, "This customer has no WhatsApp number");
+  const token = account.accessToken;
+  if (!token || !account.phoneNumberId) throw fail(409, "This number has no saved Meta access");
+  const phone = await graphRead(account.phoneNumberId, PHONE_FIELDS, token);
+  let waba = null;
+  let wabaError = null;
+  if (account.wabaId) {
+    try { waba = await graphRead(account.wabaId, WABA_FIELDS, token); } catch (error) { wabaError = error.message; }
+  }
+  const snapshot = { fetchedAt: new Date(), phone, waba, wabaError };
+  const set = { metaSnapshot: snapshot };
+  if (phone.quality_rating) set.qualityRating = phone.quality_rating;
+  if (phone.messaging_limit_tier) set.messagingLimit = phone.messaging_limit_tier;
+  if (phone.verified_name) set.verifiedName = phone.verified_name;
+  if (phone.code_verification_status) set.codeVerificationStatus = phone.code_verification_status;
+  if (waba?.account_review_status) set.accountReviewStatus = waba.account_review_status;
+  await Account.updateOne({ _id: account._id }, { $set: set });
+  await record(admin, "number.refresh", id, { quality: phone.quality_rating || null, tier: phone.messaging_limit_tier || null });
+  return snapshot;
 }
 
 async function integrations(query = {}) {
@@ -629,7 +775,7 @@ async function apiUsage(query = {}) {
 /* ------------------------------------------------------------------ Panel settings + audit */
 async function panelSettings() {
   const global = await controls.getGlobal({ fresh: true });
-  return { ...global, catalog: controls.FEATURES.map(({ key, label, group, paths, api, hint, blockReads }) => ({ key, label, group, paths, guarded: api.length > 0, blockReads: Boolean(blockReads), hint: hint || "" })), menuItems: controls.MENU };
+  return { ...global, limitSpecs: controls.LIMITS, catalog: controls.FEATURES.map(({ key, label, group, paths, api, hint, blockReads }) => ({ key, label, group, paths, guarded: api.length > 0, blockReads: Boolean(blockReads), hint: hint || "" })), menuItems: controls.MENU };
 }
 
 async function savePanelSettings(admin, body = {}) {
@@ -642,6 +788,9 @@ async function savePanelSettings(admin, body = {}) {
   if (Object.keys(changes).length) await record(admin, "features.global", null, changes);
   if (JSON.stringify(before.announcement) !== JSON.stringify(after.announcement)) await record(admin, "announcement.update", null, { enabled: after.announcement.enabled, title: after.announcement.title });
   if (JSON.stringify(before.menu) !== JSON.stringify(after.menu)) await record(admin, "menu.update", null, after.menu);
+  const lim = {};
+  for (const k of Object.keys(controls.LIMITS)) if (before.limits[k] !== after.limits[k]) lim[k] = { from: before.limits[k], to: after.limits[k] };
+  if (Object.keys(lim).length) await record(admin, "limits.global", null, lim);
   return panelSettings();
 }
 
@@ -666,5 +815,5 @@ async function planOptions() {
 
 module.exports = {
   overview, customers, customer, adjustWallet, adjustCredits, grantPlan, extendPlan, cancelPlan, setControls, revokeKey, saveApiPackage,
-  messages, numbers, integrations, apiUsage, panelSettings, savePanelSettings, audit, planOptions,
+  messages, numbers, numberDetail, refreshFromMeta, meta, tierLimit, integrations, apiUsage, panelSettings, savePanelSettings, audit, planOptions,
 };

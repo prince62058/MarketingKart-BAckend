@@ -67,7 +67,10 @@ async function profile(userId, input) {
 async function rateLimit(userId) {
   const Window = require("../models/developerRequestWindowModel");
   const plan = await Contract.findOne({userId}).select("requestsPerMinute").lean();
-  const limit = plan?.requestsPerMinute ?? 60;
+  // A super admin's per-customer limit wins, then the API package, then the global default.
+  const caps = await require("./whatsappControls").limitsFor(userId);
+  const limit = caps.apiPerMinute.source === "customer" ? caps.apiPerMinute.value
+    : plan?.requestsPerMinute ?? caps.apiPerMinute.value ?? 60;
   const minute = Math.floor(Date.now()/60000);
   const window = await Window.findByIdAndUpdate(String(userId)+":"+minute,
     {$inc:{requests:1},$setOnInsert:{expiresAt:new Date((minute+2)*60000)}},

@@ -56,7 +56,7 @@ exports.createCampaign = async (req, res) => {
       if (parsedDate.getTime() > Date.now()) startAt = parsedDate;
     }
 
-    const ratePerMinute = Math.min(
+    let ratePerMinute = Math.min(
       Math.max(parseInt(sendRatePerMinute, 10) || 60, 1),
       600,
     );
@@ -216,6 +216,16 @@ exports.createCampaign = async (req, res) => {
       }
     }
     // ----------------------------------------
+
+    // Super-admin limits for this customer: campaign size and send speed.
+    const caps = await require("../services/whatsappControls").limitsFor(req.user._id);
+    if (caps.maxCampaignContacts.value && contacts.length > caps.maxCampaignContacts.value) {
+      return res.status(403).json({
+        success: false,
+        message: `Your account can send a campaign to at most ${caps.maxCampaignContacts.value.toLocaleString("en-IN")} contacts. Split the list or contact support.`,
+      });
+    }
+    if (caps.campaignRatePerMinute.value) ratePerMinute = Math.min(ratePerMinute, caps.campaignRatePerMinute.value);
 
     const billCategory = whatsappBilling.categoryOf(template);
     if (req.user.userType !== "ADMIN") {

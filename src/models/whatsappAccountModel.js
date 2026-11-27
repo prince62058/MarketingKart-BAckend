@@ -52,6 +52,8 @@ const whatsappAccountSchema = new mongoose.Schema(
       historyStatus: String, historyProgress: {type:Number,default:0},
     },
     disconnectionReason: String,
+    // Last live read of this number and its WABA from Meta (super admin "Refresh from Meta").
+    metaSnapshot: { type: mongoose.Schema.Types.Mixed, default: null },
     businessName: {
       type: String,
       default: null,

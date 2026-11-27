@@ -9,6 +9,17 @@ const whatsappControlSchema = new mongoose.Schema(
     suspendReason: { type: String, default: "", maxlength: 300 },
     features: { type: Map, of: Boolean, default: {} },
     note: { type: String, default: "", maxlength: 2000 },
+    // Sending from this customer's WhatsApp number is stopped while blocked (panel stays open).
+    numberBlocked: { type: Boolean, default: false },
+    numberBlockReason: { type: String, default: "", maxlength: 300 },
+    numberBlockedAt: { type: Date, default: null },
+    // Per-customer limits; null follows the global default (WhatsApp panel config).
+    limits: {
+      apiPerMinute: { type: Number, default: null },
+      dailyMessages: { type: Number, default: null },
+      campaignRatePerMinute: { type: Number, default: null },
+      maxCampaignContacts: { type: Number, default: null },
+    },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "userModel", default: null },
   },
   { timestamps: true }

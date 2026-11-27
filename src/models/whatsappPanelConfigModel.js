@@ -20,6 +20,13 @@ const whatsappPanelConfigSchema = new mongoose.Schema(
       startsAt: { type: Date, default: null },
       endsAt: { type: Date, default: null },
     },
+    // Defaults for every customer; a customer's own limit (whatsappControl.limits) wins.
+    limits: {
+      apiPerMinute: { type: Number, default: null },
+      dailyMessages: { type: Number, default: null },
+      campaignRatePerMinute: { type: Number, default: null },
+      maxCampaignContacts: { type: Number, default: null },
+    },
     menu: {
       hidden: { type: [String], default: [] },
       labels: { type: Map, of: String, default: {} },
