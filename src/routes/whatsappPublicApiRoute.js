@@ -5,6 +5,11 @@ const ctrl = require("../controllers/whatsappDeveloperController");
 const router = express.Router();
 
 router.use(apiKeyAuth);
+// A suspended customer, or one whose Developer API was switched off by an admin, gets nothing here.
+router.use(async (req, res, next) => {
+  try { await require("../services/whatsappControls").check(req.user._id, "api"); return next(); }
+  catch (error) { return res.status(error.status || 500).json({ success: false, code: error.code, message: error.message }); }
+});
 const contract = require("../services/developerContract");
 router.use(async (req,res,next) => {
   try { await contract.rateLimit(req.user._id); return next(); }

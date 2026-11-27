@@ -208,6 +208,10 @@ app.use("/api", require("./modules/aiVideo/aiVideo.routes"));
 app.use("/api", require("./modules/aiVideo/aiVideo.admin.routes"));
 app.use("/api/staff", staffRoute);
 
+// Super-admin controls: suspended customers and switched-off features are refused here,
+// before any WhatsApp panel route runs. The admin pages and the panel's settings feed follow.
+app.use("/api", require("./services/whatsappControls").guard);
+app.use("/api", require("./modules/waAdmin/waAdmin.routes"));
 app.use("/api", require("./routes/whatsappRoute"));
 app.use("/api", require("./routes/rcsRoute"));
 app.use("/api/premium-plan", require("./routes/premiumPlanRoute"));
